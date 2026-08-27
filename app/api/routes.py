@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import get_settings
 from app.container import container
 from app.serialization import serialize_business
+from app.api.live import html_or_error, landing_page, snapshot_page, stock_page
 
 router = APIRouter()
 
@@ -134,3 +136,30 @@ async def gpt_scan(
 @router.get("/gpt/{secret}/scan/coverage", dependencies=[Depends(require_web_secret)])
 async def gpt_scan_coverage(secret: str):
     return web_response(await container.scanner.get_scan_coverage())
+
+
+# Live Refresh Adapter. Nonces make every navigation URL unique; the handlers
+# remain thin transport views over the same singleton services used by MCP/JSON.
+@router.get("/gpt/{secret}/live", dependencies=[Depends(require_web_secret)])
+async def gpt_live(secret: str):
+    return landing_page(secret)
+
+
+@router.get("/gpt/{secret}/live/{request_nonce}", dependencies=[Depends(require_web_secret)])
+async def gpt_live_snapshot(secret: str, request_nonce: str):
+    async def render():
+        market, scan = await asyncio.gather(
+            container.market.get_market_overview(),
+            container.scanner.scan_mainboard(top_n=30),
+        )
+        return snapshot_page(secret, market, scan)
+
+    return await html_or_error(render)
+
+
+@router.get("/gpt/{secret}/live/{request_nonce}/stock/{code}", dependencies=[Depends(require_web_secret)])
+async def gpt_live_stock(secret: str, request_nonce: str, code: str):
+    async def render():
+        return stock_page(secret, await container.quotes.get_quote(code))
+
+    return await html_or_error(render)

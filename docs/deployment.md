@@ -81,6 +81,7 @@ https://当前隧道地址/gpt/{secret}/stock/002284/detail
 https://当前隧道地址/gpt/{secret}/market
 https://当前隧道地址/gpt/{secret}/sectors?sector_type=industry&limit=10
 https://当前隧道地址/gpt/{secret}/scan?top_n=10
+https://当前隧道地址/gpt/{secret}/live
 ```
 
 Web 与 MCP 只在最外层包装不同，业务 `data` 来自相同 Pydantic 模型、Service、缓存和序列化函数。路径 secret 属于敏感信息，不得写入公开文档、截图或 Git；长期使用时还应关闭或脱敏 Nginx 对 `/gpt/` 的 access log。

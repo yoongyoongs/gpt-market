@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -196,3 +197,68 @@ async def test_gpt_web_secret_is_required(parity_container) -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/gpt/wrong/stock/002284")
     assert response.status_code == 404
+
+
+NO_CACHE = "no-store, no-cache, must-revalidate, max-age=0"
+
+
+def assert_no_cache(response: httpx.Response) -> None:
+    assert response.headers["cache-control"] == NO_CACHE
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
+
+
+async def test_live_landing_generates_unique_real_links(parity_container) -> None:
+    transport = httpx.ASGITransport(app=api)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/gpt/parity-secret/live")
+        second = await client.get("/gpt/parity-secret/live")
+
+    assert first.status_code == 200
+    assert first.headers["content-type"].startswith("text/html")
+    assert_no_cache(first)
+    links = [
+        re.search(r'href="(/gpt/parity-secret/live/[^"]+)"', response.text).group(1)
+        for response in (first, second)
+    ]
+    assert links[0] != links[1]
+    assert all("获取最新行情快照" in response.text for response in (first, second))
+
+
+async def test_live_snapshot_uses_shared_services_and_unique_links(parity_container) -> None:
+    transport = httpx.ASGITransport(app=api)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        result = await client.get("/gpt/parity-secret/live/request-nonce")
+
+    assert result.status_code == 200
+    assert_no_cache(result)
+    for label in (
+        "server_timestamp", "provider_timestamp", "fetch_timestamp", "market_timestamp",
+        "timestamp_semantics", "provider_update_time", "age_seconds", "quality",
+        "confidence", "snapshot_id", "上证", "深证", "创业板", "上涨家数",
+        "下跌家数", "市场成交额", "scan_mainboard Top30",
+    ):
+        assert label in result.text
+
+    links = re.findall(r'href="([^"]+)"', result.text)
+    detail_link = next(link for link in links if link.endswith("/stock/002284"))
+    refresh_link = next(link for link in links if "/stock/" not in link)
+    assert detail_link != refresh_link
+    assert detail_link.startswith("/gpt/parity-secret/live/")
+    assert refresh_link.startswith("/gpt/parity-secret/live/")
+
+
+async def test_live_stock_is_html_and_json_adapter_is_unchanged(parity_container) -> None:
+    transport = httpx.ASGITransport(app=api)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        live = await client.get("/gpt/parity-secret/live/unique/stock/002284")
+        existing = await client.get("/gpt/parity-secret/stock/002284")
+
+    assert live.status_code == 200
+    assert live.headers["content-type"].startswith("text/html")
+    assert_no_cache(live)
+    assert "002284" in live.text
+    assert "provider_update_time" in live.text
+    assert existing.status_code == 200
+    assert existing.headers["content-type"].startswith("application/json")
+    assert existing.json()["data"]["source_timestamp"]

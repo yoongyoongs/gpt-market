@@ -129,7 +129,7 @@ Provider 请求 `fltt=2` 时使用已缩放值；探针使用 `fltt=1` 验证原
 
 | 字段 | 含义 |
 |---|---|
-| `source_timestamp` | 行情源真实时间；存在可靠源字段时必须使用它 |
+| `source_timestamp` | 兼容字段；f86/f124 仅按 Provider 更新时间解释，不得称为最后成交时间 |
 | `data_timestamp` | 兼容字段，当前始终等于 `source_timestamp` |
 | `server_timestamp` | 本次标准行情对象创建时间 |
 | `age_seconds` | `server_timestamp - source_timestamp`，最小为 0 |
@@ -255,6 +255,8 @@ FastMCP 挂载在 `/mcp/`，由独立 ASGI 中间件校验 `Authorization: Beare
 其中 `data` 与 MCP 工具业务结果使用同一 Pydantic 模型和序列化函数。密钥错误返回 404，避免泄漏端点存在性；未配置任何密钥返回 503。
 
 路径密钥会出现在 URL 中，因此生产容器关闭 Uvicorn access log，Nginx `/gpt/` location 也关闭 access log。
+
+Live Refresh Adapter 位于同一 Web 传输层：入口、快照、个股详情都返回 HTML，并以 `secrets.token_urlsafe(24)` 为每个后续链接生成唯一 URL。它只组合现有单例 `MarketService`、`ScannerService` 与 `QuoteService` 的结果，不拥有 Provider、行情计算、扫描计算或独立缓存。页面使用 `provider_timestamp`、`fetch_timestamp`、`market_timestamp` 与 `timestamp_semantics` 明示时间语义；既有 MCP/JSON 合约保持不变。
 
 ## 10. 异常契约
 

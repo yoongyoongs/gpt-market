@@ -28,7 +28,9 @@ REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kl
 
 供 GPT 直接读取 JSON 的受保护 Web Adapter 使用 `GET /gpt/{secret}/...`：`stock/{code}`、`stocks`、`stock/{code}/kline`、`stock/{code}/detail`、`market`、`sectors`、`scan`、`scan/coverage`。`secret` 来自 `GPT_WEB_SECRET`；未单独设置时复用 `MCP_TOKEN`。
 
-所有成功行情对象带 `source`、`source_timestamp`、兼容字段 `data_timestamp`、`server_timestamp`、`age_seconds`、`timestamp_source`、`snapshot_id`、`confidence`、`stale` 和 `quality`。质量只由 `DataQualityService` 计算：30 秒内 `LIVE`、30–60 秒 `STALE`、60–300 秒 `OLD`、超过 300 秒 `UNAVAILABLE`。如果东方财富没有可靠时间字段，明确使用 `timestamp_source=fetch_time`。失败不会返回旧行情：REST 返回 4xx/503 JSON，MCP 返回 `ok=false` 结构。
+为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 `GET /gpt/{secret}/live` HTML 入口。页面中的“获取最新行情快照”链接每次都使用 `secrets.token_urlsafe(24)` 生成新的 nonce；快照页和个股页继续只调用上述共享 Service，不建立独立 Provider、缓存或行情算法。所有 live 响应同时设置 `no-store` 等防缓存 Header。
+
+所有成功行情对象带 `source`、兼容字段 `source_timestamp` / `data_timestamp`、`server_timestamp`、`age_seconds`、`timestamp_source`、`snapshot_id`、`confidence`、`stale` 和 `quality`。f86/f124 只能证明为 Provider 更新时间，不能称为最后成交时间；Live HTML 会用更明确的拆分字段展示。质量只由 `DataQualityService` 计算：30 秒内 `LIVE`、30–60 秒 `STALE`、60–300 秒 `OLD`、超过 300 秒 `UNAVAILABLE`。如果东方财富没有时间字段，明确使用 `timestamp_source=fetch_time`。失败不会返回旧行情：REST 返回 4xx/503 JSON，MCP 返回 `ok=false` 结构。
 
 ## 单一事实源与一致性
 
@@ -65,6 +67,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/quote/002284
 curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/stock/002284"
+curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/live"
 curl 'http://127.0.0.1:8000/kline/002284?period=day&limit=5'
 curl 'http://127.0.0.1:8000/sectors?sector_type=industry&limit=10'
 curl 'http://127.0.0.1:8000/scan?top_n=30'
