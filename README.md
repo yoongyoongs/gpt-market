@@ -28,7 +28,9 @@ REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kl
 
 供 GPT 直接读取 JSON 的受保护 Web Adapter 使用 `GET /gpt/{secret}/...`：`stock/{code}`、`stocks`、`stock/{code}/kline`、`stock/{code}/detail`、`market`、`sectors`、`scan`、`scan/coverage`。`secret` 来自 `GPT_WEB_SECRET`；未单独设置时复用 `MCP_TOKEN`。
 
-为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 `GET /gpt/{secret}/live` HTML 入口。页面中的“获取最新行情快照”链接每次都使用 `secrets.token_urlsafe(24)` 生成新的 nonce；快照页和个股页继续只调用上述共享 Service，不建立独立 Provider、缓存或行情算法。所有 live 响应同时设置 `no-store` 等防缓存 Header。
+为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 `GET /gpt/{secret}/live` HTML 快照。后台任务通过上述共享 Service 刷新一个内存快照，live 请求只读取该快照，绝不等待 Provider。页面中的“获取最新行情快照”和个股链接每次都使用 `secrets.token_urlsafe(24)` 生成新的 nonce；不建立独立 Provider 或行情算法。所有 live 响应同时设置 `no-store` 等防缓存 Header。
+
+后台在交易时段每次刷新完成后等待 2 秒，非交易时段等待 30 秒；现有 Service TTL 仍决定真实上游采集频率。刷新失败会保留上一份成功数据。进程刚启动且首份快照尚未完成时，live 页面立即返回 `INITIALIZING`，不会阻塞请求。
 
 所有成功行情对象带 `source`、兼容字段 `source_timestamp` / `data_timestamp`、`server_timestamp`、`age_seconds`、`timestamp_source`、`snapshot_id`、`confidence`、`stale` 和 `quality`。f86/f124 只能证明为 Provider 更新时间，不能称为最后成交时间；Live HTML 会用更明确的拆分字段展示。质量只由 `DataQualityService` 计算：30 秒内 `LIVE`、30–60 秒 `STALE`、60–300 秒 `OLD`、超过 300 秒 `UNAVAILABLE`。如果东方财富没有时间字段，明确使用 `timestamp_source=fetch_time`。失败不会返回旧行情：REST 返回 4xx/503 JSON，MCP 返回 `ok=false` 结构。
 

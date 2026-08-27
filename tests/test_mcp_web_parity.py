@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.api import routes
+from app.api.live import LiveSnapshotCache
 from app.main import api
 from app.mcp import server as mcp_server
 from app.models import (
@@ -130,6 +131,9 @@ def parity_container(monkeypatch):
     async def get_quote(code: str):
         return QUOTES[code]
 
+    async def get_quotes(codes: list[str]):
+        return [QUOTES[code] for code in codes]
+
     async def get_detail(code: str):
         assert code == "002284"
         return DETAIL
@@ -145,7 +149,7 @@ def parity_container(monkeypatch):
         return SCAN
 
     fake = SimpleNamespace(
-        quotes=SimpleNamespace(get_quote=get_quote),
+        quotes=SimpleNamespace(get_quote=get_quote, get_quotes=get_quotes),
         klines=SimpleNamespace(get_stock_detail=get_detail),
         market=SimpleNamespace(get_market_overview=get_market),
         sectors=SimpleNamespace(get_sector_ranking=get_sectors),
@@ -209,6 +213,7 @@ def assert_no_cache(response: httpx.Response) -> None:
 
 
 async def test_live_landing_generates_unique_real_links(parity_container) -> None:
+    await routes.live_cache.refresh_once()
     transport = httpx.ASGITransport(app=api)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         first = await client.get("/gpt/parity-secret/live")
@@ -226,6 +231,7 @@ async def test_live_landing_generates_unique_real_links(parity_container) -> Non
 
 
 async def test_live_snapshot_uses_shared_services_and_unique_links(parity_container) -> None:
+    await routes.live_cache.refresh_once()
     transport = httpx.ASGITransport(app=api)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         result = await client.get("/gpt/parity-secret/live/request-nonce")
@@ -249,6 +255,7 @@ async def test_live_snapshot_uses_shared_services_and_unique_links(parity_contai
 
 
 async def test_live_stock_is_html_and_json_adapter_is_unchanged(parity_container) -> None:
+    await routes.live_cache.refresh_once()
     transport = httpx.ASGITransport(app=api)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         live = await client.get("/gpt/parity-secret/live/unique/stock/002284")
@@ -262,3 +269,45 @@ async def test_live_stock_is_html_and_json_adapter_is_unchanged(parity_container
     assert existing.status_code == 200
     assert existing.headers["content-type"].startswith("application/json")
     assert existing.json()["data"]["source_timestamp"]
+
+
+async def test_live_reads_last_snapshot_without_calling_services(parity_container) -> None:
+    await routes.live_cache.refresh_once()
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("live request must not call a market service")
+
+    parity_container.market.get_market_overview = forbidden
+    parity_container.scanner.scan_mainboard = forbidden
+    parity_container.quotes.get_quotes = forbidden
+    parity_container.quotes.get_quote = forbidden
+
+    transport = httpx.ASGITransport(app=api)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        responses = [await client.get(f"/gpt/parity-secret/live/cache-{index}") for index in range(10)]
+
+    assert all(response.status_code == 200 for response in responses)
+    assert all("snapshot_time" in response.text for response in responses)
+
+
+async def test_live_cache_initializes_immediately_and_keeps_last_success() -> None:
+    async def success():
+        return MARKET, SCAN, {"002284": QUOTES["002284"]}
+
+    cache = LiveSnapshotCache(success)
+    assert cache.get().status == "INITIALIZING"
+    assert cache.get().snapshot is None
+
+    await cache.refresh_once()
+    successful_snapshot = cache.get().snapshot
+    assert successful_snapshot is not None
+
+    async def failure():
+        raise RuntimeError("upstream unavailable")
+
+    cache.loader = failure
+    await cache.refresh_once()
+    failed_view = cache.get()
+    assert failed_view.snapshot is successful_snapshot
+    assert failed_view.stale is True
+    assert failed_view.warning == "latest refresh failed, returning last successful snapshot"

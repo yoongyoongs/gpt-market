@@ -149,3 +149,13 @@ MCP_URL=https://HOST/mcp/ MCP_TOKEN=YOUR_TOKEN \
 6. 检查 Provider 是否对同一原始字段执行了不同缩放。
 
 修复必须发生在共享 Provider、模型、Service 或缓存层，禁止在某个 Adapter 中打补丁。
+
+## 12. Live Refresh 性能验收
+
+- 后台先生成一份成功快照；
+- 连续请求 `/gpt/{secret}/live` 或 nonce 快照页至少 10 次；
+- 请求期间将 Market/Scanner/Quote 调用替换为失败桩，确认 live 仍从缓存成功返回；
+- 检查 `snapshot_time`、`server_time`、`age_ms`、`market_status` 和 `stale`；
+- 检查全部响应的 `Cache-Control`、`Pragma`、`Expires`；
+- 服务器本机使用 `curl -w` 验证大部分响应低于 500ms；
+- 重新运行 MCP 8 工具与 JSON/MCP 一致性测试。

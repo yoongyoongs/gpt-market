@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import asyncio
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,9 +10,36 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import get_settings
 from app.container import container
 from app.serialization import serialize_business
-from app.api.live import html_or_error, landing_page, snapshot_page, stock_page
+from app.api.live import (
+    LiveSnapshotCache,
+    initializing_page,
+    log_live_response,
+    snapshot_page,
+    stock_page,
+    unavailable_stock_page,
+)
 
 router = APIRouter()
+
+
+async def _load_live_snapshot():
+    market, scan = await asyncio.gather(
+        container.market.get_market_overview(),
+        container.scanner.scan_mainboard(top_n=30),
+    )
+    quotes = {}
+    if scan.candidates:
+        try:
+            items = await container.quotes.get_quotes([item.code for item in scan.candidates])
+            quotes = {item.code: item for item in items}
+        except Exception:
+            # Market + scanner are already a valid successful snapshot. Quote
+            # enrichment is best-effort and must not discard that snapshot.
+            pass
+    return market, scan, quotes
+
+
+live_cache = LiveSnapshotCache(_load_live_snapshot)
 
 
 def _web_secret() -> str | None:
@@ -142,24 +170,32 @@ async def gpt_scan_coverage(secret: str):
 # remain thin transport views over the same singleton services used by MCP/JSON.
 @router.get("/gpt/{secret}/live", dependencies=[Depends(require_web_secret)])
 async def gpt_live(secret: str):
-    return landing_page(secret)
+    started = perf_counter()
+    try:
+        view = live_cache.get()
+        return initializing_page() if view.snapshot is None else snapshot_page(secret, view)
+    finally:
+        log_live_response(started)
 
 
 @router.get("/gpt/{secret}/live/{request_nonce}", dependencies=[Depends(require_web_secret)])
 async def gpt_live_snapshot(secret: str, request_nonce: str):
-    async def render():
-        market, scan = await asyncio.gather(
-            container.market.get_market_overview(),
-            container.scanner.scan_mainboard(top_n=30),
-        )
-        return snapshot_page(secret, market, scan)
-
-    return await html_or_error(render)
+    started = perf_counter()
+    try:
+        view = live_cache.get()
+        return initializing_page() if view.snapshot is None else snapshot_page(secret, view)
+    finally:
+        log_live_response(started)
 
 
 @router.get("/gpt/{secret}/live/{request_nonce}/stock/{code}", dependencies=[Depends(require_web_secret)])
 async def gpt_live_stock(secret: str, request_nonce: str, code: str):
-    async def render():
-        return stock_page(secret, await container.quotes.get_quote(code))
-
-    return await html_or_error(render)
+    started = perf_counter()
+    try:
+        view = live_cache.get()
+        if view.snapshot is None:
+            return initializing_page()
+        quote = view.snapshot.quotes.get(code)
+        return stock_page(secret, quote, view) if quote is not None else unavailable_stock_page(secret, code, view)
+    finally:
+        log_live_response(started)

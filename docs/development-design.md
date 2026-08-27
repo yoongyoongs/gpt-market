@@ -256,7 +256,9 @@ FastMCP 挂载在 `/mcp/`，由独立 ASGI 中间件校验 `Authorization: Beare
 
 路径密钥会出现在 URL 中，因此生产容器关闭 Uvicorn access log，Nginx `/gpt/` location 也关闭 access log。
 
-Live Refresh Adapter 位于同一 Web 传输层：入口、快照、个股详情都返回 HTML，并以 `secrets.token_urlsafe(24)` 为每个后续链接生成唯一 URL。它只组合现有单例 `MarketService`、`ScannerService` 与 `QuoteService` 的结果，不拥有 Provider、行情计算、扫描计算或独立缓存。页面使用 `provider_timestamp`、`fetch_timestamp`、`market_timestamp` 与 `timestamp_semantics` 明示时间语义；既有 MCP/JSON 合约保持不变。
+Live Refresh Adapter 位于同一 Web 传输层：入口、快照、个股详情都返回 HTML，并以 `secrets.token_urlsafe(24)` 为每个后续链接生成唯一 URL。后台唯一任务调用现有单例 `MarketService`、`ScannerService` 与 `QuoteService`，完成后以一次引用赋值原子替换内存快照；交易时段完成一次刷新后等待 2 秒，非交易时段等待 30 秒。现有 Service 缓存 TTL 继续控制 Provider 的真实采集频率。
+
+HTTP 请求只读取当前引用并渲染，绝不 await Service 或 Provider。刷新失败只更新错误状态，不清空成功快照；进程启动后首份快照未完成时立即返回 `INITIALIZING`。该缓存属于只读 Web 展示物化视图，不拥有 Provider、行情计算或扫描计算。页面使用 `provider_timestamp`、`fetch_timestamp`、`market_timestamp` 与 `timestamp_semantics` 明示时间语义；既有 MCP/JSON 合约保持不变。
 
 ## 10. 异常契约
 

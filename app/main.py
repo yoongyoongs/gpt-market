@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router
+from app.api.routes import live_cache, router
 from app.config import get_settings
 from app.container import container
 from app.mcp.server import mcp
@@ -22,8 +22,12 @@ mcp_app = mcp.http_app(path="/")
 async def lifespan(_: FastAPI):
     await container.start()
     async with mcp_app.lifespan(mcp_app):
-        yield
-    await container.close()
+        await live_cache.start()
+        try:
+            yield
+        finally:
+            await live_cache.stop()
+            await container.close()
 
 
 api = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)

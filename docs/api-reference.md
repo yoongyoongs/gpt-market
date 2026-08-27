@@ -43,9 +43,9 @@
 
 | 路径 | 说明 |
 |---|---|
-| `GET /gpt/{secret}/live` | 生成带随机 nonce 的“获取最新行情快照”入口链接 |
-| `GET /gpt/{secret}/live/{nonce}` | 使用共享 MarketService 与 ScannerService 渲染市场及 Top30 HTML |
-| `GET /gpt/{secret}/live/{nonce}/stock/{code}` | 使用共享 QuoteService 渲染个股 HTML |
+| `GET /gpt/{secret}/live` | 立即读取后台成功快照，渲染市场及 Top30 HTML，并生成新 nonce 链接 |
+| `GET /gpt/{secret}/live/{nonce}` | 立即读取同一个内存快照并渲染 HTML，不调用行情源 |
+| `GET /gpt/{secret}/live/{nonce}/stock/{code}` | 读取快照内的共享 QuoteService 结果，不调用行情源 |
 
 每个页面生成的后续链接都使用 `secrets.token_urlsafe(24)` 产生新的 nonce。所有 live 页面返回 `text/html`，并设置：
 
@@ -56,6 +56,8 @@ Expires: 0
 ```
 
 Header 是第二道防线；核心机制仍是每次点击进入不同 URL。原 JSON 路由及 MCP 工具不受影响。
+
+Live 缓存状态包含 `snapshot_time`、`server_time`、`age_ms`、`market_status`、`stale` 和可选 `warning`。后台刷新原子替换整个成功快照；刷新异常时保留上一份数据并设置 `stale=true`。首份快照尚未生成时立即返回 HTTP 503 HTML，内容为 `INITIALIZING / market snapshot is initializing`。
 
 Web 成功响应：
 

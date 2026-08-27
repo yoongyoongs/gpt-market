@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import html
+import asyncio
+import contextlib
+import logging
 import secrets
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 from fastapi.responses import HTMLResponse
+
+from app.utils.time import SHANGHAI, now_shanghai
+
+
+# Reuse Uvicorn's configured logger so INFO refresh metrics are visible in the
+# container log without adding a second logging configuration.
+logger = logging.getLogger("uvicorn.error")
 
 
 NO_CACHE_HEADERS = {
@@ -19,6 +31,103 @@ NO_CACHE_HEADERS = {
 def nonce() -> str:
     """Return a cryptographically random URL component for every generated link."""
     return secrets.token_urlsafe(24)
+
+
+def market_status(at: datetime | None = None) -> str:
+    current = (at or now_shanghai()).astimezone(SHANGHAI)
+    if current.weekday() >= 5:
+        return "CLOSED"
+    minute = current.hour * 60 + current.minute
+    return "TRADING" if 570 <= minute <= 690 or 780 <= minute <= 900 else "CLOSED"
+
+
+@dataclass(frozen=True)
+class LiveSnapshot:
+    market: Any
+    scan: Any
+    quotes: dict[str, Any]
+    snapshot_time: datetime
+
+
+@dataclass(frozen=True)
+class LiveSnapshotView:
+    snapshot: LiveSnapshot | None
+    server_time: datetime
+    age_ms: int | None
+    stale: bool
+    warning: str | None
+    status: str
+
+
+class LiveSnapshotCache:
+    """Non-blocking read cache refreshed by one background task."""
+
+    def __init__(
+        self,
+        loader: Callable[[], Awaitable[tuple[Any, Any, dict[str, Any]]]],
+        *,
+        trading_interval: float = 2.0,
+        closed_interval: float = 30.0,
+    ) -> None:
+        self.loader = loader
+        self.trading_interval = trading_interval
+        self.closed_interval = closed_interval
+        self._snapshot: LiveSnapshot | None = None
+        self._last_error: str | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._stopping = asyncio.Event()
+
+    def get(self) -> LiveSnapshotView:
+        server_time = now_shanghai()
+        snapshot = self._snapshot
+        age_ms = None if snapshot is None else max(0, int((server_time - snapshot.snapshot_time).total_seconds() * 1000))
+        return LiveSnapshotView(
+            snapshot=snapshot,
+            server_time=server_time,
+            age_ms=age_ms,
+            stale=snapshot is not None and self._last_error is not None,
+            warning="latest refresh failed, returning last successful snapshot" if snapshot is not None and self._last_error else None,
+            status="INITIALIZING" if snapshot is None else market_status(server_time),
+        )
+
+    async def refresh_once(self) -> None:
+        started = perf_counter()
+        logger.info("行情刷新开始")
+        try:
+            market, scan, quotes = await self.loader()
+            cached_at = now_shanghai()
+            self._snapshot = LiveSnapshot(market=market, scan=scan, quotes=quotes, snapshot_time=cached_at)
+            self._last_error = None
+            logger.info("刷新成功股票数量=%d", len(quotes) or len(scan.candidates))
+            logger.info("当前缓存时间=%s", cached_at.isoformat())
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("刷新失败原因=%s", self._last_error)
+        finally:
+            logger.info("行情刷新耗时=%.3fs", perf_counter() - started)
+
+    async def _run(self) -> None:
+        while not self._stopping.is_set():
+            await self.refresh_once()
+            interval = self.trading_interval if market_status() == "TRADING" else self.closed_interval
+            try:
+                await asyncio.wait_for(self._stopping.wait(), timeout=interval)
+            except TimeoutError:
+                pass
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stopping.clear()
+        self._task = asyncio.create_task(self._run(), name="live-market-refresh")
+
+    async def stop(self) -> None:
+        self._stopping.set()
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
 
 
 def _escape(value: Any) -> str:
@@ -85,17 +194,10 @@ def response(body: str, *, status_code: int = 200) -> HTMLResponse:
     return HTMLResponse(body, status_code=status_code, headers=NO_CACHE_HEADERS)
 
 
-def landing_page(secret: str) -> HTMLResponse:
-    href = f"/gpt/{secret}/live/{nonce()}"
-    body = (
-        "<h1>A 股 Live Refresh</h1>"
-        "<p>点击下方的唯一链接获取当时的最新事实行情。</p>"
-        f'<a class="refresh" href="{html.escape(href, quote=True)}">获取最新行情快照</a>'
-    )
-    return response(_document("A 股 Live Refresh", body))
-
-
-def snapshot_page(secret: str, market: Any, scan: Any) -> HTMLResponse:
+def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
+    assert view.snapshot is not None
+    market = view.snapshot.market
+    scan = view.snapshot.scan
     index_labels = (("shanghai", "上证"), ("shenzhen", "深证"), ("chinext", "创业板"))
     index_rows = []
     for key, label in index_labels:
@@ -118,8 +220,19 @@ def snapshot_page(secret: str, market: Any, scan: Any) -> HTMLResponse:
         )
 
     next_href = f"/gpt/{secret}/live/{nonce()}"
+    warning = f'<p class="notice">{_escape(view.warning)}</p>' if view.warning else ""
     body = f"""
 <h1>A 股最新行情快照</h1>
+{warning}
+<h2>Live 缓存状态</h2>
+<table><tbody>
+<tr><th>ok</th><td>true</td></tr>
+<tr><th>snapshot_time</th><td>{_escape(view.snapshot.snapshot_time)}</td></tr>
+<tr><th>server_time</th><td>{_escape(view.server_time)}</td></tr>
+<tr><th>age_ms</th><td>{_escape(view.age_ms)}</td></tr>
+<tr><th>market_status</th><td>{_escape(view.status)}</td></tr>
+<tr><th>stale</th><td>{str(view.stale).lower()}</td></tr>
+</tbody></table>
 <p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
 <h2>市场快照元数据</h2>
 <table><tbody>{_freshness_rows(market)}</tbody></table>
@@ -142,10 +255,11 @@ def snapshot_page(secret: str, market: Any, scan: Any) -> HTMLResponse:
     return response(_document("A 股最新行情快照", body))
 
 
-def stock_page(secret: str, quote: Any) -> HTMLResponse:
+def stock_page(secret: str, quote: Any, view: LiveSnapshotView) -> HTMLResponse:
     next_href = f"/gpt/{secret}/live/{nonce()}"
     body = f"""
 <h1>{_escape(quote.code)} {_escape(quote.name)}</h1>
+<p>snapshot_time: {_escape(view.snapshot.snapshot_time if view.snapshot else None)}；server_time: {_escape(view.server_time)}；age_ms: {_escape(view.age_ms)}；market_status: {_escape(view.status)}</p>
 <p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
 <table><tbody>{_freshness_rows(quote)}</tbody></table>
 <table><tbody>
@@ -160,13 +274,24 @@ def stock_page(secret: str, quote: Any) -> HTMLResponse:
     return response(_document(f"{quote.code} {quote.name}", body))
 
 
-async def html_or_error(factory: Callable[[], Awaitable[HTMLResponse]]) -> HTMLResponse:
-    try:
-        return await factory()
-    except Exception as exc:
-        body = (
-            "<h1>行情暂时不可用</h1>"
-            f"<p>{html.escape(str(exc))}</p>"
-            "<p>没有使用历史值或推测值替代实时事实。</p>"
-        )
-        return response(_document("行情暂时不可用", body), status_code=503)
+def initializing_page() -> HTMLResponse:
+    body = (
+        "<h1>INITIALIZING</h1>"
+        "<p>ok: false</p>"
+        "<p>market snapshot is initializing</p>"
+    )
+    return response(_document("行情快照初始化中", body), status_code=503)
+
+
+def unavailable_stock_page(secret: str, code: str, view: LiveSnapshotView) -> HTMLResponse:
+    next_href = f"/gpt/{secret}/live/{nonce()}"
+    body = (
+        f"<h1>{_escape(code)} 暂无缓存详情</h1>"
+        f"<p>当前快照没有该股票；请求未触发外部行情采集。缓存 age_ms: {_escape(view.age_ms)}</p>"
+        f'<a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>'
+    )
+    return response(_document("暂无缓存详情", body), status_code=404)
+
+
+def log_live_response(started: float) -> None:
+    logger.info("/live接口响应耗时=%.3fms", (perf_counter() - started) * 1000)
