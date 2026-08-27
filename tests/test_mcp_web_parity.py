@@ -243,6 +243,7 @@ async def test_live_snapshot_uses_shared_services_and_unique_links(parity_contai
         "timestamp_semantics", "provider_update_time", "age_seconds", "quality",
         "confidence", "snapshot_id", "上证", "深证", "创业板", "上涨家数",
         "下跌家数", "市场成交额", "scan_mainboard Top30",
+        "prev_close", "change_pct", "source_time",
     ):
         assert label in result.text
 

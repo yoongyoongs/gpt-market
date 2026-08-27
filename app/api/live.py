@@ -210,12 +210,19 @@ def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
 
     candidate_rows = []
     for rank, item in enumerate(scan.candidates, 1):
+        quote = view.snapshot.quotes.get(item.code)
         detail_href = f"/gpt/{secret}/live/{nonce()}/stock/{item.code}"
         candidate_rows.append(
             f'<tr><td>{rank}</td><td><a href="{html.escape(detail_href, quote=True)}">{_escape(item.code)}</a></td>'
-            f"<td>{_escape(item.name)}</td><td>{_number(item.price)}</td><td>{_number(item.pct_change)}%</td>"
-            f"<td>{_number(item.amount)}</td><td>{_number(item.turnover_rate)}%</td>"
+            f"<td>{_escape(item.name)}</td><td>{_number(item.price)}</td>"
+            f"<td>{_number(quote.prev_close if quote else None)}</td><td>{_number(quote.open if quote else None)}</td>"
+            f"<td>{_number(quote.high if quote else None)}</td><td>{_number(quote.low if quote else None)}</td>"
+            f"<td>{_number(quote.change if quote else None)}</td><td>{_number(item.pct_change)}%</td>"
+            f"<td>{_number(quote.volume if quote else None, 0)}</td><td>{_number(item.amount)}</td>"
+            f"<td>{_number(item.turnover_rate)}%</td>"
             f"<td>{_number(item.volume_ratio)}</td><td>{_number(item.total_score)}</td>"
+            f"<td>{_escape(quote.source if quote else scan.source)}</td>"
+            f"<td>{_escape(quote.source_timestamp if quote else scan.source_timestamp)}</td>"
             f"<td>{_escape('；'.join(item.reason))}</td></tr>"
         )
 
@@ -248,7 +255,7 @@ def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
 <tr><th>市场成交额（元）</th><td>{_number(market.amount)}</td></tr>
 </tbody></table>
 <h2>scan_mainboard Top30</h2>
-<table><thead><tr><th>#</th><th>代码</th><th>名称</th><th>价格</th><th>涨跌幅</th><th>成交额</th><th>换手率</th><th>量比</th><th>总分</th><th>理由</th></tr></thead>
+<table><thead><tr><th>#</th><th>code</th><th>name</th><th>price</th><th>prev_close</th><th>open</th><th>high</th><th>low</th><th>change</th><th>change_pct</th><th>volume</th><th>amount</th><th>换手率</th><th>量比</th><th>总分</th><th>source</th><th>source_time</th><th>理由</th></tr></thead>
 <tbody>{''.join(candidate_rows)}</tbody></table>
 <a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
 """
@@ -264,10 +271,19 @@ def stock_page(secret: str, quote: Any, view: LiveSnapshotView) -> HTMLResponse:
 <table><tbody>{_freshness_rows(quote)}</tbody></table>
 <table><tbody>
 <tr><th>最新价</th><td>{_number(quote.price)}</td></tr>
+<tr><th>昨收</th><td>{_number(quote.prev_close)}</td></tr>
+<tr><th>今开</th><td>{_number(quote.open)}</td></tr>
+<tr><th>最高</th><td>{_number(quote.high)}</td></tr>
+<tr><th>最低</th><td>{_number(quote.low)}</td></tr>
+<tr><th>涨跌额</th><td>{_number(quote.change)}</td></tr>
 <tr><th>涨跌幅</th><td>{_number(quote.pct_change)}%</td></tr>
+<tr><th>成交量（股）</th><td>{_number(quote.volume, 0)}</td></tr>
 <tr><th>成交额（元）</th><td>{_number(quote.amount)}</td></tr>
 <tr><th>换手率</th><td>{_number(quote.turnover_rate)}%</td></tr>
 <tr><th>量比</th><td>{_number(quote.volume_ratio)}</td></tr>
+<tr><th>source</th><td>{_escape(quote.source)}</td></tr>
+<tr><th>source_time</th><td>{_escape(quote.source_timestamp)}</td></tr>
+<tr><th>bid1~bid5 / ask1~ask5</th><td>当前共享 Provider 未采集，不推测</td></tr>
 </tbody></table>
 <a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
 """
