@@ -1,0 +1,14 @@
+[Unit]
+Description=GPT Market Cloudflare Quick Tunnel
+Documentation=https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:80
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
