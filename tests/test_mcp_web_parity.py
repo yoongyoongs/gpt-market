@@ -238,6 +238,7 @@ async def test_live_snapshot_uses_shared_services_and_unique_links(parity_contai
 
     assert result.status_code == 200
     assert_no_cache(result)
+    assert result.headers["x-live-cache"] == "HIT"
     for label in (
         "server_timestamp", "provider_timestamp", "fetch_timestamp", "market_timestamp",
         "timestamp_semantics", "provider_update_time", "age_seconds", "quality",
@@ -264,6 +265,7 @@ async def test_live_stock_is_html_and_json_adapter_is_unchanged(parity_container
 
     assert live.status_code == 200
     assert live.headers["content-type"].startswith("text/html")
+    assert live.headers["x-live-cache"] == "HIT"
     assert_no_cache(live)
     assert "002284" in live.text
     assert "provider_update_time" in live.text
@@ -289,6 +291,7 @@ async def test_live_reads_last_snapshot_without_calling_services(parity_containe
 
     assert all(response.status_code == 200 for response in responses)
     assert all("snapshot_time" in response.text for response in responses)
+    assert all(response.headers["x-live-cache"] == "HIT" for response in responses)
 
 
 async def test_live_cache_initializes_immediately_and_keeps_last_success() -> None:

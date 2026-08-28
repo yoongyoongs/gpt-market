@@ -12,10 +12,9 @@ from app.container import container
 from app.serialization import serialize_business
 from app.api.live import (
     LiveSnapshotCache,
+    cached_response,
     initializing_page,
     log_live_response,
-    snapshot_page,
-    stock_page,
     unavailable_stock_page,
 )
 
@@ -173,7 +172,7 @@ async def gpt_live(secret: str):
     started = perf_counter()
     try:
         view = live_cache.get()
-        return initializing_page() if view.snapshot is None else snapshot_page(secret, view)
+        return initializing_page() if view.snapshot is None else cached_response(view.snapshot.html_template, secret, view)
     finally:
         log_live_response(started)
 
@@ -183,7 +182,7 @@ async def gpt_live_snapshot(secret: str, request_nonce: str):
     started = perf_counter()
     try:
         view = live_cache.get()
-        return initializing_page() if view.snapshot is None else snapshot_page(secret, view)
+        return initializing_page() if view.snapshot is None else cached_response(view.snapshot.html_template, secret, view)
     finally:
         log_live_response(started)
 
@@ -195,7 +194,7 @@ async def gpt_live_stock(secret: str, request_nonce: str, code: str):
         view = live_cache.get()
         if view.snapshot is None:
             return initializing_page()
-        quote = view.snapshot.quotes.get(code)
-        return stock_page(secret, quote, view) if quote is not None else unavailable_stock_page(secret, code, view)
+        template = view.snapshot.stock_html_templates.get(code)
+        return cached_response(template, secret, view) if template is not None else unavailable_stock_page(secret, code, view)
     finally:
         log_live_response(started)

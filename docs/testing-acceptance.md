@@ -157,5 +157,6 @@ MCP_URL=https://HOST/mcp/ MCP_TOKEN=YOUR_TOKEN \
 - 请求期间将 Market/Scanner/Quote 调用替换为失败桩，确认 live 仍从缓存成功返回；
 - 检查 `snapshot_time`、`server_time`、`age_ms`、`market_status` 和 `stale`；
 - 检查全部响应的 `Cache-Control`、`Pragma`、`Expires`；
+- 检查成功响应为 `X-Live-Cache: HIT`，初始化响应为 `X-Live-Cache: MISS`；
 - 服务器本机使用 `curl -w` 验证大部分响应低于 500ms；
 - 重新运行 MCP 8 工具与 JSON/MCP 一致性测试。

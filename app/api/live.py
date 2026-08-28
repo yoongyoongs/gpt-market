@@ -4,8 +4,9 @@ import html
 import asyncio
 import contextlib
 import logging
+import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from time import perf_counter
@@ -27,6 +28,15 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 
+SECRET_MARKER = "__LIVE_SECRET__"
+NONCE_MARKER = "__LIVE_NONCE__"
+SERVER_TIME_MARKER = "__LIVE_SERVER_TIME__"
+AGE_MS_MARKER = "__LIVE_AGE_MS__"
+MARKET_STATUS_MARKER = "__LIVE_MARKET_STATUS__"
+STALE_MARKER = "__LIVE_STALE__"
+WARNING_MARKER = "__LIVE_WARNING__"
+NONCE_PATTERN = re.compile(re.escape(NONCE_MARKER))
+
 
 def nonce() -> str:
     """Return a cryptographically random URL component for every generated link."""
@@ -47,6 +57,14 @@ class LiveSnapshot:
     scan: Any
     quotes: dict[str, Any]
     snapshot_time: datetime
+    html_template: str = ""
+    stock_html_templates: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LiveCacheState:
+    snapshot: LiveSnapshot | None
+    last_error: str | None
 
 
 @dataclass(frozen=True)
@@ -72,21 +90,21 @@ class LiveSnapshotCache:
         self.loader = loader
         self.trading_interval = trading_interval
         self.closed_interval = closed_interval
-        self._snapshot: LiveSnapshot | None = None
-        self._last_error: str | None = None
+        self._state = LiveCacheState(snapshot=None, last_error=None)
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
 
     def get(self) -> LiveSnapshotView:
         server_time = now_shanghai()
-        snapshot = self._snapshot
+        state = self._state
+        snapshot = state.snapshot
         age_ms = None if snapshot is None else max(0, int((server_time - snapshot.snapshot_time).total_seconds() * 1000))
         return LiveSnapshotView(
             snapshot=snapshot,
             server_time=server_time,
             age_ms=age_ms,
-            stale=snapshot is not None and self._last_error is not None,
-            warning="latest refresh failed, returning last successful snapshot" if snapshot is not None and self._last_error else None,
+            stale=snapshot is not None and state.last_error is not None,
+            warning="latest refresh failed, returning last successful snapshot" if snapshot is not None and state.last_error else None,
             status="INITIALIZING" if snapshot is None else market_status(server_time),
         )
 
@@ -96,13 +114,19 @@ class LiveSnapshotCache:
         try:
             market, scan, quotes = await self.loader()
             cached_at = now_shanghai()
-            self._snapshot = LiveSnapshot(market=market, scan=scan, quotes=quotes, snapshot_time=cached_at)
-            self._last_error = None
+            snapshot = LiveSnapshot(market=market, scan=scan, quotes=quotes, snapshot_time=cached_at)
+            # Serialization is CPU-only and is completed before publication.
+            # The live state becomes visible through one atomic reference swap.
+            html_template, stock_templates = await asyncio.to_thread(build_snapshot_templates, snapshot)
+            snapshot = replace(snapshot, html_template=html_template, stock_html_templates=stock_templates)
+            self._state = LiveCacheState(snapshot=snapshot, last_error=None)
             logger.info("刷新成功股票数量=%d", len(quotes) or len(scan.candidates))
             logger.info("当前缓存时间=%s", cached_at.isoformat())
         except Exception as exc:
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            logger.warning("刷新失败原因=%s", self._last_error)
+            error = f"{type(exc).__name__}: {exc}"
+            state = self._state
+            self._state = LiveCacheState(snapshot=state.snapshot, last_error=error)
+            logger.warning("刷新失败原因=%s", error)
         finally:
             logger.info("行情刷新耗时=%.3fs", perf_counter() - started)
 
@@ -194,10 +218,9 @@ def response(body: str, *, status_code: int = 200) -> HTMLResponse:
     return HTMLResponse(body, status_code=status_code, headers=NO_CACHE_HEADERS)
 
 
-def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
-    assert view.snapshot is not None
-    market = view.snapshot.market
-    scan = view.snapshot.scan
+def build_snapshot_template(snapshot: LiveSnapshot) -> str:
+    market = snapshot.market
+    scan = snapshot.scan
     index_labels = (("shanghai", "上证"), ("shenzhen", "深证"), ("chinext", "创业板"))
     index_rows = []
     for key, label in index_labels:
@@ -210,8 +233,8 @@ def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
 
     candidate_rows = []
     for rank, item in enumerate(scan.candidates, 1):
-        quote = view.snapshot.quotes.get(item.code)
-        detail_href = f"/gpt/{secret}/live/{nonce()}/stock/{item.code}"
+        quote = snapshot.quotes.get(item.code)
+        detail_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}/stock/{item.code}"
         candidate_rows.append(
             f'<tr><td>{rank}</td><td><a href="{html.escape(detail_href, quote=True)}">{_escape(item.code)}</a></td>'
             f"<td>{_escape(item.name)}</td><td>{_number(item.price)}</td>"
@@ -226,19 +249,18 @@ def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
             f"<td>{_escape('；'.join(item.reason))}</td></tr>"
         )
 
-    next_href = f"/gpt/{secret}/live/{nonce()}"
-    warning = f'<p class="notice">{_escape(view.warning)}</p>' if view.warning else ""
+    next_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}"
     body = f"""
 <h1>A 股最新行情快照</h1>
-{warning}
+{WARNING_MARKER}
 <h2>Live 缓存状态</h2>
 <table><tbody>
 <tr><th>ok</th><td>true</td></tr>
-<tr><th>snapshot_time</th><td>{_escape(view.snapshot.snapshot_time)}</td></tr>
-<tr><th>server_time</th><td>{_escape(view.server_time)}</td></tr>
-<tr><th>age_ms</th><td>{_escape(view.age_ms)}</td></tr>
-<tr><th>market_status</th><td>{_escape(view.status)}</td></tr>
-<tr><th>stale</th><td>{str(view.stale).lower()}</td></tr>
+<tr><th>snapshot_time</th><td>{_escape(snapshot.snapshot_time)}</td></tr>
+<tr><th>server_time</th><td>{SERVER_TIME_MARKER}</td></tr>
+<tr><th>age_ms</th><td>{AGE_MS_MARKER}</td></tr>
+<tr><th>market_status</th><td>{MARKET_STATUS_MARKER}</td></tr>
+<tr><th>stale</th><td>{STALE_MARKER}</td></tr>
 </tbody></table>
 <p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
 <h2>市场快照元数据</h2>
@@ -259,14 +281,15 @@ def snapshot_page(secret: str, view: LiveSnapshotView) -> HTMLResponse:
 <tbody>{''.join(candidate_rows)}</tbody></table>
 <a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
 """
-    return response(_document("A 股最新行情快照", body))
+    return _document("A 股最新行情快照", body)
 
 
-def stock_page(secret: str, quote: Any, view: LiveSnapshotView) -> HTMLResponse:
-    next_href = f"/gpt/{secret}/live/{nonce()}"
+def build_stock_template(quote: Any, snapshot: LiveSnapshot) -> str:
+    next_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}"
     body = f"""
 <h1>{_escape(quote.code)} {_escape(quote.name)}</h1>
-<p>snapshot_time: {_escape(view.snapshot.snapshot_time if view.snapshot else None)}；server_time: {_escape(view.server_time)}；age_ms: {_escape(view.age_ms)}；market_status: {_escape(view.status)}</p>
+{WARNING_MARKER}
+<p>snapshot_time: {_escape(snapshot.snapshot_time)}；server_time: {SERVER_TIME_MARKER}；age_ms: {AGE_MS_MARKER}；market_status: {MARKET_STATUS_MARKER}；stale: {STALE_MARKER}</p>
 <p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
 <table><tbody>{_freshness_rows(quote)}</tbody></table>
 <table><tbody>
@@ -287,7 +310,32 @@ def stock_page(secret: str, quote: Any, view: LiveSnapshotView) -> HTMLResponse:
 </tbody></table>
 <a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
 """
-    return response(_document(f"{quote.code} {quote.name}", body))
+    return _document(f"{quote.code} {quote.name}", body)
+
+
+def build_snapshot_templates(snapshot: LiveSnapshot) -> tuple[str, dict[str, str]]:
+    return (
+        build_snapshot_template(snapshot),
+        {code: build_stock_template(quote, snapshot) for code, quote in snapshot.quotes.items()},
+    )
+
+
+def render_cached_template(template: str, secret: str, view: LiveSnapshotView) -> str:
+    warning = f'<p class="notice">{_escape(view.warning)}</p>' if view.warning else ""
+    rendered = (
+        template.replace(SECRET_MARKER, html.escape(secret, quote=True))
+        .replace(SERVER_TIME_MARKER, _escape(view.server_time))
+        .replace(AGE_MS_MARKER, _escape(view.age_ms))
+        .replace(MARKET_STATUS_MARKER, _escape(view.status))
+        .replace(STALE_MARKER, str(view.stale).lower())
+        .replace(WARNING_MARKER, warning)
+    )
+    return NONCE_PATTERN.sub(lambda _: nonce(), rendered)
+
+
+def cached_response(template: str, secret: str, view: LiveSnapshotView, *, status_code: int = 200) -> HTMLResponse:
+    headers = {**NO_CACHE_HEADERS, "X-Live-Cache": "HIT", "X-Live-Snapshot-Age-Ms": str(view.age_ms or 0)}
+    return HTMLResponse(render_cached_template(template, secret, view), status_code=status_code, headers=headers)
 
 
 def initializing_page() -> HTMLResponse:
@@ -296,7 +344,8 @@ def initializing_page() -> HTMLResponse:
         "<p>ok: false</p>"
         "<p>market snapshot is initializing</p>"
     )
-    return response(_document("行情快照初始化中", body), status_code=503)
+    headers = {**NO_CACHE_HEADERS, "X-Live-Cache": "MISS"}
+    return HTMLResponse(_document("行情快照初始化中", body), status_code=503, headers=headers)
 
 
 def unavailable_stock_page(secret: str, code: str, view: LiveSnapshotView) -> HTMLResponse:

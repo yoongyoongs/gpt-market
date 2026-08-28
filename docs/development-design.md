@@ -260,6 +260,8 @@ Live Refresh Adapter 位于同一 Web 传输层：入口、快照、个股详情
 
 HTTP 请求只读取当前引用并渲染，绝不 await Service 或 Provider。刷新失败只更新错误状态，不清空成功快照；进程启动后首份快照未完成时立即返回 `INITIALIZING`。该缓存属于只读 Web 展示物化视图，不拥有 Provider、行情计算或扫描计算。页面使用 `provider_timestamp`、`fetch_timestamp`、`market_timestamp` 与 `timestamp_semantics` 明示时间语义；既有 MCP/JSON 合约保持不变。
 
+成功刷新还会在线程中预生成市场 HTML 模板及每只候选股的详情模板，然后把行情对象、模板和错误状态作为一个不可变状态用单次引用赋值发布。模板仅保留 `server_time`、`age_ms`、状态、warning、secret 和 nonce 占位符。HTTP handler 没有 `await`、Future、Event、业务缓存或锁，只读取一次状态引用并替换这些小型动态占位符。响应头 `X-Live-Cache: HIT|MISS` 可直接确认是否命中成功快照。
+
 ## 10. 异常契约
 
 | 场景 | REST/Web | MCP |
