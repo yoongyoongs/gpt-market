@@ -107,7 +107,7 @@ docker compose ps
 curl http://127.0.0.1:8000/health
 ```
 
-Compose 只把后端绑定到 `127.0.0.1:8000`，由 Nginx 对公网提供 HTTPS。容器使用非 root 用户、只读根文件系统和 `no-new-privileges`。
+Compose 默认把服务绑定到公网 `0.0.0.0:8000`，可通过 `http://服务器IP:8000` 访问。请在云安全组中只向可信来源开放 8000，或继续使用 Nginx/HTTPS 作为公网入口。容器使用非 root 用户、只读根文件系统和 `no-new-privileges`。
 
 域名与 HTTPS：
 
