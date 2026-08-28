@@ -141,7 +141,7 @@ class MarketDataService(MarketDataProvider):
         if adjust not in {"qfq", "raw", "hfq"}:
             raise ValueError("adjust must be qfq, raw or hfq")
         self._metrics.required += 1
-        if period != "day":
+        if period not in {"day", "week", "month"}:
             self._metrics.network_fetch += 1
             try:
                 async with self._kline_semaphore:
@@ -159,6 +159,7 @@ class MarketDataService(MarketDataProvider):
             now = now_shanghai()
             cached = await self.cache.get(code, period, adjust, limit)
             has_provisional = (
+                period == "day" and
                 quote is not None
                 and quote.server_timestamp.date() == now.date()
                 and _should_use_provisional(now)
@@ -172,11 +173,11 @@ class MarketDataService(MarketDataProvider):
 
             self._metrics.cache_miss += 1
             self._metrics.network_fetch += 1
-            network_limit = limit if cached is None else min(limit, 10)
+            network_limit = limit if cached is None or not cache_usable else min(limit, 10)
             try:
                 async with self._kline_semaphore:
                     network = await self.providers.get_kline(code, period, network_limit, adjust)
-                formal = self._formal_bars_for_persistence(network.klines, now)
+                formal = self._formal_bars_for_persistence(network.klines, now, period)
                 if formal:
                     await self.cache.put(code, period, adjust, formal, network.source, now)
                 combined = _merge_klines(
@@ -201,7 +202,9 @@ class MarketDataService(MarketDataProvider):
         self._recent_errors[key] += 1
 
     @staticmethod
-    def _formal_bars_for_persistence(klines: list[Kline], now: datetime) -> list[Kline]:
+    def _formal_bars_for_persistence(klines: list[Kline], now: datetime, period: str = "day") -> list[Kline]:
+        if period != "day":
+            return klines
         after_close = now.time() >= datetime_time(15, 10)
         return [item for item in klines if item.timestamp.date() < now.date() or after_close]
 
@@ -222,6 +225,7 @@ class MarketDataService(MarketDataProvider):
         source = f"cache:{cached.source}" if cache_hit else cached.source
         current = now_shanghai()
         if (
+            period == "day" and
             quote is not None
             and quote.server_timestamp.date() == current.date()
             and _should_use_provisional(current)

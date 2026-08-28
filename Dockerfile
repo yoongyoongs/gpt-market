@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    KLINE_CACHE_PATH=/data/kline_cache.sqlite3
+    KLINE_CACHE_PATH=/data/kline_cache.sqlite3 \
+    SCAN_HISTORY_PATH=/data/scan_history
 
 WORKDIR /app
 RUN useradd --create-home --uid 10001 appuser

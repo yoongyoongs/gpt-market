@@ -158,6 +158,102 @@ class ScanCandidate(MarketModel):
     snapshot_id: str
 
 
+class ScoreComponent(MarketModel):
+    raw_value: dict[str, object] = Field(default_factory=dict)
+    normalized_value: float | dict[str, object] | None = None
+    score: float | None
+    max_score: float
+    reason: list[str] = Field(default_factory=list)
+    data_source: list[str] = Field(default_factory=list)
+    data_timestamp: datetime | None = None
+    coverage: bool
+
+
+class DataCoverage(MarketModel):
+    quote: bool = False
+    day_kline: bool = False
+    week_kline: bool = False
+    position: bool = False
+    trend: bool = False
+    flow: bool = False
+    risk_reward: bool = False
+    liquidity: bool = False
+    fundamental: bool = False
+    catalyst: bool = False
+
+
+class DataQualityReport(MarketModel):
+    data_quality: Quality
+    coverage: DataCoverage
+    stale_fields: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    conflict_fields: list[str] = Field(default_factory=list)
+    provider_status: dict[str, object] = Field(default_factory=dict)
+
+
+class SupportResistance(MarketModel):
+    support: float | None = None
+    resistance: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    downside_pct: float | None = None
+    upside_pct: float | None = None
+    risk_reward_ratio: float | None = None
+
+
+class OpportunityCandidate(MarketModel):
+    stock_code: str
+    stock_name: str
+    price: float
+    pct_change: float
+    amount: float | None = None
+    opportunity_score: float
+    position_score: float
+    fundamental_score: float | None = None
+    trend_score: float
+    flow_score: float
+    catalyst_score: float | None = None
+    risk_reward_score: float
+    liquidity_score: float
+    risk_penalty: float
+    grade: Literal["A", "B", "C"]
+    support: float | None = None
+    resistance: float | None = None
+    stop_loss: float | None = None
+    target_1: float | None = None
+    target_2: float | None = None
+    downside_pct: float | None = None
+    upside_pct: float | None = None
+    risk_reward_ratio: float | None = None
+    week_trend: str
+    day_trend: str
+    data_coverage: DataCoverage
+    data_quality: DataQualityReport
+    score_version: Literal["v2"] = "v2"
+    entry_score: float | None = None
+    score_breakdown: dict[str, ScoreComponent]
+    score_formula: str
+    raw_inputs: dict[str, object] = Field(default_factory=dict)
+    reason: list[str] = Field(default_factory=list)
+    hard_reject: bool = False
+    snapshot_id: str
+
+
+class OpportunityScanResult(Freshness):
+    coverage: ScanCoverage
+    raw_top30: list[OpportunityCandidate]
+    action_top30: list[OpportunityCandidate]
+    top100: list[OpportunityCandidate]
+    candidate_pool_size: int
+    channel_counts: dict[str, int] = Field(default_factory=dict)
+    scan_id: str
+    score_version: Literal["v2"] = "v2"
+    score_formula: str
+    missing_data_sources: list[str] = Field(default_factory=list)
+    duration_seconds: float | None = None
+
+
 class FreshnessDistribution(MarketModel):
     live: int = 0
     stale: int = 0
@@ -252,3 +348,4 @@ MarketOverviewResponse = MarketOverview
 SectorRankingResponse = SectorRanking
 ScanResponse = ScanResult
 CoverageResponse = CoverageReport
+OpportunityScanResponse = OpportunityScanResult

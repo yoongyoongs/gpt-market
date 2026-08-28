@@ -74,6 +74,29 @@ async def scan_mainboard(
 
 
 @mcp.tool
+async def scan_mainboard_v2(
+    top_n: int = 30,
+    pool_size: int = 420,
+    min_amount: float = 50_000_000,
+    exclude_st: bool = True,
+    exclude_limit_up: bool = True,
+    exclude_limit_down: bool = True,
+) -> dict[str, Any]:
+    """Scan a wider main-board pool with phase-1 opportunity_score and explainable risk/reward."""
+    return await _safe(container.scanner.scan_mainboard_v2(
+        top_n, pool_size, min_amount, exclude_st, exclude_limit_up, exclude_limit_down
+    ))
+
+
+@mcp.tool
+async def scan_mainboard_ab(top_n: int = 30) -> dict[str, Any]:
+    """Return V1 total_score and V2 opportunity_score scans side by side for A/B comparison."""
+    v1 = await container.scanner.scan_mainboard(top_n=top_n)
+    v2 = await container.scanner.scan_mainboard_v2(top_n=top_n)
+    return serialize_business({"v1_top30": v1, "v2_top30": v2})
+
+
+@mcp.tool
 async def get_scan_coverage() -> dict[str, Any]:
     """Report quote-list coverage and freshness for the latest main-board scan."""
     return await _safe(container.scanner.get_scan_coverage())

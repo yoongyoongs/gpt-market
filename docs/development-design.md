@@ -246,6 +246,35 @@ flowchart TD
 
 K 线丰富失败时先由腾讯接管；双源失败时使用足量旧缓存。只有双源失败且无足量缓存才不计算技术指标，并在候选中附加“K线不可用，趋势指标未计分”。每次实际扫描以聚合 `SCAN SUMMARY` 输出来源、缓存命中、异常分类和 MA 可用数量，不逐股刷日志。
 
+### 8.6 V2 Opportunity Scanner
+
+V2 通过 `ScannerService.scan_mainboard_v2()` 并行存在，不覆盖 V1 的 `scan_mainboard()`。V1 返回 `ScanResult.candidates[]` 和 `total_score`；V2 返回 `OpportunityScanResult.raw_top30/action_top30/top100` 和 `opportunity_score`。入口层分别暴露 `/scan/v2`、`/gpt/{secret}/scan/v2`、MCP `scan_mainboard_v2`，以及用于 A/B 的 `/gpt/{secret}/scan/ab` 和 MCP `scan_mainboard_ab`。
+
+Phase 1 使用现有真实数据能力：全市场 Quote、260 日 K、80 周 K、指数涨跌幅、Provider 健康状态，以及既有 K 线 L1/SQLite 缓存和 ProviderManager fallback。
+
+当前不具备真实来源的数据明确不评分：基本面、扣非、现金流、ROE、资产负债率、估值和行业相对估值；公告、新闻、政策、产业催化；主力/大单资金；申万二级行业分类和 action list 行业集中度控制。这些缺口会进入 `missing_data_sources`、候选的 `data_quality.missing_fields` 和子分的 `coverage=false`。缺数据不写成 0，不生成 A 级结论。
+
+候选池从硬过滤后的主板股票中通过 quote-only 多通道并集生成，默认 420 只，范围 300–500。通道包括趋势改善代理、低位代理、资金活跃、相对强度和流动性底线。`pct_change > 5%` 在 V2 不再作为绝对过滤条件；涨停、一字板、停牌和无法正常交易仍按硬过滤处理。
+
+评分公式：
+
+```text
+opportunity_score = clamp(
+  position_score(15)
+  + fundamental_score(15, Phase1 missing)
+  + trend_score(20)
+  + flow_score(15)
+  + catalyst_score(10, Phase1 missing)
+  + risk_reward_score(20)
+  + liquidity_score(5)
+  + risk_penalty(0..-20),
+  0,
+  100
+)
+```
+
+`trend_score` 分为周 K 8 分和日 K 12 分。周 K 明确下降时，日 K 上涨默认视为下降趋势中的反弹，并限制趋势分。`risk_reward_score` 使用日 K 的 20/60/120/250 日高低点、MA20/MA60 和 ATR14 推出 `support/resistance/stop_loss/target_1/target_2/downside_pct/upside_pct/risk_reward_ratio`；分档为 `RR<1=0`、`1~1.5=4`、`1.5~2=8`、`2~3=14`、`>=3=20`。
+
 ## 9. 传输适配器
 
 ### 9.1 MCP Adapter

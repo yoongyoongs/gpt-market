@@ -185,7 +185,8 @@ class ProviderManager(MarketDataProvider):
     async def get_kline(
         self, code: str, period: str, limit: int, adjust: str = "qfq", *, quote: Quote | None = None
     ) -> KlineResult:
-        return await self._call("get_kline", code, period, limit, adjust)
+        supported = ("eastmoney", "tencent") if period == "day" else ("eastmoney",)
+        return await self._call("get_kline", code, period, limit, adjust, supported=supported)
 
     async def get_all_a_shares(self) -> tuple[int, list[Quote]]:
         return await self._call("get_all_a_shares", supported=("eastmoney",))

@@ -9,9 +9,11 @@ from datetime import datetime
 from time import perf_counter
 
 from app.cache import AsyncTTLCache
-from app.models import CoverageReport, Quote, ScanCandidate, ScanCoverage, ScanResult, TechnicalIndicators
+from app.history import save_scan_snapshot
+from app.models import CoverageReport, OpportunityScanResult, Quote, ScanCandidate, ScanCoverage, ScanResult, TechnicalIndicators
 from app.providers.base import MarketDataProvider
 from app.services.data_quality import DataQualityService
+from app.services.opportunity_scoring import Benchmarks, OPPORTUNITY_FORMULA, build_candidate_pool, build_opportunity_candidate
 from app.services.technical_indicator_service import TechnicalIndicatorService
 from app.utils.time import now_shanghai
 from app.services.market_data_service import metric_delta
@@ -60,6 +62,20 @@ def scan_cache_key(
     """Canonicalize equivalent MCP/Web input types into one shared cache key."""
     return (
         f"scan:mainboard:{int(top_n)}:{float(max_pct_change):.8g}:{float(min_amount):.8g}:"
+        f"{bool(exclude_st)}:{bool(exclude_limit_up)}:{bool(exclude_limit_down)}"
+    )
+
+
+def scan_v2_cache_key(
+    top_n: int,
+    pool_size: int,
+    min_amount: float,
+    exclude_st: bool,
+    exclude_limit_up: bool,
+    exclude_limit_down: bool,
+) -> str:
+    return (
+        f"scan:mainboard:v2:{int(top_n)}:{int(pool_size)}:{float(min_amount):.8g}:"
         f"{bool(exclude_st)}:{bool(exclude_limit_up)}:{bool(exclude_limit_down)}"
     )
 
@@ -343,6 +359,215 @@ class ScannerService:
                 "kline_sources": dict(kline_sources.most_common()),
             }
             logger.info("SCAN SUMMARY %s", json.dumps(self.last_summary, ensure_ascii=False, separators=(",", ":")))
+            try:
+                await save_scan_snapshot(
+                    "v1",
+                    result,
+                    {
+                        "top_n": top_n,
+                        "max_pct_change": max_pct_change,
+                        "min_amount": min_amount,
+                        "exclude_st": exclude_st,
+                        "exclude_limit_up": exclude_limit_up,
+                        "exclude_limit_down": exclude_limit_down,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("scan history save failed version=v1 error=%s", exc)
+            return result
+
+        return await self.cache.get_or_set(cache_key, 15, load)
+
+    async def scan_mainboard_v2(
+        self,
+        top_n: int = 30,
+        pool_size: int = 420,
+        min_amount: float = 50_000_000,
+        exclude_st: bool = True,
+        exclude_limit_up: bool = True,
+        exclude_limit_down: bool = True,
+    ) -> OpportunityScanResult:
+        if not 1 <= top_n <= 100:
+            raise ValueError("top_n must be between 1 and 100")
+        if not 300 <= pool_size <= 500:
+            raise ValueError("pool_size must be between 300 and 500")
+        cache_key = scan_v2_cache_key(top_n, pool_size, min_amount, exclude_st, exclude_limit_up, exclude_limit_down)
+
+        async def load() -> OpportunityScanResult:
+            scan_started = perf_counter()
+            metrics_before = self.provider.metrics_snapshot() if hasattr(self.provider, "metrics_snapshot") else {}
+            health_before = self.provider.health() if hasattr(self.provider, "health") else {}
+            market_data, sh_index, sz_index = await asyncio.gather(
+                self.provider.get_all_a_shares(),
+                self.provider.get_index_quote("000001", "SH"),
+                self.provider.get_index_quote("399001", "SZ"),
+                return_exceptions=True,
+            )
+            if isinstance(market_data, Exception):
+                raise market_data
+            total, quotes = market_data
+            benchmarks = Benchmarks(
+                sh_pct=0.0 if isinstance(sh_index, Exception) else (sh_index.pct_change or 0.0),
+                sz_pct=0.0 if isinstance(sz_index, Exception) else (sz_index.pct_change or 0.0),
+            )
+            eligible: list[Quote] = []
+            excluded: Counter[str] = Counter()
+            for quote in quotes:
+                if quote.code.startswith(("300", "301")):
+                    excluded["chinext"] += 1
+                    continue
+                if quote.code.startswith(("688", "689")):
+                    excluded["star"] += 1
+                    continue
+                if quote.market == "BJ" or quote.code.startswith(("4", "8", "92")):
+                    excluded["bse"] += 1
+                    continue
+                if not is_mainboard(quote.code):
+                    excluded["other"] += 1
+                    continue
+                if quote.suspended:
+                    excluded["suspended"] += 1
+                    continue
+                if quote.price is None or quote.pct_change is None:
+                    excluded["invalid_quote"] += 1
+                    continue
+                if exclude_st and is_st(quote.name):
+                    excluded["st"] += 1
+                    continue
+                if (quote.amount or 0) < min_amount:
+                    excluded["illiquid"] += 1
+                    continue
+                if exclude_limit_up and at_price_limit(quote, "up"):
+                    excluded["limit_untradable"] += 1
+                    continue
+                if exclude_limit_down and at_price_limit(quote, "down"):
+                    excluded["limit_untradable"] += 1
+                    continue
+                if is_one_price_board(quote):
+                    excluded["limit_untradable"] += 1
+                    continue
+                eligible.append(quote)
+
+            pool, channel_counts = build_candidate_pool(eligible, target_size=pool_size)
+            semaphore = asyncio.Semaphore(self.concurrency)
+            kline_errors: Counter[str] = Counter()
+            kline_sources: Counter[str] = Counter()
+            provider_status = self.provider.health() if hasattr(self.provider, "health") else {}
+
+            async def enrich(quote: Quote):
+                try:
+                    async with semaphore:
+                        day, week = await asyncio.gather(
+                            self.provider.get_kline(quote.code, "day", 260, "qfq", quote=quote),
+                            self.provider.get_kline(quote.code, "week", 80, "qfq"),
+                            return_exceptions=True,
+                        )
+                    day_klines = [] if isinstance(day, Exception) else day.klines
+                    week_klines = [] if isinstance(week, Exception) else week.klines
+                    if isinstance(day, Exception):
+                        kline_errors[f"day:{type(day).__name__}:{str(day)[:160]}"] += 1
+                    else:
+                        kline_sources[day.source] += 1
+                    if isinstance(week, Exception):
+                        kline_errors[f"week:{type(week).__name__}:{str(week)[:160]}"] += 1
+                    else:
+                        kline_sources[week.source] += 1
+                    return build_opportunity_candidate(
+                        quote,
+                        day_klines,
+                        week_klines,
+                        benchmarks.pct_for_market(quote.market),
+                        provider_status,
+                    )
+                except Exception as exc:
+                    kline_errors[f"candidate:{type(exc).__name__}:{str(exc)[:160]}"] += 1
+                    return None
+
+            enriched = await asyncio.gather(*(enrich(item) for item in pool))
+            scored = sorted((item for item in enriched if item is not None), key=lambda item: item.opportunity_score, reverse=True)
+            raw_top30 = scored[:top_n]
+            action_top30 = raw_top30
+            success = len(quotes)
+            rate = success / total if total else 0.0
+            data_ts = max((quote.data_timestamp for quote in quotes), default=now_shanghai())
+            quality = self.quality.assess(data_ts, complete=bool(quotes))
+            result = OpportunityScanResult(
+                coverage=ScanCoverage(
+                    total=total,
+                    success=success,
+                    filtered_mainboard=len(eligible),
+                    failed=max(0, total - success),
+                    coverage_rate=round(rate, 4),
+                ),
+                raw_top30=raw_top30,
+                action_top30=action_top30,
+                top100=scored[:100],
+                candidate_pool_size=len(pool),
+                channel_counts=channel_counts,
+                scan_id=self.quality.scan_id(data_ts),
+                score_formula=OPPORTUNITY_FORMULA,
+                missing_data_sources=[
+                    "fundamental_financials",
+                    "valuation_industry_relative",
+                    "announcements_news_policy_catalysts",
+                    "main_or_big_order_flow",
+                    "industry_classification_for_action_top30_concentration",
+                ],
+                duration_seconds=round(perf_counter() - scan_started, 3),
+                **quality,
+            )
+
+            metrics_after = self.provider.metrics_snapshot() if hasattr(self.provider, "metrics_snapshot") else {}
+            metrics = metric_delta(metrics_after, metrics_before) if metrics_after else {}
+            health_after = self.provider.health() if hasattr(self.provider, "health") else {}
+
+            def provider_delta(name: str, field: str) -> int:
+                before = ((health_before.get("providers") or {}).get(name) or {}).get(field, 0)
+                after = ((health_after.get("providers") or {}).get(name) or {}).get(field, 0)
+                return int(after - before)
+
+            self.last_summary = {
+                "score_version": "v2",
+                "stocks_total": total,
+                "quotes_requested": total,
+                "quotes_success": success,
+                "quotes_failed": max(0, total - success),
+                "filtered_mainboard": len(eligible),
+                "candidate_pool_size": len(pool),
+                "channel_counts": channel_counts,
+                "excluded": dict(excluded),
+                "kline_required": len(pool) * 2,
+                "kline_cache_hit": metrics.get("cache_hit", 0),
+                "kline_network_fetch": metrics.get("network_fetch", 0),
+                "kline_success": metrics.get("success", 0),
+                "kline_failed": metrics.get("failed", 0),
+                "kline_stale_used": metrics.get("stale_used", 0),
+                "eastmoney_success": provider_delta("eastmoney", "success_count"),
+                "eastmoney_failure": provider_delta("eastmoney", "failure_count"),
+                "eastmoney_empty": provider_delta("eastmoney", "empty_data_count"),
+                "eastmoney_timeout": provider_delta("eastmoney", "timeout_count"),
+                "tencent_success": provider_delta("tencent", "success_count"),
+                "tencent_failure": provider_delta("tencent", "failure_count"),
+                "kline_errors": dict(kline_errors.most_common(10)),
+                "kline_sources": dict(kline_sources.most_common()),
+                "scan_duration_seconds": result.duration_seconds,
+            }
+            logger.info("SCAN SUMMARY %s", json.dumps(self.last_summary, ensure_ascii=False, separators=(",", ":")))
+            try:
+                await save_scan_snapshot(
+                    "v2",
+                    result,
+                    {
+                        "top_n": top_n,
+                        "pool_size": pool_size,
+                        "min_amount": min_amount,
+                        "exclude_st": exclude_st,
+                        "exclude_limit_up": exclude_limit_up,
+                        "exclude_limit_down": exclude_limit_down,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("scan history save failed version=v2 error=%s", exc)
             return result
 
         return await self.cache.get_or_set(cache_key, 15, load)

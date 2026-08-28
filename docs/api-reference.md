@@ -26,6 +26,8 @@
 | `get_sector_ranking` | `sector_type=industry, limit=30` | `SectorRankingResponse` |
 | `scan_mainboard` | 扫描参数 | `ScanResponse` |
 | `get_scan_coverage` | 无 | `CoverageResponse` |
+| `scan_mainboard_v2` | `top_n=30, pool_size=420` | `OpportunityScanResponse` |
+| `scan_mainboard_ab` | `top_n=30` | `{v1_top30, v2_top30}` |
 
 ## 3. GPT Web 路由
 
@@ -38,6 +40,9 @@
 | `GET /gpt/{secret}/market` | `get_market_overview` |
 | `GET /gpt/{secret}/sectors?sector_type=industry&limit=10` | `get_sector_ranking` |
 | `GET /gpt/{secret}/scan?top_n=10` | `scan_mainboard` |
+| `GET /gpt/{secret}/scan/v2?top_n=10&pool_size=420` | `scan_mainboard_v2` |
+| `GET /gpt/{secret}/scan/v2/html?top_n=30&pool_size=420` | V2 HTML Top30 与评分拆解页面 |
+| `GET /gpt/{secret}/scan/ab?top_n=30` | V1/V2 并行 A/B |
 | `GET /gpt/{secret}/scan/coverage` | `get_scan_coverage` |
 | `GET /gpt/{secret}/coverage` | 读取 Live 缓存中与当前页面完全一致的完整覆盖报告 |
 
@@ -220,6 +225,68 @@ Web 成功响应：
 - 公共质量元数据
 
 每个候选包含行情、MA、五维分数、`total_score`、`reason[]` 和其 Quote 的 `snapshot_id`。
+
+## 10.1 OpportunityScanResponse
+
+V2 响应不替换 V1，独立由 `/scan/v2`、`/gpt/{secret}/scan/v2` 和 MCP `scan_mainboard_v2` 返回。
+
+请求参数：
+
+| 参数 | 默认值 | 限制/含义 |
+|---|---:|---|
+| `top_n` | 30 | 1–100 |
+| `pool_size` | 420 | 300–500，宽候选池大小 |
+| `min_amount` | 50000000 | 最低成交额，元，仅作流动性门槛 |
+| `exclude_st` | true | 排除 ST、*ST、退市名称 |
+| `exclude_limit_up` | true | 排除涨停 |
+| `exclude_limit_down` | true | 排除跌停 |
+
+返回顶层字段：
+
+- `coverage`
+- `raw_top30`
+- `action_top30`
+- `top100`
+- `candidate_pool_size`
+- `channel_counts`
+- `score_version=v2`
+- `score_formula`
+- `missing_data_sources`
+- `duration_seconds`
+
+每只股票至少包含：
+
+```json
+{
+  "stock_code": "002284",
+  "stock_name": "亚太股份",
+  "opportunity_score": 61.5,
+  "position_score": 12.5,
+  "fundamental_score": null,
+  "trend_score": 17.0,
+  "flow_score": 12.0,
+  "catalyst_score": null,
+  "risk_reward_score": 14.0,
+  "liquidity_score": 5.0,
+  "risk_penalty": -2.0,
+  "grade": "B",
+  "support": 9.3,
+  "resistance": 10.8,
+  "stop_loss": 9.0,
+  "target_1": 10.8,
+  "target_2": 11.6,
+  "risk_reward_ratio": 2.2,
+  "week_trend": "BASE_BUILDING",
+  "day_trend": "TURNING_UP",
+  "data_coverage": {},
+  "data_quality": {},
+  "score_version": "v2",
+  "score_breakdown": {},
+  "score_formula": "..."
+}
+```
+
+`score_breakdown` 中每个模块保存 `raw_value / normalized_value / score / max_score / reason / data_source / data_timestamp / coverage`。Phase 1 不接入真实基本面和催化数据，因此 `fundamental_score` 与 `catalyst_score` 为 `null`，并在 `missing_fields` 中列明。
 
 ## 11. CoverageResponse
 

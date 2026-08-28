@@ -9,6 +9,7 @@
 - [测试与验收规范](docs/testing-acceptance.md)：parity、联网测试、发布门禁和排障流程。
 - [东方财富字段实测记录](docs/eastmoney_fields.md)：原始字段、缩放、时间和 K 线格式。
 - [多数据源与 K 线缓存设计](docs/data-source-resilience.md)：Provider 切换、SQLite、临时日 K、限流、健康状态与故障语义。
+- [V2 机会扫描 Phase 1 验收](docs/opportunity-scanner-v2-phase1.md)：V1/V2 并行、候选池、评分公式、真实验收、数据缺口与 Phase 2 计划。
 - [2026-08-28 上线验收](docs/multi-provider-acceptance-20260828.md)：连续三次扫描、缓存命中、双源接管、Live/MCP 与 Top30 前后对比。
 - [服务器部署记录](docs/deployment.md)：Docker、Nginx、Quick Tunnel 与运维命令。
 - [开发与贡献指南](CONTRIBUTING.md)：本地环境、修改边界和提交前检查。
@@ -25,6 +26,13 @@ Streamable HTTP MCP endpoint：`https://YOUR_DOMAIN/mcp/`（建议保留结尾 `
 6. `get_sector_ranking`
 7. `scan_mainboard`
 8. `get_scan_coverage`
+
+V2 选股作为并行能力保留 V1，不覆盖旧工具：
+
+- MCP：`scan_mainboard_v2`、`scan_mainboard_ab`
+- REST/GPT：`GET /scan/v2`、`GET /gpt/{secret}/scan/v2`、`GET /gpt/{secret}/scan/v2/html`、`GET /gpt/{secret}/scan/ab`
+
+V1 仍按 `total_score` 排名；V2 按 `opportunity_score` 排名，并返回 `raw_top30`、`action_top30`、`top100`、`score_version=v2`、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 `coverage=false`、`score=null` 和 `missing_fields` 暴露。
 
 REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kline/{code}`、`/detail/{code}`、`/market`、`/sectors`、`/scan`、`/scan/coverage`。REST 与 MCP 使用完全相同的 service/provider 层。
 
@@ -76,6 +84,7 @@ curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/coverage"
 curl 'http://127.0.0.1:8000/kline/002284?period=day&limit=5'
 curl 'http://127.0.0.1:8000/sectors?sector_type=industry&limit=10'
 curl 'http://127.0.0.1:8000/scan?top_n=30'
+curl 'http://127.0.0.1:8000/scan/v2?top_n=30&pool_size=420'
 ```
 
 ## 配置
@@ -92,6 +101,7 @@ curl 'http://127.0.0.1:8000/scan?top_n=30'
 | `TENCENT_PROXY` | 空 | 腾讯备用源代理；通常 Linux 留空 |
 | `MAX_KLINE_CONCURRENCY` | 8 | 所有 Provider 合计的 K 线网络并发上限 |
 | `KLINE_CACHE_PATH` | `data/kline_cache.sqlite3` | 日 K 线 SQLite 持久化路径 |
+| `SCAN_HISTORY_PATH` | `data/scan_history` | V1/V2 扫描 JSONL 历史快照目录，Docker 默认为 `/data/scan_history` |
 | `KLINE_REFRESH_TRADING_SECONDS` | 300 | 交易时段正式历史 K 刷新间隔 |
 | `KLINE_REFRESH_CLOSED_SECONDS` | 1800 | 非交易时段正式历史 K 刷新间隔 |
 
@@ -161,6 +171,27 @@ MCP_URL=https://market.example.com/mcp/ MCP_TOKEN=YOUR_TOKEN python scripts/test
 只保留 `000/001/002/003/600/601/603/605`，排除创业板、科创板、北交所、ST/退市、停牌、一字板、低成交额及按昨收计算的涨跌停证券。先对一次全市场列表做位置/量比/流动性预筛，再对最多 120 个候选并发抓取 80 日 K 线，计算 MA 与最终五维评分。这样能报告全市场 quote coverage，同时避免数千个 K 线请求。
 
 评分用于事实筛选和排序，不构成投资建议；默认重点奖励当日 `0%~3%`、相对指数较强、靠近 MA20 但未贴近 20 日高点的标的。
+
+### V2 Phase 1 扫描
+
+V2 保留同样的主板、ST、停牌、涨跌停、一字板和流动性硬过滤，但不再把 `pct_change > 5%` 作为绝对剔除条件，改由 `risk_penalty` 处理过热。候选池从硬过滤后的主板股票中通过五个 quote-only 通道取并集，默认形成 420 只宽候选：趋势改善代理、低位/安全边际代理、资金活跃代理、相对强度、流动性底线。随后对候选并发读取 260 日 K 和 80 周 K，计算：
+
+```text
+opportunity_score = clamp(
+  position_score(15)
+  + fundamental_score(15, Phase1缺真实源)
+  + trend_score(20)
+  + flow_score(15)
+  + catalyst_score(10, Phase1缺真实源)
+  + risk_reward_score(20)
+  + liquidity_score(5)
+  + risk_penalty(0..-20),
+  0,
+  100
+)
+```
+
+`trend_score` 拆分为周 K 8 分和日 K 12 分；周 K 明确下降时会把日 K 上涨视为下降趋势中的反弹并限制趋势分。`risk_reward_score` 使用支撑、压力、ATR 缓冲止损和目标位计算，基础分档为 `RR<1=0`、`1~1.5=4`、`1.5~2=8`、`2~3=14`、`>=3=20`。A级不会强行分配；Phase 1 因基本面和催化缺真实源，默认无法轻易给 A。
 
 ## 测试
 
