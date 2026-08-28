@@ -4,7 +4,8 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    KLINE_CACHE_PATH=/data/kline_cache.sqlite3
 
 WORKDIR /app
 RUN useradd --create-home --uid 10001 appuser

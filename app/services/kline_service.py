@@ -24,9 +24,9 @@ class KlineService:
 
     async def get_stock_detail(self, code: str) -> StockDetail:
         async def load() -> StockDetail:
-            quote, day, minute = await asyncio.gather(
-                self.provider.get_quote(code),
-                self.provider.get_kline(code, "day", 120),
+            quote = await self.provider.get_quote(code)
+            day, minute = await asyncio.gather(
+                self.provider.get_kline(code, "day", 120, "qfq", quote=quote),
                 self.provider.get_kline(code, "5m", 48),
             )
             technical = self.indicators.calculate(day.klines, quote.price)

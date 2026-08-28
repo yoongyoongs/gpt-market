@@ -34,6 +34,15 @@ docker-compose build \
 docker-compose up -d --no-build
 ```
 
+首次启用持久化 K 线缓存前创建可写目录；容器仍以 UID 10001 非 root 运行：
+
+```bash
+install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data
+curl http://127.0.0.1:8000/health/providers
+```
+
+缓存数据库位于 `/opt/gpt-market/data/kline_cache.sqlite3`。网络失败时保留上一份正式日 K，不要在故障处理时删除该目录。
+
 ## HTTPS
 
 服务器已安装 Cloudflare Quick Tunnel，提供无需自有域名的开发测试 HTTPS 入口。

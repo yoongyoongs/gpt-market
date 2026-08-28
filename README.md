@@ -1,6 +1,6 @@
 # 极简 A 股实时行情 Remote MCP
 
-只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。数据来自东方财富公开页面接口，不包含账户、交易、数据库或任何下单能力。
+只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
 
 ## 文档导航
 
@@ -8,6 +8,7 @@
 - [API 与 MCP 工具参考](docs/api-reference.md)：8 个工具、Web 路由、请求参数和响应模型。
 - [测试与验收规范](docs/testing-acceptance.md)：parity、联网测试、发布门禁和排障流程。
 - [东方财富字段实测记录](docs/eastmoney_fields.md)：原始字段、缩放、时间和 K 线格式。
+- [多数据源与 K 线缓存设计](docs/data-source-resilience.md)：Provider 切换、SQLite、临时日 K、限流、健康状态与故障语义。
 - [服务器部署记录](docs/deployment.md)：Docker、Nginx、Quick Tunnel 与运维命令。
 - [开发与贡献指南](CONTRIBUTING.md)：本地环境、修改边界和提交前检查。
 
@@ -36,7 +37,7 @@ REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kl
 
 ## 单一事实源与一致性
 
-`EastmoneyProvider → 标准 Pydantic 模型 → 共享 AsyncTTLCache → Quote/Kline/Market/Sector/Scanner Service → MCP/Web Adapter` 是唯一数据路径。东方财富 `f43` 等字段和价格缩放只存在于 Provider；MCP 与 Web 使用同一个 singleton Container、同一个缓存、同一个技术指标服务、同一个扫描器以及同一个 `serialize_business()`。
+`Market/Scanner Service → MarketDataService → ProviderManager → EastmoneyProvider/TencentProvider` 是唯一业务数据路径。东方财富 `secid`、腾讯 `sh/sz` 等代码转换和字段缩放只存在于各自 Provider。日 K 线由 `MarketDataService` 统一读取 L1 内存与 L2 SQLite；MCP 与 Web 使用同一个 singleton Container、同一个缓存、同一个技术指标服务、同一个扫描器以及同一个 `serialize_business()`。
 
 同一底层行情生成确定性的 `snapshot_id`，扫描另带 `scan_id`。全市场快照会填充规范的 `quote:{code}` 缓存，因此紧邻的市场、扫描和单股调用会尽量复用同一标准化 Quote。`tests/test_mcp_web_parity.py` 自动比较三个验收股票、单股详情、市场概况、行业 Top10 和扫描结果。
 
@@ -85,6 +86,12 @@ curl 'http://127.0.0.1:8000/scan?top_n=30'
 | `EASTMONEY_RETRIES` | 3 | 最大尝试次数 |
 | `SCAN_CONCURRENCY` | 12 | K 线丰富阶段并发数 |
 | `EASTMONEY_PROXY` | 空 | 出站网络需要代理时设置；通常 Linux 留空 |
+| `TENCENT_TIMEOUT` | 5 | 腾讯备用源单次请求超时秒数 |
+| `TENCENT_PROXY` | 空 | 腾讯备用源代理；通常 Linux 留空 |
+| `MAX_KLINE_CONCURRENCY` | 8 | 所有 Provider 合计的 K 线网络并发上限 |
+| `KLINE_CACHE_PATH` | `data/kline_cache.sqlite3` | 日 K 线 SQLite 持久化路径 |
+| `KLINE_REFRESH_TRADING_SECONDS` | 300 | 交易时段正式历史 K 刷新间隔 |
+| `KLINE_REFRESH_CLOSED_SECONDS` | 1800 | 非交易时段正式历史 K 刷新间隔 |
 
 不要提交 `.env`。生成随机 token 示例：`openssl rand -hex 32`。
 
@@ -139,9 +146,11 @@ MCP_URL=https://market.example.com/mcp/ MCP_TOKEN=YOUR_TOKEN python scripts/test
 - 行情：`push2.eastmoney.com/api/qt/stock/get`
 - 全市场/板块：`push2.eastmoney.com/api/qt/clist/get`
 - K 线：`push2his.eastmoney.com/api/qt/stock/kline/get`
+- 腾讯备用 Quote：`qt.gtimg.cn/q=...`
+- 腾讯备用前复权日 K：`web.ifzq.gtimg.cn/appstock/app/fqkline/get`
 - 同域节点主动断连时，在最多 3 次总尝试内轮换 `push2delay`/`push2his` 节点。
 - 少量批量代码用 `asyncio.gather` 并发；实测 `ulist.np/get` 返回疑似混淆字段，未采用。全市场扫描通过分页 `clist/get` 批量抓取，不逐股获取 quote。
-- Quote TTL 3 秒、市场 5 秒、板块 10 秒、扫描 15 秒、日 K 60 秒、分钟 K 5 秒。
+- Quote TTL 3 秒、市场 5 秒、板块 10 秒、扫描 15 秒、分钟 K 5 秒。日 K 使用 L1 + SQLite，交易时段 300 秒、非交易时段 1800 秒才增量刷新；网络失败立即使用已有旧缓存。
 
 字段、请求参数、原始 JSON、缩放和时间含义见 `docs/eastmoney_fields.md` 与 `docs/eastmoney_probe.json`。东方财富不是本项目控制的数据服务，正常延迟通常为秒级，但可能限流或变更字段。
 
@@ -171,7 +180,7 @@ python scripts/acceptance.py
 4. 保留 `docs/eastmoney_probe.json` 后再更新解析器与 fixtures，运行全部单测。
 5. 不要提高重试风暴；接口不可用时保持 `ok=false/UNAVAILABLE`。
 
-增加新浪/腾讯备用源时，实现 `MarketDataProvider`，统一转换成 Pydantic 语义模型，并在 service 层做熔断/优先级切换；每个源必须分别验证价格单位、成交量单位与时间戳。不要把多个源的不同时间点无提示拼成一条 quote。
+新增数据源时，实现 `MarketDataProvider`，统一转换成 Pydantic 语义模型，并注册到 `ProviderManager`；每个源必须分别验证价格单位、成交量单位与时间戳。不要把多个源的不同时间点无提示拼成一条 quote。
 
 ## 已知限制
 
@@ -179,7 +188,7 @@ python scripts/acceptance.py
 - 板块涨停数与 10/30 分钟历史排名未找到稳定、可验证字段，明确返回 `null`。
 - 涨跌停判断按名称与昨收/主板规则计算，除权、上市首日和特殊交易状态可能需要交易日规则表；一字板另行直接排除。
 - 扫描对预筛 shortlist 计算 K 线指标，不是对全市场数千只逐一计算 MA；coverage 指 quote 列表覆盖率。
-- 内存 TTL 缓存在重启与多 worker 之间不共享；第一版建议 Uvicorn 单 worker。
+- Quote/扫描的内存 TTL 缓存在重启与多 worker 之间不共享；日 K 的 SQLite 可跨重启保留。第一版仍建议 Uvicorn 单 worker。
 - 本项目不提供交易建议、自动交易、账户或资金接口。
 
 ## 项目结构
@@ -196,4 +205,4 @@ requirements.txt
 .env.example
 ```
 
-下一阶段建议：加入第二只只读行情源与熔断指标、标准 OAuth、Prometheus 指标、交易日/证券状态规则表，以及用分钟快照实现板块历史排名；仍应保持交易能力与账户数据完全不在本服务范围内。
+下一阶段建议：标准 OAuth、Prometheus 指标、交易日/证券状态规则表，以及用分钟快照实现板块历史排名；仍应保持交易能力与账户数据完全不在本服务范围内。

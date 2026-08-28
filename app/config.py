@@ -18,7 +18,13 @@ class Settings(BaseSettings):
     eastmoney_timeout: float = Field(default_factory=lambda: float(os.getenv("EASTMONEY_TIMEOUT", "5")))
     eastmoney_retries: int = Field(default_factory=lambda: int(os.getenv("EASTMONEY_RETRIES", "3")))
     eastmoney_proxy: str | None = Field(default_factory=lambda: os.getenv("EASTMONEY_PROXY") or os.getenv("HTTPS_PROXY") or None)
+    tencent_timeout: float = Field(default_factory=lambda: float(os.getenv("TENCENT_TIMEOUT", "5")))
+    tencent_proxy: str | None = Field(default_factory=lambda: os.getenv("TENCENT_PROXY") or os.getenv("HTTPS_PROXY") or None)
     scan_concurrency: int = Field(default_factory=lambda: int(os.getenv("SCAN_CONCURRENCY", "12")))
+    max_kline_concurrency: int = Field(default_factory=lambda: int(os.getenv("MAX_KLINE_CONCURRENCY", "8")))
+    kline_cache_path: str = Field(default_factory=lambda: os.getenv("KLINE_CACHE_PATH", "data/kline_cache.sqlite3"))
+    kline_refresh_trading_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_TRADING_SECONDS", "300")))
+    kline_refresh_closed_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_CLOSED_SECONDS", "1800")))
     stale_after_seconds: int = 30
     old_after_seconds: int = 60
     unavailable_after_seconds: int = 300

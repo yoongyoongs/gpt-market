@@ -2,7 +2,7 @@
 
 文档版本：1.0  
 对应服务版本：1.0.0  
-最后更新：2026-08-27
+最后更新：2026-08-28
 
 ## 1. 项目目标
 
@@ -23,17 +23,19 @@
 
 ```mermaid
 flowchart LR
-    EM[东方财富公开行情接口] --> P[EastmoneyProvider]
-    P --> N[Pydantic 标准模型]
-    N --> C[共享 AsyncTTLCache]
-    C --> S[统一 Service 层]
+    EM[东方财富 Primary] --> PM[ProviderManager]
+    TX[腾讯 Secondary] --> PM
+    PM --> MD[MarketDataService]
+    KC[L1 + SQLite 日K缓存] --> MD
+    MD --> N[Pydantic 标准模型]
+    N --> S[统一 Service 层]
     S --> M[MCP Adapter]
     S --> W[Web Adapter]
 ```
 
 必须保持以下约束：
 
-1. `f43`、`f170` 等原始字段只能在 `app/providers/eastmoney.py` 中解析。
+1. `f43`、`f170` 或腾讯 `~` 字段只能在对应 Provider 中解析。
 2. 价格、百分比和成交量缩放只能在 Provider 中执行一次。
 3. MCP 和 Web 不得直接请求东方财富。
 4. MCP 和 Web 不得自行计算质量、指标或评分。
@@ -55,13 +57,15 @@ flowchart LR
 
 | 模块 | 责任 |
 |---|---|
-| `app/providers/` | 请求东方财富，解析原始字段，输出标准模型 |
+| `app/providers/` | Provider 抽象、双源请求、健康切换、代码转换与标准化 |
+| `app/kline_cache.py` | 日 K 的 L1 内存与 L2 SQLite 持久化缓存 |
 | `app/models.py` | 统一业务模型和响应契约 |
 | `app/cache.py` | 进程内 TTL 缓存与同键并发合并 |
 | `app/services/data_quality.py` | 唯一的数据质量、置信度和快照 ID 计算入口 |
 | `app/services/technical_indicator_service.py` | 技术指标统一调用入口 |
 | `app/services/quote_service.py` | 单股和批量行情编排 |
 | `app/services/kline_service.py` | K 线与单股详情编排 |
+| `app/services/market_data_service.py` | 业务层唯一数据依赖、日 K 缓存与网络刷新策略 |
 | `app/services/market_service.py` | 指数、涨跌家数和市场成交额 |
 | `app/services/sector_service.py` | 行业/概念排名 |
 | `app/services/scanner.py` | 主板过滤、指标丰富、评分和覆盖率 |
@@ -77,10 +81,11 @@ flowchart LR
 - 一个 `AsyncTTLCache`；
 - 一个 `DataQualityService`；
 - 一个 `TechnicalIndicatorService`；
-- 一个 `EastmoneyProvider`；
+- `EastmoneyProvider`、`TencentProvider` 和 `ProviderManager`；
+- 一个 `KlineCache` 与一个 `MarketDataService`；
 - Quote、Kline、Market、Sector、Scanner 五类服务。
 
-当前部署必须保持 Uvicorn 单 worker。内存缓存不跨 worker、容器或主机共享；如果未来需要多副本，应先将缓存和快照协调迁移到 Redis 等共享设施，否则无法保证跨实例 snapshot parity。
+当前部署必须保持 Uvicorn 单 worker。SQLite 日 K 可跨进程重启保留，但 L1、Quote、扫描和 Live 快照不跨 worker、容器或主机共享；如果未来需要多副本，应先迁移共享缓存和快照协调，否则无法保证跨实例 snapshot parity。
 
 ## 5. Provider 设计
 
@@ -93,6 +98,8 @@ flowchart LR
 - 北交所代码被识别为 BJ，但主板扫描会排除。
 
 输入必须是六位数字，未知前缀直接拒绝。
+
+腾讯的转换独立位于 `TencentProvider`：上海 `603019 → sh603019`，深圳 `002284 → sz002284`。业务层始终只使用六位代码。
 
 ### 5.2 Quote 标准化
 
@@ -113,13 +120,13 @@ Provider 请求 `fltt=2` 时使用已缩放值；探针使用 `fltt=1` 验证原
 - JSON 字符串数组；
 - 以空格分隔的字符串。
 
-无法得到有效行时抛出 `ProviderError`，不会返回空对象伪装成功。
+无法得到有效行时抛出 `ProviderEmptyDataError`，不会返回空对象伪装成功。扫描日 K 在两个源都统一为 `qfq`：Eastmoney `fqt=1`，Tencent `qfqday`。
 
 ### 5.4 HTTP 策略
 
 - 共享 `httpx.AsyncClient` 和 Keep-Alive 连接池。
-- 默认单次超时 5 秒，最多尝试 3 次。
-- 重试间隔为 0.2 秒、0.4 秒。
+- 默认单次超时 5 秒；ProviderManager 对每个源最多尝试 2 次。
+- 第一次失败后随机退避 0.2–0.5 秒，源内重试耗尽后切备用源。
 - 主机异常时按既定顺序尝试 `push2`、`push2delay`、`push2his` 节点。
 - 所有重试均失败后返回明确 provider error。
 
@@ -175,7 +182,8 @@ scan-YYYYMMDDTHHMMSS.mmm
 |---|---|---:|
 | 单股行情 | `quote:{code}` | 3 秒 |
 | 指数行情 | `index:{market}:{code}` | 3 秒 |
-| K 线 | `kline:{code}:{period}:{limit}` | 日/周/月 60 秒；分钟 5 秒 |
+| 日 K | L1 + `data/kline_cache.sqlite3` | 交易时 300 秒；非交易时 1800 秒 |
+| 分钟/周/月 K | `kline:{code}:{period}:{limit}` | 分钟 5 秒；其他仍由 Provider TTL 控制 |
 | 单股详情 | `detail:{code}` | 3 秒 |
 | 全市场列表 | `market:all-a-shares` | 3 秒 |
 | 市场概况 | `market:latest` | 5 秒 |
@@ -220,7 +228,7 @@ flowchart TD
     B --> C[ST/停牌/一字板/涨跌停过滤]
     C --> D[涨幅与成交额过滤]
     D --> E[轻量预排序，最多 120 只]
-    E --> F[并发获取 80 日 K 线]
+    E --> F[L1/SQLite 获取 80 日 K，必要时限流增量刷新]
     F --> G[统一技术指标]
     G --> H[五维评分与排序]
     H --> I[Top N + coverage + scan_id]
@@ -236,7 +244,7 @@ flowchart TD
 - 位置 20：奖励当日 0%–3%、靠近 MA20 且未贴近 20 日高点；连续大涨扣分。
 - 流动性 15：成交额、换手率和非一字板状态。
 
-K 线丰富失败时，不伪造技术指标；候选可保留基础评分，并附加“K线不可用，趋势指标未计分”的原因。
+K 线丰富失败时先由腾讯接管；双源失败时使用足量旧缓存。只有双源失败且无足量缓存才不计算技术指标，并在候选中附加“K线不可用，趋势指标未计分”。每次实际扫描以聚合 `SCAN SUMMARY` 输出来源、缓存命中、异常分类和 MA 可用数量，不逐股刷日志。
 
 ## 9. 传输适配器
 
@@ -276,7 +284,7 @@ HTTP 请求只读取当前引用并渲染，绝不 await Service 或 Provider。
 
 ## 11. 扩展设计
 
-未来增加腾讯、新浪等第二数据源时，应实现 `MarketDataProvider`，在 Provider 内完成该源的独立字段验证和标准化。建议新增协调层完成：
+未来增加新浪等更多数据源时，应实现 `MarketDataProvider`，在 Provider 内完成该源的独立字段验证和标准化，并注册到现有 `ProviderManager`。后续可继续完成：
 
 1. 主源健康检查与熔断；
 2. 同时间窗口价格交叉核验；
@@ -289,7 +297,7 @@ HTTP 请求只读取当前引用并渲染，绝不 await Service 或 Provider。
 ## 12. 已知限制
 
 - 东方财富公开页面接口没有服务可用性和字段稳定性承诺。
-- 部分网络出口会被 `push2his` 断开，或得到空 K 线；服务会返回不可用，不使用旧数据冒充成功。
+- 部分网络出口会被 `push2his` 断开，或得到空 K 线；此时腾讯自动接管。双源都失败时日 K 可显式返回旧缓存并标记 `stale/OLD`，不会冒充实时数据。
 - Quick Tunnel 地址在服务重启后可能变化，不适合作为正式固定入口。
 - Quick Tunnel 对持续 SSE 没有生产保证；正式环境应使用 Named Tunnel 或自有域名。
 - 当前静态 Bearer 适合受控客户端；正式 ChatGPT 连接建议升级标准 OAuth discovery。

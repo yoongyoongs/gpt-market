@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Quality = Literal["LIVE", "STALE", "OLD", "UNAVAILABLE", "CONFLICT"]
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
-TimestampSource = Literal["eastmoney", "fetch_time"]
+TimestampSource = Literal["eastmoney", "tencent", "fetch_time"]
 
 
 class MarketModel(BaseModel):
@@ -55,6 +55,7 @@ class Kline(MarketModel):
     close: float
     volume: int
     amount: float
+    provisional: bool = False
 
 
 class KlineResult(Freshness):

@@ -20,3 +20,5 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ./data:/data

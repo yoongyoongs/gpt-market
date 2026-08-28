@@ -63,6 +63,15 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/health/providers")
+async def provider_health():
+    return {
+        "status": "ok",
+        **container.market_data.health(),
+        "last_scan": container.scanner.last_summary,
+    }
+
+
 @router.get("/quote/{code}")
 async def quote(code: str):
     return await container.quotes.get_quote(code)

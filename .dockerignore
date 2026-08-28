@@ -4,3 +4,4 @@ __pycache__
 .pytest_cache
 .env
 docs/acceptance_results.json
+data

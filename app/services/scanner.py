@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import math
+from collections import Counter
 from datetime import datetime
+from time import perf_counter
 
 from app.cache import AsyncTTLCache
 from app.models import CoverageReport, Quote, ScanCandidate, ScanCoverage, ScanResult, TechnicalIndicators
@@ -10,8 +14,10 @@ from app.providers.base import MarketDataProvider
 from app.services.data_quality import DataQualityService
 from app.services.technical_indicator_service import TechnicalIndicatorService
 from app.utils.time import now_shanghai
+from app.services.market_data_service import metric_delta
 
 MAINBOARD_PREFIXES = ("000", "001", "002", "003", "600", "601", "603", "605")
+logger = logging.getLogger("uvicorn.error")
 
 
 def is_st(name: str) -> bool:
@@ -127,6 +133,7 @@ class ScannerService:
         self.indicators = indicators or TechnicalIndicatorService()
         self.quality = quality or DataQualityService()
         self.last_result: ScanResult | None = None
+        self.last_summary: dict | None = None
 
     async def scan_mainboard(
         self, top_n: int = 30, max_pct_change: float = 5.0, min_amount: float = 50_000_000,
@@ -139,6 +146,9 @@ class ScannerService:
         )
 
         async def load() -> ScanResult:
+            scan_started = perf_counter()
+            metrics_before = self.provider.metrics_snapshot() if hasattr(self.provider, "metrics_snapshot") else {}
+            health_before = self.provider.health() if hasattr(self.provider, "health") else {}
             market_data, sh_index, sz_index = await asyncio.gather(
                 self.provider.get_all_a_shares(),
                 self.provider.get_index_quote("000001", "SH"),
@@ -176,19 +186,30 @@ class ScannerService:
 
             shortlist = sorted(eligible, key=preliminary, reverse=True)[: min(max(top_n * 3, 60), 120)]
             semaphore = asyncio.Semaphore(self.concurrency)
+            kline_errors: Counter[str] = Counter()
+            kline_sources: Counter[str] = Counter()
+            technical_available: dict[str, tuple[bool, bool, bool]] = {}
 
             async def enrich(quote: Quote) -> ScanCandidate | None:
                 try:
                     async with semaphore:
-                        result = await self.provider.get_kline(quote.code, "day", 80)
+                        result = await self.provider.get_kline(quote.code, "day", 80, "qfq", quote=quote)
+                    kline_sources[result.source] += 1
                     technical = self.indicators.calculate(result.klines, quote.price)
+                    technical_available[quote.code] = (
+                        technical.ma5 is not None,
+                        technical.ma10 is not None,
+                        technical.ma20 is not None,
+                    )
                     recent = [
                         (result.klines[i].close / result.klines[i - 1].close - 1) * 100
                         for i in range(max(1, len(result.klines) - 3), len(result.klines))
                         if result.klines[i - 1].close
                     ]
                     return score_candidate(quote, technical, benchmarks.get(quote.market, 0.0), recent)
-                except Exception:
+                except Exception as exc:
+                    key = f"{type(exc).__name__}:{str(exc)[:160]}"
+                    kline_errors[key] += 1
                     fallback = score_candidate(quote, TechnicalIndicators(), benchmarks.get(quote.market, 0.0), [])
                     fallback.reason.append("K线不可用，趋势指标未计分")
                     return fallback
@@ -206,6 +227,41 @@ class ScannerService:
                 **quality,
             )
             self.last_result = result
+            metrics_after = self.provider.metrics_snapshot() if hasattr(self.provider, "metrics_snapshot") else {}
+            metrics = metric_delta(metrics_after, metrics_before) if metrics_after else {}
+            health_after = self.provider.health() if hasattr(self.provider, "health") else {}
+
+            def provider_delta(name: str, field: str) -> int:
+                before = ((health_before.get("providers") or {}).get(name) or {}).get(field, 0)
+                after = ((health_after.get("providers") or {}).get(name) or {}).get(field, 0)
+                return int(after - before)
+
+            self.last_summary = {
+                "stocks_total": total,
+                "quotes_success": success,
+                "quotes_failed": max(0, total - success),
+                "kline_required": len(shortlist),
+                "kline_cache_hit": metrics.get("cache_hit", 0),
+                "kline_network_fetch": metrics.get("network_fetch", 0),
+                "kline_success": metrics.get("success", 0),
+                "kline_failed": metrics.get("failed", 0),
+                "kline_stale_used": metrics.get("stale_used", 0),
+                "eastmoney_success": provider_delta("eastmoney", "success_count"),
+                "eastmoney_failure": provider_delta("eastmoney", "failure_count"),
+                "eastmoney_empty": provider_delta("eastmoney", "empty_data_count"),
+                "eastmoney_timeout": provider_delta("eastmoney", "timeout_count"),
+                "tencent_success": provider_delta("tencent", "success_count"),
+                "tencent_failure": provider_delta("tencent", "failure_count"),
+                "kline_availability_rate": round((len(shortlist) - sum(kline_errors.values())) / len(shortlist), 4) if shortlist else 1.0,
+                "cache_hit_rate": round(metrics.get("cache_hit", 0) / len(shortlist), 4) if shortlist else 1.0,
+                "ma5_available_top": sum(technical_available.get(item.code, (False, False, False))[0] for item in candidates),
+                "ma10_available_top": sum(technical_available.get(item.code, (False, False, False))[1] for item in candidates),
+                "ma20_available_top": sum(technical_available.get(item.code, (False, False, False))[2] for item in candidates),
+                "scan_duration_seconds": round(perf_counter() - scan_started, 3),
+                "kline_errors": dict(kline_errors.most_common(10)),
+                "kline_sources": dict(kline_sources.most_common()),
+            }
+            logger.info("SCAN SUMMARY %s", json.dumps(self.last_summary, ensure_ascii=False, separators=(",", ":")))
             return result
 
         return await self.cache.get_or_set(cache_key, 15, load)

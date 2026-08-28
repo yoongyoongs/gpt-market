@@ -7,6 +7,7 @@
 | 类型 | 地址 | 认证 |
 |---|---|---|
 | 健康检查 | `GET /health` | 无 |
+| 数据源健康 | `GET /health/providers` | 无；建议只在受控网络开放 |
 | MCP | `/mcp/` | `Authorization: Bearer <MCP_TOKEN>` |
 | GPT Web | `/gpt/{secret}/...` | URL 中的 `GPT_WEB_SECRET` |
 | REST 调试 | `/quote`、`/market` 等 | 当前版本无认证，仅用于受控环境调试 |
@@ -138,7 +139,8 @@ Web 成功响应：
       "low": 9.69,
       "close": 9.80,
       "volume": 20355600,
-      "amount": 198606168.71
+      "amount": 198606168.71,
+      "provisional": false
     }
   ],
   "source": "eastmoney",
@@ -153,6 +155,8 @@ Web 成功响应：
   "confidence": "HIGH"
 }
 ```
+
+日 K 在盘中可能附加由同一 Quote 快照生成的今日行，此时 `provisional=true`；该行不在 15:10 前持久化。正式历史行均为 `false`。`source` 可能为 `eastmoney`、`tencent`、`cache:eastmoney`、`cache:tencent`，与盘中 Quote 合并时会追加 `+<quote source>`。这些是向后兼容的来源/状态扩展，路由和既有字段不变。
 
 ## 7. StockDetailResponse
 

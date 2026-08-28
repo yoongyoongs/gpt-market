@@ -33,6 +33,7 @@ class DataQualityService:
         complete: bool = True,
         conflict: bool = False,
         server_timestamp: datetime | None = None,
+        source: str = "eastmoney",
     ) -> dict:
         observed_at = server_timestamp or now_shanghai()
         if source_timestamp.tzinfo is None:
@@ -58,7 +59,7 @@ class DataQualityService:
             confidence = "HIGH"
 
         return {
-            "source": "eastmoney",
+            "source": source,
             "source_timestamp": source_timestamp,
             "data_timestamp": source_timestamp,
             "server_timestamp": observed_at,
