@@ -28,9 +28,9 @@ Streamable HTTP MCP endpoint：`https://YOUR_DOMAIN/mcp/`（建议保留结尾 `
 
 REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kline/{code}`、`/detail/{code}`、`/market`、`/sectors`、`/scan`、`/scan/coverage`。REST 与 MCP 使用完全相同的 service/provider 层。
 
-供 GPT 直接读取 JSON 的受保护 Web Adapter 使用 `GET /gpt/{secret}/...`：`stock/{code}`、`stocks`、`stock/{code}/kline`、`stock/{code}/detail`、`market`、`sectors`、`scan`、`scan/coverage`。`secret` 来自 `GPT_WEB_SECRET`；未单独设置时复用 `MCP_TOKEN`。
+供 GPT 直接读取 JSON 的受保护 Web Adapter 使用 `GET /gpt/{secret}/...`：`stock/{code}`、`stocks`、`stock/{code}/kline`、`stock/{code}/detail`、`market`、`sectors`、`scan`、`scan/coverage`、`coverage`。`secret` 来自 `GPT_WEB_SECRET`；未单独设置时复用 `MCP_TOKEN`。
 
-为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 `GET /gpt/{secret}/live` HTML 快照。后台任务通过上述共享 Service 刷新一个内存快照，live 请求只读取该快照，绝不等待 Provider。页面中的“获取最新行情快照”和个股链接每次都使用 `secrets.token_urlsafe(24)` 生成新的 nonce；不建立独立 Provider 或行情算法。所有 live 响应同时设置 `no-store` 等防缓存 Header。
+为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 `GET /gpt/{secret}/live` HTML 快照。后台任务通过上述共享 Service 刷新一个内存快照，live 请求只读取该快照，绝不等待 Provider。页面中的“获取最新行情快照”和个股链接每次都使用 `secrets.token_urlsafe(24)` 生成新的 nonce；不建立独立 Provider 或行情算法。所有 live 响应同时设置 `no-store` 等防缓存 Header。页面同时展示本轮证券/行情/过滤覆盖、数据新鲜度分布、失败源与缺失字段摘要，以及行业和概念 Top20。`GET /gpt/{secret}/coverage` 从同一份已发布快照读取完整 `CoverageReport`，不会重新请求全市场行情。
 
 后台在交易时段每次刷新完成后等待 2 秒，非交易时段等待 30 秒；现有 Service TTL 仍决定真实上游采集频率。刷新失败会保留上一份成功数据。进程刚启动且首份快照尚未完成时，live 页面立即返回 `INITIALIZING`，不会阻塞请求。
 
@@ -72,6 +72,7 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/quote/002284
 curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/stock/002284"
 curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/live"
+curl "http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/coverage"
 curl 'http://127.0.0.1:8000/kline/002284?period=day&limit=5'
 curl 'http://127.0.0.1:8000/sectors?sector_type=industry&limit=10'
 curl 'http://127.0.0.1:8000/scan?top_n=30'

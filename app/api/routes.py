@@ -22,10 +22,17 @@ router = APIRouter()
 
 
 async def _load_live_snapshot():
-    market, scan = await asyncio.gather(
+    market, scan, industry, concept = await asyncio.gather(
         container.market.get_market_overview(),
         container.scanner.scan_mainboard(top_n=30),
+        container.sectors.get_sector_ranking("industry", 20),
+        container.sectors.get_sector_ranking("concept", 20),
+        return_exceptions=True,
     )
+    if isinstance(market, Exception):
+        raise market
+    if isinstance(scan, Exception):
+        raise scan
     quotes = {}
     if scan.candidates:
         try:
@@ -35,7 +42,36 @@ async def _load_live_snapshot():
             # Market + scanner are already a valid successful snapshot. Quote
             # enrichment is best-effort and must not discard that snapshot.
             pass
-    return market, scan, quotes
+    coverage = await container.scanner.get_scan_coverage(scan.scan_id)
+
+    def sector_counts(value):
+        if isinstance(value, Exception):
+            return None, 0, 1
+        total = value.total_count if value.total_count is not None else len(value.items)
+        success = value.success_count if value.success_count is not None else len(value.items)
+        return total, success, value.failed_count or 0
+
+    industry_total, industry_success, industry_failed = sector_counts(industry)
+    concept_total, concept_success, concept_failed = sector_counts(concept)
+    failure_sources = dict(coverage.failure_sources)
+    failure_sources["sector"] = industry_failed + concept_failed
+    coverage = coverage.model_copy(
+        update={
+            "industry_total": industry_total,
+            "industry_success": industry_success,
+            "concept_total": concept_total,
+            "concept_success": concept_success,
+            "failure_sources": failure_sources,
+        }
+    )
+    return (
+        market,
+        scan,
+        quotes,
+        coverage,
+        None if isinstance(industry, Exception) else industry,
+        None if isinstance(concept, Exception) else concept,
+    )
 
 
 live_cache = LiveSnapshotCache(_load_live_snapshot)
@@ -172,6 +208,14 @@ async def gpt_scan(
 @router.get("/gpt/{secret}/scan/coverage", dependencies=[Depends(require_web_secret)])
 async def gpt_scan_coverage(secret: str):
     return web_response(await container.scanner.get_scan_coverage())
+
+
+@router.get("/gpt/{secret}/coverage", dependencies=[Depends(require_web_secret)])
+async def gpt_coverage(secret: str):
+    snapshot = live_cache.get().snapshot
+    if snapshot is None or snapshot.coverage is None:
+        raise HTTPException(status_code=503, detail="coverage snapshot is initializing")
+    return web_response(snapshot.coverage)
 
 
 # Live Refresh Adapter. Nonces make every navigation URL unique; the handlers

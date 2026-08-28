@@ -133,6 +133,8 @@ class ScannerService:
         self.indicators = indicators or TechnicalIndicatorService()
         self.quality = quality or DataQualityService()
         self.last_result: ScanResult | None = None
+        self.last_coverage: CoverageReport | None = None
+        self._coverage_by_scan_id: dict[str, CoverageReport] = {}
         self.last_summary: dict | None = None
 
     async def scan_mainboard(
@@ -163,18 +165,43 @@ class ScannerService:
                 "SZ": 0.0 if isinstance(sz_index, Exception) else (sz_index.pct_change or 0.0),
             }
             eligible: list[Quote] = []
+            excluded: Counter[str] = Counter()
             for quote in quotes:
-                if not is_mainboard(quote.code) or quote.suspended or quote.price is None or quote.pct_change is None:
+                if quote.code.startswith(("300", "301")):
+                    excluded["chinext"] += 1
+                    continue
+                if quote.code.startswith(("688", "689")):
+                    excluded["star"] += 1
+                    continue
+                if quote.market == "BJ" or quote.code.startswith(("4", "8", "92")):
+                    excluded["bse"] += 1
+                    continue
+                if not is_mainboard(quote.code):
+                    excluded["other"] += 1
+                    continue
+                if quote.suspended:
+                    excluded["suspended"] += 1
+                    continue
+                if quote.price is None or quote.pct_change is None:
+                    excluded["invalid_quote"] += 1
                     continue
                 if exclude_st and is_st(quote.name):
+                    excluded["st"] += 1
                     continue
-                if (quote.amount or 0) < min_amount or quote.pct_change > max_pct_change:
+                if (quote.amount or 0) < min_amount:
+                    excluded["illiquid"] += 1
+                    continue
+                if quote.pct_change > max_pct_change:
+                    excluded["pct_change"] += 1
                     continue
                 if exclude_limit_up and at_price_limit(quote, "up"):
+                    excluded["limit_untradable"] += 1
                     continue
                 if exclude_limit_down and at_price_limit(quote, "down"):
+                    excluded["limit_untradable"] += 1
                     continue
                 if is_one_price_board(quote):
+                    excluded["limit_untradable"] += 1
                     continue
                 eligible.append(quote)
 
@@ -236,10 +263,64 @@ class ScannerService:
                 after = ((health_after.get("providers") or {}).get(name) or {}).get(field, 0)
                 return int(after - before)
 
+            freshness_counts = Counter(quote.quality for quote in quotes)
+            missing_fields = {
+                "volume_ratio missing": sum(quote.volume_ratio is None for quote in quotes),
+                "turnover_rate missing": sum(quote.turnover_rate is None for quote in quotes),
+                "timestamp missing": sum(quote.timestamp_source == "fetch_time" for quote in quotes),
+            }
+            eastmoney_failures = provider_delta("eastmoney", "failure_count")
+            tencent_failures = provider_delta("tencent", "failure_count")
+            quote_failures = max(0, total - success)
+            unavailable = quote_failures + freshness_counts["UNAVAILABLE"] + freshness_counts["CONFLICT"]
+            self.last_coverage = CoverageReport(
+                total_securities=total,
+                quotes_requested=total,
+                quotes_success=success,
+                quotes_failed=quote_failures,
+                filtered_mainboard=len(eligible),
+                excluded_chinext=excluded["chinext"],
+                excluded_star=excluded["star"],
+                excluded_bse=excluded["bse"],
+                excluded_st=excluded["st"],
+                excluded_suspended=excluded["suspended"],
+                excluded_illiquid=excluded["illiquid"],
+                excluded_limit_untradable=excluded["limit_untradable"],
+                excluded_invalid_quote=excluded["invalid_quote"],
+                excluded_pct_change=excluded["pct_change"],
+                excluded_other=excluded["other"],
+                scan_candidates_total=len(shortlist),
+                scan_top_n=len(candidates),
+                fresh_live_count=freshness_counts["LIVE"],
+                fresh_stale_count=freshness_counts["STALE"],
+                fresh_old_count=freshness_counts["OLD"],
+                unavailable_count=unavailable,
+                failure_sources={
+                    "eastmoney": eastmoney_failures,
+                    "tencent": tencent_failures,
+                    "kline": sum(kline_errors.values()),
+                    "sector": 0,
+                },
+                missing_fields=missing_fields,
+                last_scan_timestamp=result.server_timestamp,
+                data_age_seconds=result.age_seconds,
+                coverage_rate=rate,
+                coverage_level=coverage_status(rate),
+                status=coverage_status(rate),
+                scan_id=result.scan_id,
+                **quality,
+            )
+            self._coverage_by_scan_id[result.scan_id] = self.last_coverage
+            if len(self._coverage_by_scan_id) > 100:
+                self._coverage_by_scan_id.pop(next(iter(self._coverage_by_scan_id)))
+
             self.last_summary = {
                 "stocks_total": total,
+                "quotes_requested": total,
                 "quotes_success": success,
                 "quotes_failed": max(0, total - success),
+                "filtered_mainboard": len(eligible),
+                "excluded": dict(excluded),
                 "kline_required": len(shortlist),
                 "kline_cache_hit": metrics.get("cache_hit", 0),
                 "kline_network_fetch": metrics.get("network_fetch", 0),
@@ -266,26 +347,20 @@ class ScannerService:
 
         return await self.cache.get_or_set(cache_key, 15, load)
 
-    async def get_scan_coverage(self) -> CoverageReport:
-        if self.last_result is None:
+    async def get_scan_coverage(self, scan_id: str | None = None) -> CoverageReport:
+        if self.last_result is None or self.last_coverage is None:
             await self.scan_mainboard(top_n=1)
-        assert self.last_result is not None
+        assert self.last_result is not None and self.last_coverage is not None
         result = self.last_result
-        rate = result.coverage.coverage_rate
+        stored = self._coverage_by_scan_id.get(scan_id or result.scan_id, self.last_coverage)
         current_freshness = self.quality.assess(
-            result.source_timestamp,
-            timestamp_source=result.timestamp_source,
-            complete=result.coverage.success > 0,
+            stored.source_timestamp,
+            timestamp_source=stored.timestamp_source,
+            complete=stored.quotes_success > 0,
         )
-        return CoverageReport(
-            total_securities=result.coverage.total,
-            quotes_success=result.coverage.success,
-            quotes_failed=result.coverage.failed,
-            filtered_mainboard=result.coverage.filtered_mainboard,
-            last_scan_timestamp=result.server_timestamp,
-            data_age_seconds=current_freshness["age_seconds"],
-            coverage_rate=rate,
-            status=coverage_status(rate),
-            scan_id=result.scan_id,
-            **current_freshness,
+        return stored.model_copy(
+            update={
+                **current_freshness,
+                "data_age_seconds": current_freshness["age_seconds"],
+            }
         )

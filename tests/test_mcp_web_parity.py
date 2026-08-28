@@ -13,6 +13,7 @@ from app.main import api
 from app.mcp import server as mcp_server
 from app.models import (
     AvailableValue,
+    CoverageReport,
     IndexSnapshot,
     Kline,
     MarketBreadth,
@@ -124,6 +125,24 @@ SCAN = ScanResult(
     scan_id=DataQualityService.scan_id(SOURCE_TIME),
     **QUALITY,
 )
+COVERAGE = CoverageReport(
+    total_securities=5900,
+    quotes_requested=5900,
+    quotes_success=5890,
+    quotes_failed=10,
+    filtered_mainboard=2160,
+    scan_candidates_total=90,
+    scan_top_n=1,
+    fresh_live_count=5890,
+    unavailable_count=10,
+    last_scan_timestamp=SERVER_TIME,
+    data_age_seconds=1.0,
+    coverage_rate=0.9983,
+    coverage_level="FULL",
+    status="FULL",
+    scan_id=SCAN.scan_id,
+    **QUALITY,
+)
 
 
 @pytest.fixture
@@ -142,18 +161,22 @@ def parity_container(monkeypatch):
         return MARKET
 
     async def get_sectors(sector_type: str = "industry", limit: int = 30):
-        assert sector_type == "industry"
-        return SECTORS.model_copy(update={"items": SECTORS.items[:limit]})
+        assert sector_type in {"industry", "concept"}
+        return SECTORS.model_copy(update={"sector_type": sector_type, "items": SECTORS.items[:limit]})
 
     async def scan(*args, **kwargs):
         return SCAN
+
+    async def get_coverage(scan_id=None):
+        assert scan_id in {None, SCAN.scan_id}
+        return COVERAGE
 
     fake = SimpleNamespace(
         quotes=SimpleNamespace(get_quote=get_quote, get_quotes=get_quotes),
         klines=SimpleNamespace(get_stock_detail=get_detail),
         market=SimpleNamespace(get_market_overview=get_market),
         sectors=SimpleNamespace(get_sector_ranking=get_sectors),
-        scanner=SimpleNamespace(scan_mainboard=scan),
+        scanner=SimpleNamespace(scan_mainboard=scan, get_scan_coverage=get_coverage),
     )
     monkeypatch.setattr(routes, "container", fake)
     monkeypatch.setattr(mcp_server, "container", fake)

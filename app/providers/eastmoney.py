@@ -376,11 +376,8 @@ class EastmoneyProvider(MarketDataProvider):
 
         async def load() -> SectorRanking:
             fetched_at = now_shanghai()
-            payload = await self._request(
-                self.list_url,
-                {
-                    "pn": 1,
-                    "pz": limit,
+            common = {
+                    "pz": 100,
                     "po": 1,
                     "np": 1,
                     "ut": LIST_UT,
@@ -389,23 +386,54 @@ class EastmoneyProvider(MarketDataProvider):
                     "fid": "f3",
                     "fs": "m:90+t:2" if sector_type == "industry" else "m:90+t:3",
                     "fields": SECTOR_FIELDS,
-                },
-                require_key="diff",
+            }
+
+            async def fetch_page(page: int) -> dict[str, Any]:
+                return await self._request(
+                    self.list_url,
+                    {**common, "pn": page},
+                    require_key="diff",
+                )
+
+            payload = await fetch_page(1)
+            total_count = int(payload["data"].get("total") or 0)
+            page_count = max(1, ceil(total_count / common["pz"]))
+            remaining = await asyncio.gather(
+                *(fetch_page(page) for page in range(2, page_count + 1)),
+                return_exceptions=True,
             )
-            rows = payload["data"].get("diff") or []
-            items = [
+            payloads = [payload, *(item for item in remaining if isinstance(item, dict))]
+            rows_by_code = {
+                str(row.get("f12") or ""): row
+                for item in payloads
+                for row in (item["data"].get("diff") or [])
+                if row.get("f12")
+            }
+            rows = list(rows_by_code.values())
+            raw_items = [
                 SectorItem(
                     name=str(row.get("f14") or ""), code=str(row.get("f12") or ""),
                     pct_change=_number(row.get("f3")), amount=_number(row.get("f6")),
-                    up_count=_integer(row.get("f104")), down_count=_integer(row.get("f105")), rank=index,
+                    up_count=_integer(row.get("f104")), down_count=_integer(row.get("f105")), rank=1,
                 )
-                for index, row in enumerate(rows, 1)
+                for row in rows
             ]
+            ordered = sorted(
+                raw_items,
+                key=lambda item: float("-inf") if item.pct_change is None else item.pct_change,
+                reverse=True,
+            )
+            parsed_items = [item.model_copy(update={"rank": index}) for index, item in enumerate(ordered, 1)]
+            total_count = total_count or len(parsed_items)
+            success_count = len(parsed_items)
             timestamps = [_timestamp(row.get("f124"), fetched_at) for row in rows]
             timestamp, timestamp_source = max(timestamps, key=lambda item: item[0], default=(fetched_at, "fetch_time"))
             return SectorRanking(
                 sector_type=sector_type,
-                items=items,
+                items=parsed_items[:limit],
+                total_count=total_count,
+                success_count=success_count,
+                failed_count=max(0, total_count - success_count),
                 **self.quality_service.assess(
                     timestamp, timestamp_source=timestamp_source, complete=bool(rows), server_timestamp=fetched_at
                 ),

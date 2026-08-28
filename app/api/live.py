@@ -57,6 +57,9 @@ class LiveSnapshot:
     scan: Any
     quotes: dict[str, Any]
     snapshot_time: datetime
+    coverage: Any | None = None
+    industry: Any | None = None
+    concept: Any | None = None
     html_template: str = ""
     stock_html_templates: dict[str, str] = field(default_factory=dict)
 
@@ -82,7 +85,7 @@ class LiveSnapshotCache:
 
     def __init__(
         self,
-        loader: Callable[[], Awaitable[tuple[Any, Any, dict[str, Any]]]],
+        loader: Callable[[], Awaitable[tuple[Any, ...]]],
         *,
         trading_interval: float = 2.0,
         closed_interval: float = 30.0,
@@ -112,9 +115,22 @@ class LiveSnapshotCache:
         started = perf_counter()
         logger.info("行情刷新开始")
         try:
-            market, scan, quotes = await self.loader()
+            loaded = await self.loader()
+            if len(loaded) == 3:
+                market, scan, quotes = loaded
+                coverage = industry = concept = None
+            else:
+                market, scan, quotes, coverage, industry, concept = loaded
             cached_at = now_shanghai()
-            snapshot = LiveSnapshot(market=market, scan=scan, quotes=quotes, snapshot_time=cached_at)
+            snapshot = LiveSnapshot(
+                market=market,
+                scan=scan,
+                quotes=quotes,
+                snapshot_time=cached_at,
+                coverage=coverage,
+                industry=industry,
+                concept=concept,
+            )
             # Serialization is CPU-only and is completed before publication.
             # The live state becomes visible through one atomic reference swap.
             html_template, stock_templates = await asyncio.to_thread(build_snapshot_templates, snapshot)
@@ -250,6 +266,57 @@ def build_snapshot_template(snapshot: LiveSnapshot) -> str:
         )
 
     next_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}"
+    coverage = snapshot.coverage
+    if coverage is None:
+        coverage_html = "<p>覆盖率统计暂不可用</p>"
+    else:
+        coverage_html = f"""
+<table><tbody>
+<tr><th>本轮证券总数</th><td>{coverage.total_securities}</td></tr>
+<tr><th>请求行情</th><td>{coverage.quotes_requested}</td></tr>
+<tr><th>成功</th><td>{coverage.quotes_success}</td></tr>
+<tr><th>失败</th><td>{coverage.quotes_failed}</td></tr>
+<tr><th>沪深主板过滤后</th><td>{coverage.filtered_mainboard}</td></tr>
+<tr><th>行业覆盖</th><td>{_escape(coverage.industry_success)} / {_escape(coverage.industry_total)}</td></tr>
+<tr><th>概念覆盖</th><td>{_escape(coverage.concept_success)} / {_escape(coverage.concept_total)}</td></tr>
+<tr><th>LIVE</th><td>{coverage.fresh_live_count}</td></tr>
+<tr><th>STALE</th><td>{coverage.fresh_stale_count}</td></tr>
+<tr><th>OLD</th><td>{coverage.fresh_old_count}</td></tr>
+<tr><th>UNAVAILABLE</th><td>{coverage.unavailable_count}</td></tr>
+<tr><th>结构化覆盖率</th><td>{coverage.coverage_rate * 100:.2f}%</td></tr>
+<tr><th>等级</th><td>{_escape(coverage.coverage_level)}</td></tr>
+</tbody></table>
+<h3>过滤原因</h3>
+<table><tbody>
+<tr><th>创业板</th><td>{coverage.excluded_chinext}</td></tr>
+<tr><th>科创板</th><td>{coverage.excluded_star}</td></tr>
+<tr><th>北交所</th><td>{coverage.excluded_bse}</td></tr>
+<tr><th>ST/退市</th><td>{coverage.excluded_st}</td></tr>
+<tr><th>停牌</th><td>{coverage.excluded_suspended}</td></tr>
+<tr><th>流动性不足</th><td>{coverage.excluded_illiquid}</td></tr>
+<tr><th>涨跌停/一字板不可交易</th><td>{coverage.excluded_limit_untradable}</td></tr>
+</tbody></table>
+<h3>失败源摘要</h3>
+<table><tbody>{''.join(f'<tr><th>{_escape(key)}</th><td>{value}</td></tr>' for key, value in coverage.failure_sources.items())}</tbody></table>
+<h3>缺失字段摘要</h3>
+<table><tbody>{''.join(f'<tr><th>{_escape(key)}</th><td>{value}</td></tr>' for key, value in coverage.missing_fields.items())}</tbody></table>
+"""
+
+    def sector_table(title: str, ranking: Any | None) -> str:
+        if ranking is None:
+            return f"<h2>{html.escape(title)}</h2><p>暂不可用</p>"
+        rows = "".join(
+            f"<tr><td>{item.rank}</td><td>{_escape(item.name)}</td><td>{_number(item.pct_change)}%</td>"
+            f"<td>{_number(item.amount)}</td><td>{_escape(item.up_count)}</td><td>{_escape(item.down_count)}</td></tr>"
+            for item in ranking.items[:20]
+        )
+        return (
+            f"<h2>{html.escape(title)} Top20</h2>"
+            "<table><thead><tr><th>rank</th><th>name</th><th>pct_change</th><th>amount</th>"
+            f"<th>up_count</th><th>down_count</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+
+    sector_html = sector_table("行业", snapshot.industry) + sector_table("概念", snapshot.concept)
     body = f"""
 <h1>A 股最新行情快照</h1>
 {WARNING_MARKER}
@@ -276,6 +343,9 @@ def build_snapshot_template(snapshot: LiveSnapshot) -> str:
 <tr><th>平盘家数</th><td>{market.breadth.flat_count}</td></tr>
 <tr><th>市场成交额（元）</th><td>{_number(market.amount)}</td></tr>
 </tbody></table>
+<h2>覆盖率</h2>
+{coverage_html}
+{sector_html}
 <h2>scan_mainboard Top30</h2>
 <table><thead><tr><th>#</th><th>code</th><th>name</th><th>price</th><th>prev_close</th><th>open</th><th>high</th><th>low</th><th>change</th><th>change_pct</th><th>volume</th><th>amount</th><th>换手率</th><th>量比</th><th>总分</th><th>source</th><th>source_time</th><th>理由</th></tr></thead>
 <tbody>{''.join(candidate_rows)}</tbody></table>

@@ -39,12 +39,13 @@
 | `GET /gpt/{secret}/sectors?sector_type=industry&limit=10` | `get_sector_ranking` |
 | `GET /gpt/{secret}/scan?top_n=10` | `scan_mainboard` |
 | `GET /gpt/{secret}/scan/coverage` | `get_scan_coverage` |
+| `GET /gpt/{secret}/coverage` | 读取 Live 缓存中与当前页面完全一致的完整覆盖报告 |
 
 ### Live Refresh HTML Adapter
 
 | 路径 | 说明 |
 |---|---|
-| `GET /gpt/{secret}/live` | 立即读取后台成功快照，渲染市场及 Top30 HTML，并生成新 nonce 链接 |
+| `GET /gpt/{secret}/live` | 立即读取后台成功快照，渲染市场、覆盖率、行业/概念 Top20 及股票 Top30，并生成新 nonce 链接 |
 | `GET /gpt/{secret}/live/{nonce}` | 立即读取同一个内存快照并渲染 HTML，不调用行情源 |
 | `GET /gpt/{secret}/live/{nonce}/stock/{code}` | 读取快照内的共享 QuoteService 结果，不调用行情源 |
 
@@ -227,6 +228,18 @@ Web 成功响应：
 - `FULL`：≥ 90%
 - `BROAD`：≥ 60% 且 < 90%
 - `PARTIAL`：< 60%
+
+完整报告的 `coverage_rate` 固定按 `quotes_success / quotes_requested` 计算，不能用过滤后的主板数量或 Top30 反推。除公共质量元数据、`snapshot_id`、`scan_id` 和时间戳外，还包括：
+
+- `total_securities`、`quotes_requested/success/failed`、`filtered_mainboard`
+- 各市场、ST、停牌、流动性、涨跌停等互斥过滤计数
+- `industry_total/success`、`concept_total/success`
+- `scan_candidates_total`、`scan_top_n`
+- `freshness.live/stale/old/unavailable`
+- `failure_sources` 与 `missing_fields` 汇总
+- 基金、ETF、LOF、REIT 的预留可空字段
+
+这些数字由当前扫描和板块读取过程顺带记录；`/coverage` 和 `/live` 只读取已发布内存快照，不会为统计再抓取一遍股票行情。
 
 返回最新扫描的证券总数、成功/失败数、过滤后主板数、扫描时间、数据年龄、覆盖率和 `scan_id`。
 
