@@ -9,6 +9,7 @@
 - [测试与验收规范](docs/testing-acceptance.md)：parity、联网测试、发布门禁和排障流程。
 - [东方财富字段实测记录](docs/eastmoney_fields.md)：原始字段、缩放、时间和 K 线格式。
 - [多数据源与 K 线缓存设计](docs/data-source-resilience.md)：Provider 切换、SQLite、临时日 K、限流、健康状态与故障语义。
+- [2026-08-28 上线验收](docs/multi-provider-acceptance-20260828.md)：连续三次扫描、缓存命中、双源接管、Live/MCP 与 Top30 前后对比。
 - [服务器部署记录](docs/deployment.md)：Docker、Nginx、Quick Tunnel 与运维命令。
 - [开发与贡献指南](CONTRIBUTING.md)：本地环境、修改边界和提交前检查。
 
