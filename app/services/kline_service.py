@@ -28,13 +28,17 @@ class KlineService:
             day, minute = await asyncio.gather(
                 self.provider.get_kline(code, "day", 120, "qfq", quote=quote),
                 self.provider.get_kline(code, "5m", 48),
+                return_exceptions=True,
             )
+            if isinstance(day, Exception):
+                raise day
+            minute_klines = [] if isinstance(minute, Exception) else minute.klines
             technical = self.indicators.calculate(day.klines, quote.price)
             return StockDetail(
                 quote=quote,
                 technical=technical,
                 day_klines=day.klines,
-                minute_5_klines=minute.klines,
+                minute_5_klines=minute_klines,
                 source=quote.source,
                 source_timestamp=quote.source_timestamp,
                 data_timestamp=quote.data_timestamp,

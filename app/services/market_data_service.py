@@ -12,6 +12,12 @@ from app.models import Kline, KlineResult, Quote, SectorRanking
 from app.providers.base import MarketDataProvider
 from app.providers.manager import ProviderManager
 from app.services.data_quality import DataQualityService
+from app.services.kline_aggregation import (
+    aggregate_5m_klines,
+    aggregate_day_klines,
+    cache_trade_key,
+    mark_latest_bar_partial,
+)
 from app.utils.time import SHANGHAI, now_shanghai
 
 
@@ -47,9 +53,9 @@ def _should_use_provisional(value: datetime) -> bool:
     return local.weekday() < 5 and datetime_time(9, 15) <= local.time() < datetime_time(15, 10)
 
 
-def _merge_klines(*groups: list[Kline], limit: int) -> list[Kline]:
-    by_date = {item.timestamp.date(): item for group in groups for item in group}
-    return [by_date[date] for date in sorted(by_date)][-limit:]
+def _merge_klines(period: str, *groups: list[Kline], limit: int) -> list[Kline]:
+    by_key = {cache_trade_key(period, item.timestamp): item for group in groups for item in group}
+    return [by_key[key] for key in sorted(by_key)][-limit:]
 
 
 def _provisional_bar(quote: Quote) -> Kline | None:
@@ -141,17 +147,8 @@ class MarketDataService(MarketDataProvider):
         if adjust not in {"qfq", "raw", "hfq"}:
             raise ValueError("adjust must be qfq, raw or hfq")
         self._metrics.required += 1
-        if period not in {"day", "week", "month"}:
-            self._metrics.network_fetch += 1
-            try:
-                async with self._kline_semaphore:
-                    result = await self.providers.get_kline(code, period, limit, adjust)
-                self._metrics.success += 1
-                return result
-            except Exception as exc:
-                self._record_error(exc)
-                self._metrics.failed += 1
-                raise
+        if period not in {"1m", "5m", "15m", "30m", "60m", "day", "week", "month"}:
+            raise ValueError("period must be one of 1m, 5m, 15m, 30m, 60m, day, week or month")
 
         key = (code, period, adjust)
         lock = await self._key_lock(key)
@@ -177,10 +174,14 @@ class MarketDataService(MarketDataProvider):
             try:
                 async with self._kline_semaphore:
                     network = await self.providers.get_kline(code, period, network_limit, adjust)
+                network = network.model_copy(
+                    update={"klines": mark_latest_bar_partial(network.klines, period, now)}
+                )
                 formal = self._formal_bars_for_persistence(network.klines, now, period)
                 if formal:
                     await self.cache.put(code, period, adjust, formal, network.source, now)
                 combined = _merge_klines(
+                    period,
                     cached.klines if cached else [],
                     network.klines,
                     limit=limit,
@@ -190,12 +191,53 @@ class MarketDataService(MarketDataProvider):
                 return self._result_from_cache(code, period, limit, cache_view, quote, cache_hit=False, stale=False)
             except Exception as exc:
                 self._record_error(exc)
+                aggregate = await self._aggregate_fallback(code, period, limit, adjust, quote, now)
+                if aggregate is not None:
+                    await self.cache.put(code, period, adjust, aggregate.klines, aggregate.source, now)
+                    self._metrics.success += 1
+                    return aggregate
                 if cache_usable and cached is not None:
                     self._metrics.stale_used += 1
                     self._metrics.success += 1
                     return self._result_from_cache(code, period, limit, cached, quote, cache_hit=True, stale=True)
                 self._metrics.failed += 1
                 raise
+
+    async def _aggregate_fallback(
+        self,
+        code: str,
+        period: str,
+        limit: int,
+        adjust: str,
+        quote: Quote | None,
+        now: datetime,
+    ) -> KlineResult | None:
+        try:
+            if period in {"week", "month"}:
+                source_limit = min(1000, limit * (6 if period == "week" else 24) + 30)
+                day = await self.get_kline(code, "day", source_limit, adjust, quote=quote)
+                klines = aggregate_day_klines(day.klines, period, now, limit)
+                source = f"aggregate:day:{day.source}"
+            elif period in {"15m", "30m", "60m"}:
+                source_limit = min(1000, limit * (int(period[:-1]) // 5 + 2))
+                minute = await self.get_kline(code, "5m", source_limit, adjust)
+                klines = aggregate_5m_klines(minute.klines, period, now, limit)
+                source = f"aggregate:5m:{minute.source}"
+            else:
+                return None
+        except Exception as exc:
+            self._record_error(exc)
+            return None
+        if not klines:
+            return None
+        quality = self.quality.assess(
+            klines[-1].timestamp,
+            timestamp_source="fetch_time",
+            source=source,
+            complete=len(klines) >= min(limit, 20),
+            server_timestamp=now,
+        )
+        return KlineResult(code=code, period=period, klines=klines, **quality)
 
     def _record_error(self, error: Exception) -> None:
         key = f"{type(error).__name__}:{str(error)[:300]}"
@@ -232,7 +274,7 @@ class MarketDataService(MarketDataProvider):
         ):
             provisional = _provisional_bar(quote)
             if provisional is not None:
-                klines = _merge_klines(klines, [provisional], limit=limit)
+                klines = _merge_klines(period, klines, [provisional], limit=limit)
                 timestamp = quote.source_timestamp
                 timestamp_source = quote.timestamp_source
                 source = f"{source}+{quote.source}"

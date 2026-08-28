@@ -109,9 +109,64 @@ def parse_tencent_kline_rows(rows: list[list[str]]) -> list[Kline]:
     return result
 
 
+def parse_tencent_minute_rows(rows: list[list[str]]) -> list[Kline]:
+    result: list[Kline] = []
+    for row in rows:
+        if len(row) < 6:
+            continue
+        try:
+            result.append(
+                Kline(
+                    timestamp=datetime.strptime(row[0], "%Y%m%d%H%M").replace(tzinfo=SHANGHAI),
+                    open=float(row[1]),
+                    close=float(row[2]),
+                    high=float(row[3]),
+                    low=float(row[4]),
+                    volume=int(float(row[5]) * 100),
+                    amount=0.0,
+                )
+            )
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
+def adjust_minute_klines(
+    klines: list[Kline], raw_days: list[Kline], adjusted_days: list[Kline]
+) -> list[Kline]:
+    raw_close = {item.timestamp.date(): item.close for item in raw_days}
+    adjusted_close = {item.timestamp.date(): item.close for item in adjusted_days}
+    result: list[Kline] = []
+    for item in klines:
+        trade_date = item.timestamp.date()
+        raw = raw_close.get(trade_date)
+        adjusted = adjusted_close.get(trade_date)
+        if raw is None or adjusted is None or raw <= 0:
+            raise ProviderParseError(f"tencent adjustment factor missing for {trade_date.isoformat()}")
+        factor = adjusted / raw
+        result.append(
+            item.model_copy(
+                update={
+                    "open": item.open * factor,
+                    "high": item.high * factor,
+                    "low": item.low * factor,
+                    "close": item.close * factor,
+                }
+            )
+        )
+    return result
+
+
 class TencentProvider(MarketDataProvider):
     quote_url = "https://qt.gtimg.cn/q={symbol}"
-    kline_url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    day_kline_urls = (
+        "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get",
+        "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+    )
+    minute_kline_urls = (
+        "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/kline/mkline",
+        "https://web.ifzq.gtimg.cn/appstock/app/kline/mkline",
+    )
 
     def __init__(self, settings: Settings, quality: DataQualityService) -> None:
         self.settings = settings
@@ -182,17 +237,31 @@ class TencentProvider(MarketDataProvider):
         self, code: str, period: str, limit: int, adjust: str = "qfq", *, quote: Quote | None = None
     ) -> KlineResult:
         code = validate_code(code)
-        if period != "day":
-            raise ProviderUnsupportedError("Tencent secondary currently supports daily K-line only")
+        if period not in {"1m", "5m", "15m", "30m", "60m", "day"}:
+            raise ProviderUnsupportedError("Tencent secondary currently supports minute and daily K-line only")
         if adjust not in {"qfq", "raw", "hfq"}:
             raise ValueError("adjust must be qfq, raw or hfq")
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         symbol = to_tencent_symbol(code)
-        response = await self._get(
-            self.kline_url,
-            {"param": f"{symbol},day,,,{limit},{adjust}"},
-        )
+        if period == "day":
+            return await self._get_day_kline(symbol, code, limit, adjust)
+        return await self._get_minute_kline(symbol, code, period, limit, adjust)
+
+    async def _get_day_kline(self, symbol: str, code: str, limit: int, adjust: str) -> KlineResult:
+        last_error: Exception | None = None
+        for url in self.day_kline_urls:
+            try:
+                response = await self._get(
+                    url,
+                    {"param": f"{symbol},day,,,{limit},{adjust}"},
+                )
+                return self._parse_day_response(response, symbol, code, limit, adjust)
+            except ProviderError as exc:
+                last_error = exc
+        raise last_error or ProviderError("tencent day K-line failed")
+
+    def _parse_day_response(self, response: httpx.Response, symbol: str, code: str, limit: int, adjust: str) -> KlineResult:
         try:
             payload = json.loads(response.content.decode("utf-8"))
             data = (payload.get("data") or {}).get(symbol) or {}
@@ -203,6 +272,68 @@ class TencentProvider(MarketDataProvider):
         klines = parse_tencent_kline_rows(rows)[-limit:]
         if not klines:
             raise ProviderEmptyDataError(f"tencent returned empty {adjust} day K-line for {code}")
+        qt_values = (data.get("qt") or {}).get(symbol) or []
+        fetched_at = now_shanghai()
+        timestamp = _quote_timestamp(qt_values, fetched_at) if qt_values else klines[-1].timestamp
+        return KlineResult(
+            code=code,
+            period="day",
+            klines=klines,
+            **self.quality.assess(
+                timestamp,
+                timestamp_source="tencent" if qt_values else "fetch_time",
+                source="tencent",
+                complete=True,
+                server_timestamp=fetched_at,
+            ),
+        )
+
+    async def _get_minute_kline(
+        self, symbol: str, code: str, period: str, limit: int, adjust: str
+    ) -> KlineResult:
+        minute_key = "m" + period[:-1]
+        last_error: Exception | None = None
+        for url in self.minute_kline_urls:
+            try:
+                response = await self._get(url, {"param": f"{symbol},{minute_key},,{limit}"})
+                result = self._parse_minute_response(response, symbol, code, period, limit, minute_key)
+                trade_dates = {item.timestamp.date() for item in result.klines}
+                if adjust != "raw" and len(trade_dates) > 1:
+                    day_limit = min(1000, len(trade_dates) + 10)
+                    raw_days, adjusted_days = await asyncio.gather(
+                        self._get_day_kline(symbol, code, day_limit, "raw"),
+                        self._get_day_kline(symbol, code, day_limit, adjust),
+                    )
+                    result = result.model_copy(
+                        update={
+                            "klines": adjust_minute_klines(
+                                result.klines, raw_days.klines, adjusted_days.klines
+                            )
+                        }
+                    )
+                return result
+            except ProviderError as exc:
+                last_error = exc
+        raise last_error or ProviderError(f"tencent {period} K-line failed")
+
+    def _parse_minute_response(
+        self,
+        response: httpx.Response,
+        symbol: str,
+        code: str,
+        period: str,
+        limit: int,
+        minute_key: str,
+    ) -> KlineResult:
+        try:
+            payload = json.loads(response.content.decode("utf-8"))
+            data = (payload.get("data") or {}).get(symbol) or {}
+            rows = data.get(minute_key) or []
+        except (UnicodeDecodeError, ValueError, AttributeError) as exc:
+            raise ProviderParseError(f"tencent minute K-line parse failed: {exc}") from exc
+        klines = parse_tencent_minute_rows(rows)[-limit:]
+        if not klines:
+            raise ProviderEmptyDataError(f"tencent returned empty {period} K-line for {code}")
         qt_values = (data.get("qt") or {}).get(symbol) or []
         fetched_at = now_shanghai()
         timestamp = _quote_timestamp(qt_values, fetched_at) if qt_values else klines[-1].timestamp

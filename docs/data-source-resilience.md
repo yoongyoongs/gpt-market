@@ -46,7 +46,7 @@ GET /health/providers
 
 它还包含 K 线累计指标、L1 条目数、最近 K 线错误聚合和最近一次 `SCAN SUMMARY`。
 
-## 两级日 K 缓存
+## 两级 K 线缓存
 
 L1 是进程内字典，L2 是 SQLite，默认文件为：
 
@@ -54,7 +54,7 @@ L1 是进程内字典，L2 是 SQLite，默认文件为：
 data/kline_cache.sqlite3
 ```
 
-Docker 中使用 `/data/kline_cache.sqlite3`，Compose 将宿主机 `./data` 挂载到 `/data`。SQLite 开启 WAL。主键是 `(symbol, period, adjust, trade_date)`，保存 OHLC、成交量、成交额、来源、provisional 和更新时间。
+Docker 中使用 `/data/kline_cache.sqlite3`，Compose 将宿主机 `./data` 挂载到 `/data`。SQLite 开启 WAL。主键是 `(symbol, period, adjust, trade_date)`；日/周/月使用日期键，分钟周期使用完整时间戳键，保存 OHLC、成交量、成交额、来源、provisional 和更新时间。
 
 读取顺序：
 
@@ -64,6 +64,8 @@ Docker 中使用 `/data/kline_cache.sqlite3`，Compose 将宿主机 `./data` 挂
 4. 成功结果写 SQLite 并原子更新 L1。
 5. 两个网络源都失败且已有足量缓存，立即返回旧缓存并标记 `stale=true`、`quality=OLD`。
 6. 两个源都失败且无缓存，才返回 `ALL_PROVIDER_FAILED`，扫描器将该股票标记为 K 线不可用。
+
+周/月 Provider 请求失败后，服务会先用同复权口径的日 K 聚合；15/30/60 分钟请求失败后，会先用 5 分钟 K 按沪深交易时段聚合。聚合结果带明确 `aggregate:*` 来源，不会冒充 Provider 直出结果。完整能力和服务器验收见 [周期能力矩阵与修复验收](period-capability-audit-20260829.md)。
 
 交易时段刷新阈值默认 300 秒，非交易时段 1800 秒。全局网络 K 线并发上限默认 8；扫描器原有 shortlist 并发仍保留，但真正触网会再经过这个全局 Semaphore。
 

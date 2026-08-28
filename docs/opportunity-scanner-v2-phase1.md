@@ -147,7 +147,7 @@ coverage_rate=1.0
 duration_seconds=21.809
 ```
 
-当前观测到东方财富周 K 请求大面积断连，V2 按设计输出 `week_trend=UNKNOWN`、`trend coverage=false`，没有伪造周线结论。日 K 由 Tencent fallback 接管成功。
+东方财富周 K 请求大面积断连时，系统曾按设计输出 `week_trend=UNKNOWN`，没有伪造周线结论。2026-08-29 数据层修复后，周 K 可由 Tencent 前复权日 K 本地聚合并明确标注来源；V2 评分公式、权重和排序规则未修改。详见 [周期能力矩阵与修复验收](period-capability-audit-20260829.md)。
 
 ## 当前 Top30 样例
 

@@ -115,12 +115,12 @@ Provider 请求 `fltt=2` 时使用已缩放值；探针使用 `fltt=1` 验证原
 
 ### 5.3 K 线标准化
 
-支持 `1m/5m/15m/30m/60m/day/week/month`，统一输出时间、OHLC、成交量和成交额。Provider 同时兼容已实际观察到的两种 `klines` 编码：
+支持 `1m/5m/15m/30m/60m/day/week/month`，统一输出时间、OHLC、成交量和成交额。周/月可由前复权日 K 聚合，15/30/60 分钟可由 5 分钟 K 按上午、下午交易时段分别聚合。Provider 同时兼容已实际观察到的两种 `klines` 编码：
 
 - JSON 字符串数组；
 - 以空格分隔的字符串。
 
-无法得到有效行时抛出 `ProviderEmptyDataError`，不会返回空对象伪装成功。扫描日 K 在两个源都统一为 `qfq`：Eastmoney `fqt=1`，Tencent `qfqday`。
+无法得到有效行时抛出 `ProviderEmptyDataError`，不会返回空对象伪装成功。扫描日 K 在两个源都统一为 `qfq`：Eastmoney `fqt=1`，Tencent `qfqday`。腾讯跨交易日分钟 K 使用 raw/qfq 日 K 的逐日因子归一，未结束 bar 统一标记 `provisional=true`。
 
 ### 5.4 HTTP 策略
 
@@ -183,7 +183,7 @@ scan-YYYYMMDDTHHMMSS.mmm
 | 单股行情 | `quote:{code}` | 3 秒 |
 | 指数行情 | `index:{market}:{code}` | 3 秒 |
 | 日 K | L1 + `data/kline_cache.sqlite3` | 交易时 300 秒；非交易时 1800 秒 |
-| 分钟/周/月 K | `kline:{code}:{period}:{limit}` | 分钟 5 秒；其他仍由 Provider TTL 控制 |
+| 全部 K 线周期 | L1 + `data/kline_cache.sqlite3` | 交易时 300 秒；非交易时 1800 秒 |
 | 单股详情 | `detail:{code}` | 3 秒 |
 | 全市场列表 | `market:all-a-shares` | 3 秒 |
 | 市场概况 | `market:latest` | 5 秒 |

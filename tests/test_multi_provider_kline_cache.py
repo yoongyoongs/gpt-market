@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -9,7 +9,13 @@ from app.kline_cache import KlineCache
 from app.models import Kline, KlineResult, Quote
 from app.providers.base import AllProvidersFailedError, ProviderEmptyDataError, ProviderUnsupportedError
 from app.providers.manager import ProviderManager
-from app.providers.tencent import parse_tencent_kline_rows, parse_tencent_quote, to_tencent_symbol
+from app.providers.tencent import (
+    adjust_minute_klines,
+    parse_tencent_kline_rows,
+    parse_tencent_minute_rows,
+    parse_tencent_quote,
+    to_tencent_symbol,
+)
 from app.services.data_quality import DataQualityService
 from app.services.market_data_service import MarketDataService
 from app.utils.time import now_shanghai
@@ -94,6 +100,32 @@ def test_tencent_symbol_quote_and_qfq_parsing() -> None:
     assert klines[0].close == 86.54
     assert klines[0].volume == 38_277_100
 
+    minute = parse_tencent_minute_rows([["202608281455", "1295.98", "1297.12", "1297.33", "1295.98", "663.00"]])
+    assert minute[0].timestamp.year == 2026
+    assert minute[0].close == 1297.12
+    assert minute[0].volume == 66_300
+
+
+def test_adjust_tencent_minute_rows_uses_matching_daily_factor() -> None:
+    first = datetime(2026, 8, 27, 10, 0, tzinfo=now_shanghai().tzinfo)
+    second = datetime(2026, 8, 28, 10, 0, tzinfo=now_shanghai().tzinfo)
+    minute = [
+        Kline(timestamp=first, open=10, high=11, low=9, close=10, volume=100, amount=1000),
+        Kline(timestamp=second, open=20, high=21, low=19, close=20, volume=100, amount=1000),
+    ]
+    raw_days = [
+        Kline(timestamp=first.replace(hour=0), open=10, high=11, low=9, close=10, volume=100, amount=1000),
+        Kline(timestamp=second.replace(hour=0), open=20, high=21, low=19, close=20, volume=100, amount=1000),
+    ]
+    adjusted_days = [
+        Kline(timestamp=first.replace(hour=0), open=5, high=6, low=4, close=5, volume=100, amount=1000),
+        Kline(timestamp=second.replace(hour=0), open=20, high=21, low=19, close=20, volume=100, amount=1000),
+    ]
+    adjusted = adjust_minute_klines(minute, raw_days, adjusted_days)
+    assert adjusted[0].close == pytest.approx(5.0)
+    assert adjusted[0].high == pytest.approx(5.5)
+    assert adjusted[1].close == pytest.approx(20.0)
+
 
 async def test_provider_manager_falls_back_and_tracks_health() -> None:
     eastmoney = StubProvider("eastmoney", fail=True)
@@ -125,7 +157,7 @@ async def test_both_providers_fail_without_cache_is_unavailable(tmp_path) -> Non
 
 
 async def test_kline_l1_l2_cache_provisional_and_stale_fallback(tmp_path, monkeypatch) -> None:
-    fixed_now = now_shanghai().replace(hour=10, minute=0, second=0, microsecond=0)
+    fixed_now = datetime(2026, 8, 28, 10, 0, tzinfo=now_shanghai().tzinfo)
     clock = [fixed_now]
     monkeypatch.setattr("app.services.market_data_service.now_shanghai", lambda: clock[0])
     eastmoney = StubProvider("eastmoney", fail=True)
@@ -141,7 +173,13 @@ async def test_kline_l1_l2_cache_provisional_and_stale_fallback(tmp_path, monkey
     cache = KlineCache(str(path))
     service = MarketDataService(manager, cache, QUALITY, settings)
     await service.start()
-    current_quote = quote()
+    current_quote = quote().model_copy(
+        update={
+            "source_timestamp": fixed_now,
+            "data_timestamp": fixed_now,
+            "server_timestamp": fixed_now,
+        }
+    )
 
     first = await service.get_kline("603019", "day", 3, "qfq", quote=current_quote)
     calls_after_first = tencent.kline_calls

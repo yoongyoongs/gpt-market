@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.models import Kline
+from app.services.kline_aggregation import cache_trade_key
 
 
 @dataclass(frozen=True)
@@ -123,9 +124,9 @@ class KlineCache:
             await asyncio.to_thread(self._put, symbol, period, adjust, klines, source, updated_at)
         key = (symbol, period, adjust)
         existing = self._memory.get(key)
-        by_date = {item.timestamp.date(): item for item in (existing.klines if existing else [])}
-        by_date.update({item.timestamp.date(): item for item in klines})
-        merged = [by_date[date] for date in sorted(by_date)]
+        by_date = {cache_trade_key(period, item.timestamp): item for item in (existing.klines if existing else [])}
+        by_date.update({cache_trade_key(period, item.timestamp): item for item in klines})
+        merged = [by_date[key] for key in sorted(by_date)]
         self._memory[key] = CachedKlineSeries(merged, source, updated_at)
 
     def _put(
@@ -151,7 +152,7 @@ class KlineCache:
                 """,
                 [
                     (
-                        symbol, period, adjust, item.timestamp.date().isoformat(), item.timestamp.isoformat(),
+                        symbol, period, adjust, cache_trade_key(period, item.timestamp), item.timestamp.isoformat(),
                         item.open, item.high, item.low, item.close, item.volume, item.amount, source,
                         int(item.provisional), updated_at.isoformat(),
                     )
