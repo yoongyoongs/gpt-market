@@ -13,6 +13,7 @@ from app.container import container
 from app.serialization import serialize_business
 from app.api.live import (
     LiveSnapshotCache,
+    NO_CACHE_HEADERS,
     cached_response,
     initializing_page,
     log_live_response,
@@ -102,42 +103,121 @@ def _html(value: Any) -> str:
 def v2_scan_page(result, secret: str) -> HTMLResponse:
     rows = []
     for rank, item in enumerate(result.raw_top30, 1):
-        breakdown = "".join(
-            f"<li><strong>{_html(name)}</strong>: {_html(part.score)} / {_html(part.max_score)}; "
-            f"coverage={_html(part.coverage)}; reason={_html('；'.join(part.reason))}; raw={_html(part.raw_value)}</li>"
+        score_parts = "".join(
+            "<tr>"
+            f"<th>{_html(name)}</th>"
+            f"<td>{_html(part.score)}</td>"
+            f"<td>{_html(part.max_score)}</td>"
+            f"<td>{'已覆盖' if part.coverage else '缺数据'}</td>"
+            f"<td>{_html('；'.join(part.reason) or '-')}</td>"
+            f"<td><code>{_html(part.raw_value)}</code></td>"
+            "</tr>"
             for name, part in item.score_breakdown.items()
         )
+        coverage = item.data_coverage
+        missing = "、".join(item.data_quality.missing_fields) or "-"
         rows.append(
-            "<tr>"
-            f"<td>{rank}</td><td>{_html(item.stock_code)}</td><td>{_html(item.stock_name)}</td>"
-            f"<td>{_html(item.opportunity_score)}</td><td>{_html(item.grade)}</td>"
-            f"<td>{_html(item.position_score)}</td><td>{_html(item.fundamental_score)}</td>"
-            f"<td>{_html(item.trend_score)}</td><td>{_html(item.flow_score)}</td>"
-            f"<td>{_html(item.catalyst_score)}</td><td>{_html(item.risk_reward_score)}</td>"
-            f"<td>{_html(item.liquidity_score)}</td><td>{_html(item.risk_penalty)}</td>"
-            f"<td>{_html(item.support)}</td><td>{_html(item.resistance)}</td><td>{_html(item.stop_loss)}</td>"
-            f"<td>{_html(item.target_1)}</td><td>{_html(item.target_2)}</td><td>{_html(item.risk_reward_ratio)}</td>"
-            f"<td>{_html(item.week_trend)} / {_html(item.day_trend)}</td>"
-            f"<td><details><summary>评分拆解</summary><p>{_html(item.score_formula)}</p><ul>{breakdown}</ul></details></td>"
-            "</tr>"
+            f"""
+<tr>
+  <td class="rank-col">{rank}</td>
+  <td class="code-col">{_html(item.stock_code)}</td>
+  <td class="name-col">{_html(item.stock_name)}</td>
+  <td class="number-col"><span class="score {'score-high' if item.opportunity_score >= 55 else 'score-mid'}">{_html(item.opportunity_score)}</span></td>
+  <td>{'<span class="badge badge-high">B</span>' if item.grade == 'B' else '<span class="badge badge-neutral">C</span>'}</td>
+  <td class="number-col">{_html(item.position_score)}</td>
+  <td class="number-col">{_html(item.trend_score)}</td>
+  <td class="number-col">{_html(item.flow_score)}</td>
+  <td class="number-col">{_html(item.risk_reward_score)}</td>
+  <td class="number-col">{_html(item.liquidity_score)}</td>
+  <td class="number-col">{_html(item.risk_penalty)}</td>
+  <td class="number-col">{_html(item.support)}</td>
+  <td class="number-col">{_html(item.resistance)}</td>
+  <td class="number-col">{_html(item.stop_loss)}</td>
+  <td class="number-col">{_html(item.target_1)}</td>
+  <td class="number-col">{_html(item.risk_reward_ratio)}</td>
+  <td>{_html(item.week_trend)} / {_html(item.day_trend)}</td>
+  <td class="reason-col">{_html('；'.join(item.reason[:3]) or '-')}</td>
+</tr>
+<tr class="detail-row">
+  <td></td>
+  <td colspan="17">
+    <details>
+      <summary>查看完整评分拆解和数据覆盖</summary>
+      <div class="detail-grid">
+        <div class="mini-panel">
+          <h3>风险收益</h3>
+          <dl class="mini-list">
+            <dt>支撑</dt><dd>{_html(item.support)}</dd>
+            <dt>压力</dt><dd>{_html(item.resistance)}</dd>
+            <dt>止损</dt><dd>{_html(item.stop_loss)}</dd>
+            <dt>目标1</dt><dd>{_html(item.target_1)}</dd>
+            <dt>目标2</dt><dd>{_html(item.target_2)}</dd>
+            <dt>RR</dt><dd>{_html(item.risk_reward_ratio)}</dd>
+          </dl>
+        </div>
+        <div class="mini-panel">
+          <h3>数据覆盖</h3>
+          <dl class="mini-list">
+            <dt>Quote</dt><dd>{_html(coverage.quote)}</dd>
+            <dt>日K</dt><dd>{_html(coverage.day_kline)}</dd>
+            <dt>周K</dt><dd>{_html(coverage.week_kline)}</dd>
+            <dt>缺失</dt><dd>{_html(missing)}</dd>
+          </dl>
+        </div>
+        <div class="mini-panel">
+          <h3>公式</h3>
+          <p class="formula-text">{_html(item.score_formula)}</p>
+        </div>
+      </div>
+      <div class="table-shell nested-table">
+        <table>
+          <thead><tr><th>模块</th><th>得分</th><th>上限</th><th>覆盖</th><th>原因</th><th>原始值</th></tr></thead>
+          <tbody>{score_parts}</tbody>
+        </table>
+      </div>
+    </details>
+  </td>
+</tr>
+"""
         )
+    coverage_pct = round(result.coverage.coverage_rate * 100, 2)
     body = (
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>scan_mainboard V2</title>"
-        "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:24px;color:#1f2937}"
-        "table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #d1d5db;padding:6px;vertical-align:top}"
-        "th{background:#f3f4f6;position:sticky;top:0}details{max-width:520px}code{white-space:pre-wrap}</style></head><body>"
-        f"<h1>scan_mainboard V2 Top30</h1><p>score_version={_html(result.score_version)}; "
-        f"candidate_pool_size={_html(result.candidate_pool_size)}; duration_seconds={_html(result.duration_seconds)}; "
-        f"coverage={_html(result.coverage.coverage_rate)}</p>"
-        f"<p>公式：{_html(result.score_formula)}</p>"
-        f"<p>缺失数据源：{_html(', '.join(result.missing_data_sources))}</p>"
-        f"<p><a href=\"/gpt/{_html(secret)}/scan/v2\">JSON</a> · <a href=\"/gpt/{_html(secret)}/scan/ab\">V1 vs V2 JSON</a></p>"
-        "<table><thead><tr><th>#</th><th>代码</th><th>名称</th><th>机会分</th><th>等级</th>"
-        "<th>位置</th><th>基本面</th><th>趋势</th><th>资金量价</th><th>催化</th><th>RR</th><th>流动性</th><th>风险扣分</th>"
-        "<th>支撑</th><th>压力</th><th>止损</th><th>目标1</th><th>目标2</th><th>RR</th><th>周/日趋势</th><th>展开</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>V2 机会扫描</title>"
+        "<style>"
+        ":root{color-scheme:light;--bg:#f6f8fa;--surface:#fff;--surface-muted:#f8fafc;--text:#1f2937;--muted:#667085;--border:#e5e7eb;--primary:#1d4ed8;--up:#d92d20;--down:#07883f;--shadow:0 4px 18px rgba(15,23,42,.06)}"
+        "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}"
+        "a{color:var(--primary);text-decoration:none}.dashboard{max-width:1440px;margin:0 auto;padding:20px}h1,h2,h3{margin:0;line-height:1.25}h1{font-size:28px}h2{font-size:20px}.section{margin-top:20px}"
+        ".card{background:var(--surface);border:1px solid rgba(229,231,235,.9);border-radius:12px;box-shadow:var(--shadow);padding:20px}.status-bar{display:flex;justify-content:space-between;gap:20px}.eyebrow{color:var(--primary);font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.snapshot-note,.muted{color:var(--muted)}"
+        ".status-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.btn{display:inline-flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;font-weight:650}.btn-primary{color:#fff;background:var(--primary);border-color:var(--primary)}"
+        ".badge{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:800;white-space:nowrap}.badge-high{color:#067647;background:#ecfdf3}.badge-neutral{color:#475467;background:#f2f4f7}.badge-low{color:#b42318;background:#fef3f2}"
+        ".grid{display:grid;gap:14px}.stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.metric-label{color:var(--muted);font-size:13px}.metric-value{margin-top:6px;font-size:26px;font-weight:780}.notice{margin-top:14px;padding:10px 12px;border-left:4px solid #f79009;border-radius:7px;background:#fffaeb;color:#7a2e0e}"
+        ".section-heading{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:12px}.table-shell{width:100%;overflow:auto;border:1px solid var(--border);border-radius:10px}table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}th,td{padding:10px 11px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}thead th{position:sticky;top:0;z-index:3;color:#344054;background:#f2f4f7;font-size:12px;white-space:nowrap}tbody tr:nth-child(4n+1),tbody tr:nth-child(4n+2){background:#fbfcfd}tbody tr:hover{background:#f0f5ff}"
+        ".rank-col{position:sticky;left:0;z-index:2;width:48px;min-width:48px;text-align:center;background:inherit}.code-col{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}.name-col{min-width:90px;white-space:nowrap;font-weight:700}.number-col{text-align:right;white-space:nowrap}.reason-col{min-width:220px;max-width:360px;white-space:normal}.score{display:inline-flex;min-width:48px;justify-content:center;border-radius:7px;padding:3px 7px;font-weight:800}.score-high{color:#175cd3;background:#eff8ff}.score-mid{color:#475467;background:#f2f4f7}.detail-row td{background:#fff}.detail-row details{color:var(--muted)}.detail-row summary{cursor:pointer;font-weight:700;color:#344054}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0}.mini-panel{padding:13px;border:1px solid var(--border);border-radius:9px;background:var(--surface-muted)}.mini-panel h3{font-size:14px;margin-bottom:8px}.mini-list{display:grid;grid-template-columns:1fr auto;gap:5px 12px;margin:0}.mini-list dd{margin:0;color:var(--text)}.formula-text{margin:0;color:#475467}.nested-table{margin-top:10px}.nested-table code{white-space:normal;word-break:break-word}.footer-card{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}"
+        "@media(max-width:900px){.dashboard{padding:12px}.status-bar,.footer-card{flex-direction:column}.stat-grid,.detail-grid{grid-template-columns:1fr}.status-actions{justify-content:flex-start}}"
+        "</style></head><body><main class=\"dashboard\">"
+        "<header class=\"card\"><div class=\"status-bar\"><div>"
+        "<div class=\"eyebrow\">机会发现 · Phase 1</div><h1>scan_mainboard V2 Top30</h1>"
+        "<p class=\"snapshot-note\">按机会分排序，基础面和催化在接入真实数据源前不会伪造加分。</p></div>"
+        f"<div class=\"status-actions\"><span class=\"badge badge-neutral\">{_html(result.score_version)}</span><a class=\"btn\" href=\"/gpt/{_html(secret)}/scan/v2\">JSON</a><a class=\"btn btn-primary\" href=\"/gpt/{_html(secret)}/scan/ab\">V1 vs V2</a></div></div>"
+        "<div class=\"notice\">当前 Phase 1 只使用行情和 K 线。基本面、催化、主力资金和行业分类缺真实数据源，因此不会强行给 A 级。</div></header>"
+        "<section class=\"section grid stat-grid\">"
+        f"<article class=\"card\"><div class=\"metric-label\">候选池</div><div class=\"metric-value\">{_html(result.candidate_pool_size)}</div></article>"
+        f"<article class=\"card\"><div class=\"metric-label\">行情覆盖</div><div class=\"metric-value\">{coverage_pct}%</div></article>"
+        f"<article class=\"card\"><div class=\"metric-label\">过滤后主板</div><div class=\"metric-value\">{_html(result.coverage.filtered_mainboard)}</div></article>"
+        f"<article class=\"card\"><div class=\"metric-label\">扫描耗时</div><div class=\"metric-value\">{_html(result.duration_seconds)}s</div></article>"
+        "</section>"
+        "<section class=\"section card\"><div class=\"section-heading\"><div><h2>Top30</h2><p class=\"muted\">raw_top30 完全按 opportunity_score 排序</p></div>"
+        "<details><summary>公式与缺失数据</summary>"
+        f"<p class=\"muted\">{_html(result.score_formula)}</p><p class=\"muted\">缺失：{_html('、'.join(result.missing_data_sources))}</p></details></div>"
+        "<div class=\"table-shell\"><table><thead><tr><th class=\"rank-col\">#</th><th>代码</th><th>名称</th><th>机会分</th><th>等级</th>"
+        "<th>位置</th><th>趋势</th><th>资金量价</th><th>RR分</th><th>流动性</th><th>风险扣分</th>"
+        "<th>支撑</th><th>压力</th><th>止损</th><th>目标1</th><th>RR</th><th>周/日趋势</th><th>理由</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div></section>"
+        "<footer class=\"section card footer-card\"><span class=\"muted\">V2 仍是观察清单，不是交易建议。</span>"
+        f"<a class=\"btn btn-primary\" href=\"/gpt/{_html(secret)}/scan/v2/html?top_n=30&pool_size={_html(result.candidate_pool_size)}\">刷新</a></footer>"
+        "</main></body></html>"
     )
-    return HTMLResponse(body, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+    return HTMLResponse(body, headers=NO_CACHE_HEADERS)
 
 
 @router.get("/health")
