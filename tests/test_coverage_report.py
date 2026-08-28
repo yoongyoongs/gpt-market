@@ -264,3 +264,13 @@ async def test_live_and_coverage_endpoint_publish_the_same_snapshot(monkeypatch)
     assert "行业 Top20" in live_response.text
     assert "概念 Top20" in live_response.text
     assert "volume_ratio missing" in live_response.text
+    assert "GPT Market Live Dashboard" in live_response.text
+    assert 'class="grid index-grid"' in live_response.text
+    assert 'id="top30-table"' in live_response.text
+    assert 'id="stock-search"' in live_response.text
+    assert 'id="min-score"' in live_response.text
+    assert 'id="source-filter"' in live_response.text
+    assert 'id="direction-filter"' in live_response.text
+    assert 'id="toggle-columns"' in live_response.text
+    assert "这是快照页面，不会自动刷新" in live_response.text
+    assert "max-width: 1400px" in live_response.text

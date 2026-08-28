@@ -9,6 +9,7 @@ import secrets
 from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -36,6 +37,10 @@ MARKET_STATUS_MARKER = "__LIVE_MARKET_STATUS__"
 STALE_MARKER = "__LIVE_STALE__"
 WARNING_MARKER = "__LIVE_WARNING__"
 NONCE_PATTERN = re.compile(re.escape(NONCE_MARKER))
+ASSET_ROOT = Path(__file__).resolve().parents[1]
+DOCUMENT_TEMPLATE = (ASSET_ROOT / "templates" / "live_dashboard.html").read_text(encoding="utf-8")
+LIVE_CSS = (ASSET_ROOT / "static" / "css" / "live.css").read_text(encoding="utf-8")
+LIVE_JS = (ASSET_ROOT / "static" / "js" / "live.js").read_text(encoding="utf-8")
 
 
 def nonce() -> str:
@@ -172,7 +177,7 @@ class LiveSnapshotCache:
 
 def _escape(value: Any) -> str:
     if value is None:
-        return "不可用"
+        return "—"
     if isinstance(value, datetime):
         value = value.isoformat()
     return html.escape(str(value), quote=True)
@@ -180,8 +185,50 @@ def _escape(value: Any) -> str:
 
 def _number(value: float | int | None, digits: int = 2) -> str:
     if value is None:
-        return "不可用"
+        return "—"
     return f"{value:,.{digits}f}"
+
+
+def _compact_number(value: float | int | None, *, volume: bool = False) -> str:
+    if value is None:
+        return "—"
+    absolute = abs(value)
+    if not volume and absolute >= 1_000_000_000_000:
+        return f"{value / 1_000_000_000_000:.2f} 万亿"
+    if absolute >= 100_000_000:
+        return f"{value / 100_000_000:.2f} 亿"
+    if absolute >= 10_000:
+        return f"{value / 10_000:.2f} 万{'股' if volume else ''}"
+    return f"{value:,.0f}" if volume else f"{value:,.2f}"
+
+
+def _time(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    return f'<time datetime="{_escape(value.isoformat())}" title="{_escape(value.isoformat())}">{_escape(value.strftime("%Y-%m-%d %H:%M:%S"))}</time>'
+
+
+def _change_class(value: float | int | None) -> str:
+    if value is None or value == 0:
+        return "flat"
+    return "up" if value > 0 else "down"
+
+
+def _badge(value: Any, category: str = "quality") -> str:
+    text = "UNAVAILABLE" if value is None else str(value).upper()
+    allowed = {"live", "stale", "old", "unavailable", "high", "medium", "low", "full", "broad", "partial"}
+    css = text.lower() if text.lower() in allowed else "neutral"
+    return f'<span class="badge badge-{css}" data-badge-category="{_escape(category)}">{_escape(text)}</span>'
+
+
+def _score_class(value: float | int | None) -> str:
+    if value is None or value < 70:
+        return "score-low"
+    if value < 80:
+        return "score-mid"
+    if value < 90:
+        return "score-high"
+    return "score-elite"
 
 
 def _freshness_rows(value: Any) -> str:
@@ -190,7 +237,7 @@ def _freshness_rows(value: Any) -> str:
     semantics = "provider_update_time" if value.timestamp_source == "eastmoney" else "fetch_time"
     provider_timestamp = value.source_timestamp if value.timestamp_source == "eastmoney" else None
     return "".join(
-        f"<tr><th>{html.escape(label)}</th><td>{_escape(field)}</td></tr>"
+        f"<tr><th>{html.escape(label)}</th><td>{_time(field) if isinstance(field, datetime) else _escape(field)}</td></tr>"
         for label, field in (
             ("market_timestamp", None),
             ("provider_timestamp", provider_timestamp),
@@ -206,28 +253,13 @@ def _freshness_rows(value: Any) -> str:
 
 
 def _document(title: str, body: str) -> str:
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  <title>{html.escape(title)}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1f2937; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; }}
-    th, td {{ border: 1px solid #d1d5db; padding: .5rem; text-align: left; }}
-    th {{ background: #f3f4f6; }}
-    .notice {{ background: #fff7ed; border-left: 4px solid #f59e0b; padding: .75rem; }}
-    .refresh {{ display: inline-block; margin: 1rem 0; font-weight: 700; }}
-  </style>
-</head>
-<body>
-{body}
-</body>
-</html>"""
+    return (
+        DOCUMENT_TEMPLATE.replace("__PAGE_TITLE__", html.escape(title))
+        .replace("__BODY_CLASS__", "live-dashboard")
+        .replace("__LIVE_CSS__", LIVE_CSS)
+        .replace("__LIVE_JS__", LIVE_JS)
+        .replace("__PAGE_BODY__", body)
+    )
 
 
 def response(body: str, *, status_code: int = 200) -> HTMLResponse:
@@ -238,147 +270,204 @@ def build_snapshot_template(snapshot: LiveSnapshot) -> str:
     market = snapshot.market
     scan = snapshot.scan
     index_labels = (("shanghai", "上证"), ("shenzhen", "深证"), ("chinext", "创业板"))
-    index_rows = []
+    index_cards = []
     for key, label in index_labels:
         item = market.indices.get(key)
-        index_rows.append(
-            f"<tr><td>{label}</td><td>{_escape(item.code if item else None)}</td>"
-            f"<td>{_number(item.price if item else None)}</td>"
-            f"<td>{_number(item.pct_change if item else None)}%</td></tr>"
+        pct = item.pct_change if item else None
+        index_cards.append(
+            '<article class="card metric-card">'
+            f'<div class="metric-label">{_escape(label)} <span class="index-code">{_escape(item.code if item else None)}</span></div>'
+            f'<div class="index-price">{_number(item.price if item else None)}</div>'
+            f'<div class="index-change {_change_class(pct)}">{("+" if pct is not None and pct > 0 else "")}{_number(pct)}%</div>'
+            '</article>'
         )
 
     candidate_rows = []
     for rank, item in enumerate(scan.candidates, 1):
         quote = snapshot.quotes.get(item.code)
         detail_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}/stock/{item.code}"
+        kline_href = f"/gpt/{SECRET_MARKER}/stock/{item.code}/kline"
+        reasons = list(item.reason or [])
+        reason_tags = "".join(f'<span class="reason-tag">{_escape(reason)}</span>' for reason in reasons[:3])
+        full_reason = "；".join(reasons)
+        pct = item.pct_change
+        source = quote.source if quote else scan.source
+        quality = quote.quality if quote else scan.quality
         candidate_rows.append(
-            f'<tr><td>{rank}</td><td><a href="{html.escape(detail_href, quote=True)}">{_escape(item.code)}</a></td>'
-            f"<td>{_escape(item.name)}</td><td>{_number(item.price)}</td>"
-            f"<td>{_number(quote.prev_close if quote else None)}</td><td>{_number(quote.open if quote else None)}</td>"
-            f"<td>{_number(quote.high if quote else None)}</td><td>{_number(quote.low if quote else None)}</td>"
-            f"<td>{_number(quote.change if quote else None)}</td><td>{_number(item.pct_change)}%</td>"
-            f"<td>{_number(quote.volume if quote else None, 0)}</td><td>{_number(item.amount)}</td>"
-            f"<td>{_number(item.turnover_rate)}%</td>"
-            f"<td>{_number(item.volume_ratio)}</td><td>{_number(item.total_score)}</td>"
-            f"<td>{_escape(quote.source if quote else scan.source)}</td>"
-            f"<td>{_escape(quote.source_timestamp if quote else scan.source_timestamp)}</td>"
-            f"<td>{_escape('；'.join(item.reason))}</td></tr>"
+            f'<tr data-rank="{rank}" data-code="{_escape(item.code)}" data-name="{_escape(item.name)}" '
+            f'data-price="{item.price or 0}" data-pct="{pct or 0}" data-amount="{item.amount or 0}" '
+            f'data-turnover="{item.turnover_rate or 0}" data-ratio="{item.volume_ratio or 0}" '
+            f'data-score="{item.total_score or 0}" data-source="{_escape(str(source).lower())}">'
+            f'<td class="rank-col">{rank}</td>'
+            f'<td class="code-col"><a href="{html.escape(detail_href, quote=True)}">{_escape(item.code)}</a></td>'
+            f'<td class="name-col"><a href="{html.escape(detail_href, quote=True)}">{_escape(item.name)}</a></td>'
+            f'<td class="price-col">{_number(item.price)}</td>'
+            f'<td class="number-col {_change_class(pct)}">{("+" if pct is not None and pct > 0 else "")}{_number(pct)}%</td>'
+            f'<td class="number-col amount-col" title="{_escape(item.amount)}">{_compact_number(item.amount)}</td>'
+            f'<td class="number-col">{_number(item.turnover_rate)}%</td>'
+            f'<td class="number-col">{_number(item.volume_ratio)}</td>'
+            f'<td class="number-col"><span class="score {_score_class(item.total_score)}">{_number(item.total_score)}</span></td>'
+            f'<td>{_badge(quality)}</td>'
+            f'<td class="reason-col" title="{_escape(full_reason)}"><div class="reason-tags">{reason_tags or "—"}</div>'
+            + (f'<details class="reason-more"><summary>完整理由（{len(reasons)}）</summary><div class="reason-full">{_escape(full_reason)}</div></details>' if len(reasons) > 3 else '')
+            + '</td>'
+            f'<td class="action-col"><a href="{html.escape(detail_href, quote=True)}">查看详情</a> · '
+            f'<a href="{html.escape(kline_href, quote=True)}" target="_blank" rel="noopener">K线</a> · '
+            f'<a href="{html.escape(detail_href, quote=True)}" target="_blank" rel="noopener">新窗口</a></td>'
+            f'<td class="optional-col number-col">{_number(quote.prev_close if quote else None)}</td>'
+            f'<td class="optional-col number-col">{_number(quote.open if quote else None)}</td>'
+            f'<td class="optional-col number-col">{_number(quote.high if quote else None)}</td>'
+            f'<td class="optional-col number-col">{_number(quote.low if quote else None)}</td>'
+            f'<td class="optional-col number-col">{_number(quote.change if quote else None)}</td>'
+            f'<td class="optional-col number-col" title="{_escape(quote.volume if quote else None)}">{_compact_number(quote.volume if quote else None, volume=True)}</td>'
+            f'<td class="optional-col">{_escape(source)}</td>'
+            f'<td class="optional-col">{_time(quote.source_timestamp if quote else scan.source_timestamp)}</td>'
+            '</tr>'
         )
 
     next_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}"
     coverage = snapshot.coverage
     if coverage is None:
-        coverage_html = "<p>覆盖率统计暂不可用</p>"
+        coverage_html = '<div class="empty-state">覆盖率统计当前不可用</div>'
     else:
+        coverage_pct = max(0, min(100, coverage.coverage_rate * 100))
+        filter_pairs = (
+            ("创业板", coverage.excluded_chinext), ("科创板", coverage.excluded_star),
+            ("北交所", coverage.excluded_bse), ("ST/退市", coverage.excluded_st),
+            ("停牌", coverage.excluded_suspended), ("流动性不足", coverage.excluded_illiquid),
+            ("涨跌停/一字板", coverage.excluded_limit_untradable),
+        )
+        filter_list = "".join(f'<dt>{_escape(key)}</dt><dd>{_number(value, 0)}</dd>' for key, value in filter_pairs)
+        failure_list = "".join(f'<dt>{_escape(key)}</dt><dd>{_number(value, 0)}</dd>' for key, value in coverage.failure_sources.items()) or '<div class="empty-state">无统计</div>'
+        missing_list = "".join(f'<dt>{_escape(key)}</dt><dd>{_number(value, 0)}</dd>' for key, value in coverage.missing_fields.items()) or '<div class="empty-state">无统计</div>'
         coverage_html = f"""
-<table><tbody>
-<tr><th>本轮证券总数</th><td>{coverage.total_securities}</td></tr>
-<tr><th>请求行情</th><td>{coverage.quotes_requested}</td></tr>
-<tr><th>成功</th><td>{coverage.quotes_success}</td></tr>
-<tr><th>失败</th><td>{coverage.quotes_failed}</td></tr>
-<tr><th>沪深主板过滤后</th><td>{coverage.filtered_mainboard}</td></tr>
-<tr><th>行业覆盖</th><td>{_escape(coverage.industry_success)} / {_escape(coverage.industry_total)}</td></tr>
-<tr><th>概念覆盖</th><td>{_escape(coverage.concept_success)} / {_escape(coverage.concept_total)}</td></tr>
-<tr><th>LIVE</th><td>{coverage.fresh_live_count}</td></tr>
-<tr><th>STALE</th><td>{coverage.fresh_stale_count}</td></tr>
-<tr><th>OLD</th><td>{coverage.fresh_old_count}</td></tr>
-<tr><th>UNAVAILABLE</th><td>{coverage.unavailable_count}</td></tr>
-<tr><th>结构化覆盖率</th><td>{coverage.coverage_rate * 100:.2f}%</td></tr>
-<tr><th>等级</th><td>{_escape(coverage.coverage_level)}</td></tr>
-</tbody></table>
-<h3>过滤原因</h3>
-<table><tbody>
-<tr><th>创业板</th><td>{coverage.excluded_chinext}</td></tr>
-<tr><th>科创板</th><td>{coverage.excluded_star}</td></tr>
-<tr><th>北交所</th><td>{coverage.excluded_bse}</td></tr>
-<tr><th>ST/退市</th><td>{coverage.excluded_st}</td></tr>
-<tr><th>停牌</th><td>{coverage.excluded_suspended}</td></tr>
-<tr><th>流动性不足</th><td>{coverage.excluded_illiquid}</td></tr>
-<tr><th>涨跌停/一字板不可交易</th><td>{coverage.excluded_limit_untradable}</td></tr>
-</tbody></table>
-<h3>失败源摘要</h3>
-<table><tbody>{''.join(f'<tr><th>{_escape(key)}</th><td>{value}</td></tr>' for key, value in coverage.failure_sources.items())}</tbody></table>
-<h3>缺失字段摘要</h3>
-<table><tbody>{''.join(f'<tr><th>{_escape(key)}</th><td>{value}</td></tr>' for key, value in coverage.missing_fields.items())}</tbody></table>
+<div class="card coverage-card">
+  <div class="coverage-hero">
+    <div>
+      <div class="metric-label">结构化行情覆盖率</div>
+      <div class="coverage-rate">{coverage_pct:.2f}%</div>
+      <div class="progress" role="progressbar" aria-valuenow="{coverage_pct:.2f}" aria-valuemin="0" aria-valuemax="100"><span style="width:{coverage_pct:.2f}%"></span></div>
+      <div class="metric-sub">等级 {_badge(coverage.coverage_level, "coverage")}</div>
+    </div>
+    <div class="grid coverage-grid">
+      <div class="metric-card"><div class="metric-label">证券总数</div><div class="metric-value">{_number(coverage.total_securities, 0)}</div></div>
+      <div class="metric-card"><div class="metric-label">请求行情</div><div class="metric-value">{_number(coverage.quotes_requested, 0)}</div></div>
+      <div class="metric-card"><div class="metric-label">成功</div><div class="metric-value">{_number(coverage.quotes_success, 0)}</div></div>
+      <div class="metric-card"><div class="metric-label">失败</div><div class="metric-value">{_number(coverage.quotes_failed, 0)}</div></div>
+      <div class="metric-card"><div class="metric-label">沪深主板过滤后</div><div class="metric-value">{_number(coverage.filtered_mainboard, 0)}</div></div>
+    </div>
+  </div>
+  <div class="freshness-row" aria-label="数据新鲜度分布">
+    <span class="summary-pill">LIVE <strong>{_number(coverage.fresh_live_count, 0)}</strong></span>
+    <span class="summary-pill">STALE <strong>{_number(coverage.fresh_stale_count, 0)}</strong></span>
+    <span class="summary-pill">OLD <strong>{_number(coverage.fresh_old_count, 0)}</strong></span>
+    <span class="summary-pill">UNAVAILABLE <strong>{_number(coverage.unavailable_count, 0)}</strong></span>
+    <span class="summary-pill">行业覆盖 <strong>{_escape(coverage.industry_success)} / {_escape(coverage.industry_total)}</strong></span>
+    <span class="summary-pill">概念覆盖 <strong>{_escape(coverage.concept_success)} / {_escape(coverage.concept_total)}</strong></span>
+  </div>
+  <details class="compact-details">
+    <summary>查看过滤、失败源与缺失字段统计</summary>
+    <div class="detail-columns">
+      <div class="mini-panel"><h3>过滤原因</h3><dl class="mini-list">{filter_list}</dl></div>
+      <div class="mini-panel"><h3>失败源</h3><dl class="mini-list">{failure_list}</dl></div>
+      <div class="mini-panel"><h3>缺失字段</h3><dl class="mini-list">{missing_list}</dl></div>
+    </div>
+  </details>
+</div>
 """
 
     def sector_table(title: str, ranking: Any | None) -> str:
         if ranking is None:
-            return f"<h2>{html.escape(title)}</h2><p>暂不可用</p>"
+            return f'<article class="card sector-card"><h2>{html.escape(title)} Top20</h2><div class="empty-state">当前不可用</div></article>'
         rows = "".join(
-            f"<tr><td>{item.rank}</td><td>{_escape(item.name)}</td><td>{_number(item.pct_change)}%</td>"
-            f"<td>{_number(item.amount)}</td><td>{_escape(item.up_count)}</td><td>{_escape(item.down_count)}</td></tr>"
+            f'<tr><td>{item.rank}</td><td class="name-col">{_escape(item.name)}</td>'
+            f'<td class="number-col {_change_class(item.pct_change)}">{("+" if item.pct_change is not None and item.pct_change > 0 else "")}{_number(item.pct_change)}%</td>'
+            f'<td class="number-col amount-col" title="{_escape(item.amount)}">{_compact_number(item.amount)}</td>'
+            f'<td class="number-col">{_escape(item.up_count)}</td><td class="number-col">{_escape(item.down_count)}</td></tr>'
             for item in ranking.items[:20]
         )
         return (
-            f"<h2>{html.escape(title)} Top20</h2>"
-            "<table><thead><tr><th>rank</th><th>name</th><th>pct_change</th><th>amount</th>"
-            f"<th>up_count</th><th>down_count</th></tr></thead><tbody>{rows}</tbody></table>"
+            f'<article class="card sector-card"><div class="section-heading"><h2>{html.escape(title)} Top20</h2>'
+            f'<span class="metric-sub">覆盖 {_escape(ranking.success_count)} / {_escape(ranking.total_count)}</span></div>'
+            '<div class="table-shell"><table><thead><tr><th>排名</th><th>名称</th><th>涨跌幅</th><th>成交额</th>'
+            f'<th>上涨</th><th>下跌</th></tr></thead><tbody>{rows}</tbody></table></div></article>'
         )
 
     sector_html = sector_table("行业", snapshot.industry) + sector_table("概念", snapshot.concept)
+    provider_timestamp = market.source_timestamp if market.timestamp_source == "eastmoney" else None
     body = f"""
-<h1>A 股最新行情快照</h1>
-{WARNING_MARKER}
-<h2>Live 缓存状态</h2>
-<table><tbody>
-<tr><th>ok</th><td>true</td></tr>
-<tr><th>snapshot_time</th><td>{_escape(snapshot.snapshot_time)}</td></tr>
-<tr><th>server_time</th><td>{SERVER_TIME_MARKER}</td></tr>
-<tr><th>age_ms</th><td>{AGE_MS_MARKER}</td></tr>
-<tr><th>market_status</th><td>{MARKET_STATUS_MARKER}</td></tr>
-<tr><th>stale</th><td>{STALE_MARKER}</td></tr>
-</tbody></table>
-<p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
-<h2>市场快照元数据</h2>
-<table><tbody>{_freshness_rows(market)}</tbody></table>
-<h2>扫描快照元数据</h2>
-<table><tbody>{_freshness_rows(scan)}<tr><th>scan_id</th><td>{_escape(scan.scan_id)}</td></tr></tbody></table>
-<h2>主要指数</h2>
-<table><thead><tr><th>指数</th><th>代码</th><th>点位</th><th>涨跌幅</th></tr></thead><tbody>{''.join(index_rows)}</tbody></table>
-<h2>市场概览</h2>
-<table><tbody>
-<tr><th>上涨家数</th><td>{market.breadth.up_count}</td></tr>
-<tr><th>下跌家数</th><td>{market.breadth.down_count}</td></tr>
-<tr><th>平盘家数</th><td>{market.breadth.flat_count}</td></tr>
-<tr><th>市场成交额（元）</th><td>{_number(market.amount)}</td></tr>
-</tbody></table>
-<h2>覆盖率</h2>
-{coverage_html}
-{sector_html}
-<h2>scan_mainboard Top30</h2>
-<table><thead><tr><th>#</th><th>code</th><th>name</th><th>price</th><th>prev_close</th><th>open</th><th>high</th><th>low</th><th>change</th><th>change_pct</th><th>volume</th><th>amount</th><th>换手率</th><th>量比</th><th>总分</th><th>source</th><th>source_time</th><th>理由</th></tr></thead>
-<tbody>{''.join(candidate_rows)}</tbody></table>
-<a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
+<header class="card">
+  <div class="status-bar">
+    <div><div class="eyebrow">只读实时行情快照</div><h1>GPT Market Live Dashboard</h1><p class="snapshot-note">这是快照页面，不会自动刷新，请点击按钮获取新快照。</p></div>
+    <div class="status-actions">{_badge(market.quality)} {_badge(market.confidence, "confidence")}<a class="btn btn-primary" href="{html.escape(next_href, quote=True)}" title="获取最新行情快照">获取最新实时快照</a></div>
+  </div>
+  {WARNING_MARKER}
+  <div class="status-meta">
+    <span>快照时间 <strong>{_time(snapshot.snapshot_time)}</strong></span>
+    <span>Provider 时间 <strong>{_time(provider_timestamp)}</strong></span>
+    <span>服务器时间 <strong>{SERVER_TIME_MARKER}</strong></span>
+    <span>市场 <strong>{MARKET_STATUS_MARKER}</strong></span>
+    <span>缓存年龄 <strong>{AGE_MS_MARKER} ms</strong></span>
+    <span>数据源 <strong>{_escape(market.source)}</strong></span>
+  </div>
+  <details class="compact-details"><summary>查看时间语义与快照标识</summary><div class="id-list"><span>snapshot_time: {_time(snapshot.snapshot_time)}</span><span>server_timestamp: {SERVER_TIME_MARKER}</span><span>provider_timestamp: {_time(provider_timestamp)}</span><span>fetch_timestamp: {_time(market.server_timestamp)}</span><span>market_timestamp: —</span><span>age_seconds: {_number(market.age_seconds)}</span><span>quality: {_escape(market.quality)}</span><span>confidence: {_escape(market.confidence)}</span><span>snapshot_id: {_escape(market.snapshot_id)}</span><span>scan_id: {_escape(scan.scan_id)}</span><span>stale: {STALE_MARKER}</span><span>timestamp_semantics: {"provider_update_time" if market.timestamp_source == "eastmoney" else "fetch_time"}</span></div><p class="notice">Provider 时间不等同于交易所最后成交时间；无法证明时 market_timestamp 不展示。</p></details>
+</header>
+<section class="section"><div class="section-heading"><h2>核心指数</h2><p>上涨红、下跌绿，遵循 A 股习惯</p></div><div class="grid index-grid">{''.join(index_cards)}</div></section>
+<section class="section"><div class="section-heading"><h2>市场概览</h2></div><div class="grid stat-grid">
+  <article class="card metric-card"><div class="metric-label">上涨家数</div><div class="metric-value up">{_number(market.breadth.up_count, 0)}</div></article>
+  <article class="card metric-card"><div class="metric-label">下跌家数</div><div class="metric-value down">{_number(market.breadth.down_count, 0)}</div></article>
+  <article class="card metric-card"><div class="metric-label">平盘家数</div><div class="metric-value">{_number(market.breadth.flat_count, 0)}</div></article>
+  <article class="card metric-card"><div class="metric-label">市场成交额</div><div class="metric-value" title="{_escape(market.amount)}">{_compact_number(market.amount)}</div></article>
+</div></section>
+<section class="section"><div class="section-heading"><h2>覆盖率与数据质量</h2><p>用于判断本轮是否可称为全量扫描</p></div>{coverage_html}</section>
+<section class="section"><div class="section-heading"><div><h2>scan_mainboard Top30</h2><p>候选详情与理由均来自当前快照，页面筛选不会重新请求行情。默认列对应 price / change_pct / amount / turnover_rate / volume_ratio / total_score。</p></div></div>
+  <div class="card">
+    <div class="toolbar">
+      <label class="field field-search">搜索代码或名称<input id="stock-search" type="search" placeholder="例如 002284 / 亚钾国际"></label>
+      <label class="field">最低评分<input id="min-score" type="number" min="0" max="100" step="1" value="0"></label>
+      <label class="field">数据源<select id="source-filter"><option value="all">全部</option><option value="tencent">Tencent</option><option value="eastmoney">EastMoney</option></select></label>
+      <label class="field">涨跌方向<select id="direction-filter"><option value="all">全部</option><option value="up">上涨</option><option value="down">下跌</option><option value="flat">平盘</option></select></label>
+      <button id="toggle-columns" class="btn" type="button" aria-expanded="false">展开更多字段</button>
+      <span id="result-count" class="result-count">显示 {len(candidate_rows)} / {len(candidate_rows)}</span>
+    </div>
+    <div class="table-shell"><table id="top30-table"><thead><tr>
+      <th class="rank-col"><button class="sort-button" data-sort="rank">#</button></th><th><button class="sort-button" data-sort="code">代码</button></th><th><button class="sort-button" data-sort="name">名称</button></th>
+      <th><button class="sort-button" data-sort="price">现价</button></th><th><button class="sort-button" data-sort="pct">涨跌幅</button></th><th><button class="sort-button" data-sort="amount">成交额</button></th>
+      <th><button class="sort-button" data-sort="turnover">换手率</button></th><th><button class="sort-button" data-sort="ratio">量比</button></th><th><button class="sort-button" data-sort="score">总分</button></th><th>状态</th><th>理由</th><th>操作</th>
+      <th class="optional-col">昨收 / prev_close</th><th class="optional-col">今开 / open</th><th class="optional-col">最高 / high</th><th class="optional-col">最低 / low</th><th class="optional-col">涨跌额 / change</th><th class="optional-col">成交量 / volume</th><th class="optional-col">source</th><th class="optional-col">source_time</th>
+    </tr></thead><tbody>{''.join(candidate_rows)}</tbody></table></div>
+  </div>
+</section>
+<section class="section"><div class="section-heading"><h2>行业与概念排行</h2><p>当前快照 Top20</p></div><div class="grid sector-grid">{sector_html}</div></section>
+<footer class="section card footer-card"><div><h3>只读行情快照</h3><div class="footer-note">数据质量、Provider 时间语义和覆盖率以本页状态为准；页面不会自动刷新。</div></div><a class="btn btn-primary" href="{html.escape(next_href, quote=True)}" title="获取最新行情快照">刷新到最新行情（新快照）</a></footer>
 """
-    return _document("A 股最新行情快照", body)
+    return _document("GPT Market Live Dashboard", body)
 
 
 def build_stock_template(quote: Any, snapshot: LiveSnapshot) -> str:
     next_href = f"/gpt/{SECRET_MARKER}/live/{NONCE_MARKER}"
+    pct = quote.pct_change
     body = f"""
-<h1>{_escape(quote.code)} {_escape(quote.name)}</h1>
-{WARNING_MARKER}
-<p>snapshot_time: {_escape(snapshot.snapshot_time)}；server_time: {SERVER_TIME_MARKER}；age_ms: {AGE_MS_MARKER}；market_status: {MARKET_STATUS_MARKER}；stale: {STALE_MARKER}</p>
-<p class="notice">时间语义说明：东方财富 f86/f124 仅按 provider_update_time 展示，不能证明为交易所最后成交时间；因此 market_timestamp 显示为不可用。</p>
-<table><tbody>{_freshness_rows(quote)}</tbody></table>
-<table><tbody>
-<tr><th>最新价</th><td>{_number(quote.price)}</td></tr>
-<tr><th>昨收</th><td>{_number(quote.prev_close)}</td></tr>
-<tr><th>今开</th><td>{_number(quote.open)}</td></tr>
-<tr><th>最高</th><td>{_number(quote.high)}</td></tr>
-<tr><th>最低</th><td>{_number(quote.low)}</td></tr>
-<tr><th>涨跌额</th><td>{_number(quote.change)}</td></tr>
-<tr><th>涨跌幅</th><td>{_number(quote.pct_change)}%</td></tr>
-<tr><th>成交量（股）</th><td>{_number(quote.volume, 0)}</td></tr>
-<tr><th>成交额（元）</th><td>{_number(quote.amount)}</td></tr>
-<tr><th>换手率</th><td>{_number(quote.turnover_rate)}%</td></tr>
-<tr><th>量比</th><td>{_number(quote.volume_ratio)}</td></tr>
-<tr><th>source</th><td>{_escape(quote.source)}</td></tr>
-<tr><th>source_time</th><td>{_escape(quote.source_timestamp)}</td></tr>
-<tr><th>bid1~bid5 / ask1~ask5</th><td>当前共享 Provider 未采集，不推测</td></tr>
-</tbody></table>
-<a class="refresh" href="{html.escape(next_href, quote=True)}">获取最新行情快照</a>
+<header class="card">
+  <div class="status-bar"><div><div class="eyebrow">个股快照</div><h1>{_escape(quote.code)} {_escape(quote.name)}</h1><p class="snapshot-note">当前页面仅展示已缓存快照，不触发外部行情采集。</p></div><div class="status-actions">{_badge(quote.quality)} {_badge(quote.confidence, "confidence")}<a class="btn btn-primary" href="{html.escape(next_href, quote=True)}">返回最新行情快照</a></div></div>
+  {WARNING_MARKER}
+  <div class="status-meta"><span>快照时间 <strong>{_time(snapshot.snapshot_time)}</strong></span><span>服务器时间 <strong>{SERVER_TIME_MARKER}</strong></span><span>缓存年龄 <strong>{AGE_MS_MARKER} ms</strong></span><span>市场 <strong>{MARKET_STATUS_MARKER}</strong></span></div>
+</header>
+<section class="section grid stat-grid">
+  <article class="card metric-card"><div class="metric-label">最新价</div><div class="metric-value">{_number(quote.price)}</div><div class="index-change {_change_class(pct)}">{("+" if pct is not None and pct > 0 else "")}{_number(pct)}%</div></article>
+  <article class="card metric-card"><div class="metric-label">成交额</div><div class="metric-value" title="{_escape(quote.amount)}">{_compact_number(quote.amount)}</div></article>
+  <article class="card metric-card"><div class="metric-label">换手率</div><div class="metric-value">{_number(quote.turnover_rate)}%</div></article>
+  <article class="card metric-card"><div class="metric-label">量比</div><div class="metric-value">{_number(quote.volume_ratio)}</div></article>
+</section>
+<section class="section card"><div class="section-heading"><h2>日内行情</h2></div><div class="table-shell"><table><tbody>
+  <tr><th>昨收</th><td class="number-col">{_number(quote.prev_close)}</td><th>今开</th><td class="number-col">{_number(quote.open)}</td></tr>
+  <tr><th>最高</th><td class="number-col">{_number(quote.high)}</td><th>最低</th><td class="number-col">{_number(quote.low)}</td></tr>
+  <tr><th>涨跌额</th><td class="number-col {_change_class(quote.change)}">{_number(quote.change)}</td><th>成交量</th><td class="number-col" title="{_escape(quote.volume)}">{_compact_number(quote.volume, volume=True)}</td></tr>
+  <tr><th>数据源</th><td>{_escape(quote.source)}</td><th>Provider 时间</th><td>{_time(quote.source_timestamp)}</td></tr>
+  <tr><th>bid1~bid5 / ask1~ask5</th><td colspan="3">当前共享 Provider 未采集，不推测</td></tr>
+</tbody></table></div></section>
+<section class="section card"><details class="compact-details"><summary>查看完整数据质量与时间语义</summary><div class="table-shell"><table><tbody>{_freshness_rows(quote)}</tbody></table></div><p class="notice">Provider 时间不等同于交易所最后成交时间；无法证明时 market_timestamp 不展示。</p></details></section>
+<footer class="section card footer-card"><span class="footer-note">本页面为只读个股快照。</span><a class="btn btn-primary" href="{html.escape(next_href, quote=True)}">刷新到最新行情（新快照）</a></footer>
 """
     return _document(f"{quote.code} {quote.name}", body)
 
@@ -394,7 +483,7 @@ def render_cached_template(template: str, secret: str, view: LiveSnapshotView) -
     warning = f'<p class="notice">{_escape(view.warning)}</p>' if view.warning else ""
     rendered = (
         template.replace(SECRET_MARKER, html.escape(secret, quote=True))
-        .replace(SERVER_TIME_MARKER, _escape(view.server_time))
+        .replace(SERVER_TIME_MARKER, _time(view.server_time))
         .replace(AGE_MS_MARKER, _escape(view.age_ms))
         .replace(MARKET_STATUS_MARKER, _escape(view.status))
         .replace(STALE_MARKER, str(view.stale).lower())
