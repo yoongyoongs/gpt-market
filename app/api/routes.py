@@ -100,6 +100,32 @@ def _html(value: Any) -> str:
     return "" if value is None else str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _coverage_label(component_name: str, covered: bool) -> str:
+    if covered:
+        return "可用"
+    if component_name in {"fundamental", "catalyst"}:
+        return "后续接入"
+    if component_name == "trend":
+        return "周K暂不可用"
+    return "不可用"
+
+
+def _data_status(value: bool, unavailable_text: str = "暂不可用") -> str:
+    return "可用" if value else unavailable_text
+
+
+def _planned_source_labels(missing_fields: list[str]) -> str:
+    labels = {
+        "fundamental_financials": "基本面",
+        "valuation_industry_relative": "估值/行业比较",
+        "announcements_news_policy_catalysts": "公告/新闻/政策催化",
+        "main_or_big_order_flow": "主力/大单资金",
+        "industry_classification_for_action_top30_concentration": "行业分类",
+    }
+    values = [label for field, label in labels.items() if field in missing_fields]
+    return "、".join(values) or "-"
+
+
 def v2_scan_page(result, secret: str) -> HTMLResponse:
     rows = []
     for rank, item in enumerate(result.raw_top30, 1):
@@ -108,14 +134,14 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
             f"<th>{_html(name)}</th>"
             f"<td>{_html(part.score)}</td>"
             f"<td>{_html(part.max_score)}</td>"
-            f"<td>{'已覆盖' if part.coverage else '缺数据'}</td>"
+            f"<td>{_html(_coverage_label(name, part.coverage))}</td>"
             f"<td>{_html('；'.join(part.reason) or '-')}</td>"
             f"<td><code>{_html(part.raw_value)}</code></td>"
             "</tr>"
             for name, part in item.score_breakdown.items()
         )
         coverage = item.data_coverage
-        missing = "、".join(item.data_quality.missing_fields) or "-"
+        planned_missing = _planned_source_labels(item.data_quality.missing_fields)
         rows.append(
             f"""
 <tr>
@@ -158,10 +184,12 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         <div class="mini-panel">
           <h3>数据覆盖</h3>
           <dl class="mini-list">
-            <dt>Quote</dt><dd>{_html(coverage.quote)}</dd>
-            <dt>日K</dt><dd>{_html(coverage.day_kline)}</dd>
-            <dt>周K</dt><dd>{_html(coverage.week_kline)}</dd>
-            <dt>缺失</dt><dd>{_html(missing)}</dd>
+            <dt>Quote</dt><dd>{_html(_data_status(coverage.quote))}</dd>
+            <dt>日K</dt><dd>{_html(_data_status(coverage.day_kline))}</dd>
+            <dt>周K</dt><dd>{_html(_data_status(coverage.week_kline, '上游暂不可用'))}</dd>
+            <dt>基本面</dt><dd>Phase 2 待接入</dd>
+            <dt>催化</dt><dd>Phase 3 待接入</dd>
+            <dt>其他源</dt><dd>{_html(planned_missing)}</dd>
           </dl>
         </div>
         <div class="mini-panel">
@@ -197,9 +225,9 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         "</style></head><body><main class=\"dashboard\">"
         "<header class=\"card\"><div class=\"status-bar\"><div>"
         "<div class=\"eyebrow\">机会发现 · Phase 1</div><h1>scan_mainboard V2 Top30</h1>"
-        "<p class=\"snapshot-note\">按机会分排序，基础面和催化在接入真实数据源前不会伪造加分。</p></div>"
+        "<p class=\"snapshot-note\">按机会分排序，未接入真实源的模块不会伪造加分。</p></div>"
         f"<div class=\"status-actions\"><span class=\"badge badge-neutral\">{_html(result.score_version)}</span><a class=\"btn\" href=\"/gpt/{_html(secret)}/scan/v2\">JSON</a><a class=\"btn btn-primary\" href=\"/gpt/{_html(secret)}/scan/ab\">V1 vs V2</a></div></div>"
-        "<div class=\"notice\">当前 Phase 1 只使用行情和 K 线。基本面、催化、主力资金和行业分类缺真实数据源，因此不会强行给 A 级。</div></header>"
+        "<div class=\"notice\">当前页面是 Phase 1 技术面/风险收益版。基本面、催化、主力资金和行业分类属于后续阶段待接入；周 K 如果源接口失败，会显示为上游暂不可用。</div></header>"
         "<section class=\"section grid stat-grid\">"
         f"<article class=\"card\"><div class=\"metric-label\">候选池</div><div class=\"metric-value\">{_html(result.candidate_pool_size)}</div></article>"
         f"<article class=\"card\"><div class=\"metric-label\">行情覆盖</div><div class=\"metric-value\">{coverage_pct}%</div></article>"
@@ -208,7 +236,8 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         "</section>"
         "<section class=\"section card\"><div class=\"section-heading\"><div><h2>Top30</h2><p class=\"muted\">raw_top30 完全按 opportunity_score 排序</p></div>"
         "<details><summary>公式与缺失数据</summary>"
-        f"<p class=\"muted\">{_html(result.score_formula)}</p><p class=\"muted\">缺失：{_html('、'.join(result.missing_data_sources))}</p></details></div>"
+        f"<p class=\"muted\">{_html(result.score_formula)}</p><p class=\"muted\">后续阶段待接入：{_html(_planned_source_labels(result.missing_data_sources))}</p>"
+        "<p class=\"muted\">当前上游：周 K 接口若失败，系统会降级使用日 K 趋势并标记周 K 暂不可用。</p></details></div>"
         "<div class=\"table-shell\"><table><thead><tr><th class=\"rank-col\">#</th><th>代码</th><th>名称</th><th>机会分</th><th>等级</th>"
         "<th>位置</th><th>趋势</th><th>资金量价</th><th>RR分</th><th>流动性</th><th>风险扣分</th>"
         "<th>支撑</th><th>压力</th><th>止损</th><th>目标1</th><th>RR</th><th>周/日趋势</th><th>理由</th></tr></thead>"
