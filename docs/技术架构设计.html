@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="6ea6d761b3ab8bf07b856edd4e4acabbe0ceae21aea90acd2a95d9cacf8192a9"><title>gpt-market V3 技术架构设计</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 目标与约束</a></li>
+<li><a href="#2">2. 当前技术架构（已实现）</a><ul>
+<li><a href="#21">2.1 当前栈</a></li>
+<li><a href="#22">2.2 当前代码依赖方向</a></li>
+</ul>
+</li>
+<li><a href="#3-v3">3. V3 目标运行架构</a><ul>
+<li><a href="#31">3.1 进程职责</a></li>
+</ul>
+</li>
+<li><a href="#4">4. 分层架构</a><ul>
+<li><a href="#41-interface-layer">4.1 Interface Layer</a></li>
+<li><a href="#42-application-layer">4.2 Application Layer</a></li>
+<li><a href="#43-domain-layer">4.3 Domain Layer</a></li>
+<li><a href="#44-infrastructure-layer">4.4 Infrastructure Layer</a></li>
+</ul>
+</li>
+<li><a href="#5">5. 建议代码结构</a></li>
+<li><a href="#6">6. 数据处理架构</a><ul>
+<li><a href="#61-market-pipeline">6.1 Market Pipeline</a></li>
+<li><a href="#62-evidence-pipeline">6.2 Evidence Pipeline</a></li>
+<li><a href="#63-ai-result-pipeline">6.3 AI Result Pipeline</a></li>
+<li><a href="#64-trade-pipeline">6.4 Trade Pipeline</a></li>
+</ul>
+</li>
+<li><a href="#7">7. 并发与一致性</a></li>
+<li><a href="#8">8. 缓存架构</a></li>
+<li><a href="#9">9. 安全架构</a></li>
+<li><a href="#10">10. 可观测性</a></li>
+<li><a href="#11">11. 部署架构</a><ul>
+<li><a href="#111">11.1 当前</a></li>
+<li><a href="#112-v3">11.2 V3 目标</a></li>
+</ul>
+</li>
+<li><a href="#12">12. 性能与容量</a></li>
+<li><a href="#13">13. 兼容与回滚</a></li>
+<li><a href="#14">14. 技术决策待确认</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/技术架构设计.md · 内容哈希：6ea6d761b3ab</div><h1 id="gpt-market-v3">gpt-market V3 技术架构设计<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>基线：V3 Architecture Baseline 1.0
+状态：目标架构，包含当前实现对照；PostgreSQL、V3 Worker 和 V3 模块尚未实现。</p>
+</blockquote>
+<h2 id="1">1. 目标与约束<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>技术架构必须支持：现有 V1/V2 不停机兼容、全市场时点数据、可重放 Feature/Recall、ChatGPT Web READ 与人工导入、不可变决策/交易记录、严格审计和快速回滚。</p>
+<p>约束：</p>
+<ul>
+<li>Python 3.12；</li>
+<li>当前 FastAPI + FastMCP 保留；</li>
+<li>当前 AI 客户端是 ChatGPT Web，不调用模型 API；</li>
+<li>当前单机 Linux/Docker 部署可以继续使用；</li>
+<li>V3 正式状态采用 PostgreSQL，不能继续依赖内存或 JSONL；</li>
+<li>外部行情和 Evidence Provider 均不稳定，必须显式降级；</li>
+<li>真实资金写入必须有人类确认。</li>
+</ul>
+<h2 id="2">2. 当前技术架构（已实现）<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<pre><code class="language-mermaid">flowchart LR
+    C[MCP / REST / GPT Web] --&gt; API[FastAPI + FastMCP]
+    API --&gt; S[Quote/Kline/Market/Sector/Scanner Service]
+    S --&gt; MDS[MarketDataService]
+    MDS --&gt; PM[ProviderManager]
+    PM --&gt; EM[Eastmoney]
+    PM --&gt; TX[Tencent]
+    MDS --&gt; KC[L1 内存 + SQLite Kline Cache]
+    S --&gt; FPM[FundamentalProviderManager]
+    FPM --&gt; EDF[Eastmoney Datacenter/F10]
+    API --&gt; LC[Live / V2 Dashboard Background Cache]
+    S --&gt; J[Scan JSONL History]
+</code></pre>
+<h3 id="21">2.1 当前栈<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>技术</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Web/API</td>
+<td>FastAPI、Pydantic v2</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>FastMCP Streamable HTTP</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>HTTP Client</td>
+<td>httpx async</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>计算</td>
+<td>numpy、pandas</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>缓存</td>
+<td>AsyncTTLCache、进程内 Snapshot</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>Kline 存储</td>
+<td>SQLite WAL</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>扫描历史</td>
+<td>JSONL</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>部署</td>
+<td>Docker、Uvicorn、Nginx</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>V3 正式数据库</td>
+<td>PostgreSQL</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>Migration</td>
+<td>Alembic 或同等工具</td>
+<td>待选型/待实现</td>
+</tr>
+<tr>
+<td>V3 Worker/Scheduler</td>
+<td>独立进程</td>
+<td>待实现</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22">2.2 当前代码依赖方向<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">api / mcp
+  → service
+    → MarketDataService / FundamentalProviderManager
+      → Provider adapter
+        → 外部数据源
+</code></pre>
+<p>Provider 只负责传输、解析、代码转换和单位标准化；业务入口不得直接调用具体 Provider。<code>Container</code> 负责单例装配和生命周期。</p>
+<h2 id="3-v3">3. V3 目标运行架构<a class="headerlink" href="#3-v3" title="Permanent link">&para;</a></h2>
+<pre><code class="language-mermaid">flowchart TB
+    USER[用户 / ChatGPT Web] --&gt; EDGE[Nginx / HTTPS]
+    EDGE --&gt; API[V1/V2 + V3 API/MCP Process]
+    API --&gt; DOMAIN[V3 Domain Services]
+    API --&gt; CACHE[Read Cache / Published Snapshot]
+
+    WORKER[V3 Background Worker] --&gt; PROVIDERS[Market / Evidence Providers]
+    WORKER --&gt; DOMAIN
+    DOMAIN --&gt; PG[(PostgreSQL)]
+    DOMAIN --&gt; FILES[(Raw Document / Image Storage)]
+    WORKER --&gt; PG
+    API --&gt; PG
+
+    LEGACY[现有 MarketDataService / Scanner] --&gt; API
+    LEGACY --&gt; SQLITE[(Legacy SQLite / JSONL)]
+    MON[Health / Metrics / Audit] --- API
+    MON --- WORKER
+</code></pre>
+<h3 id="31">3.1 进程职责<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>API/MCP Process</strong>：只处理 READ、导入预览、用户确认和轻量查询；不在请求路径执行全市场抓取；</li>
+<li><strong>Worker</strong>：Universe、Bar、Feature、Recall、Evidence、Market Regime、Performance 和 Expected Run 状态任务；</li>
+<li><strong>PostgreSQL</strong>：V3 正式状态、版本、时点和审计；</li>
+<li><strong>File/Object Storage</strong>：Raw Document、截图和大体积原始响应；</li>
+<li><strong>Legacy Runtime</strong>：V1/V2 保持原 Service 与缓存，通过 Feature Flag 与 V3 隔离。</li>
+</ul>
+<p>第一阶段允许 API 与 Worker 在同一容器不同任务中启动，但边界和数据库契约必须按可拆分进程设计；全市场作业稳定后优先拆为独立 Worker。</p>
+<h2 id="4">4. 分层架构<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<h3 id="41-interface-layer">4.1 Interface Layer<a class="headerlink" href="#41-interface-layer" title="Permanent link">&para;</a></h3>
+<p><code>app/v3/api</code>、现有 MCP/REST、HTML 展示。负责认证、参数校验、Schema 序列化、HTTP 错误映射，不包含 Provider 逻辑和决策计算。</p>
+<h3 id="42-application-layer">4.2 Application Layer<a class="headerlink" href="#42-application-layer" title="Permanent link">&para;</a></h3>
+<p>编排用例：Build Feature Run、Query Universe、Build Context、Import Bundle、Confirm Trade Draft、Replay Strategy。负责事务边界和权限检查。</p>
+<h3 id="43-domain-layer">4.3 Domain Layer<a class="headerlink" href="#43-domain-layer" title="Permanent link">&para;</a></h3>
+<p>包含 Evidence、Task、Decision、Watchlist、Trade Ledger、Portfolio、Performance 等业务不变量。不得依赖 FastAPI、httpx、模型 SDK或具体数据库驱动。</p>
+<h3 id="44-infrastructure-layer">4.4 Infrastructure Layer<a class="headerlink" href="#44-infrastructure-layer" title="Permanent link">&para;</a></h3>
+<p>Repository、PostgreSQL、Migration、Provider Adapter、Raw File Store、Cache、Scheduler、Clock、ID 和 Hash 实现。</p>
+<p>依赖方向始终从外向内：Interface/Infrastructure 依赖 Application/Domain，Domain 不反向依赖框架。</p>
+<h2 id="5">5. 建议代码结构<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">app/v3/
+├── api/                 # router、dependency、HTTP schema
+├── application/         # use case / transaction orchestration
+├── contracts/           # AgentTask、Envelope、Bundle、Result schema
+├── domain/              # entity、value object、policy、invariant
+├── repositories/        # repository protocol
+├── infrastructure/
+│   ├── db/              # PostgreSQL implementation
+│   ├── providers/       # Universe/Evidence adapter
+│   ├── storage/         # raw/image storage
+│   └── scheduling/
+├── services/            # feature、recall、context、performance
+└── tasks/               # background jobs
+</code></pre>
+<p>现有 <code>app/providers</code>、<code>app/services</code>、<code>app/mcp</code> 和 <code>app/api</code> 初期不重构，只通过适配器或明确边界被 V3 复用。</p>
+<h2 id="6">6. 数据处理架构<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="61-market-pipeline">6.1 Market Pipeline<a class="headerlink" href="#61-market-pipeline" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Universe Snapshot
+→ Raw Bar / Quote Fetch
+→ Normalize + Quality
+→ Revision Publish
+→ Feature Run
+→ Market Regime
+→ Multi-Recall / Raw
+→ Candidate Comparison
+</code></pre>
+<p>网络调用、解析和计算在锁外完成；仅发布不可变 Snapshot 或 Cache Reference 时短暂原子交换。HTTP Handler 不能等待 Refresh Future/Event。</p>
+<h3 id="62-evidence-pipeline">6.2 Evidence Pipeline<a class="headerlink" href="#62-evidence-pipeline" title="Permanent link">&para;</a></h3>
+<p>Provider Fetch 先保存 Raw Document，再解析标准 Evidence。Dedup、Entity Link、Conflict 和 Retrieval 均可按 Raw Hash/Parser Version 重放。Core 和 Extended 使用相同管线但不同任务优先级。</p>
+<h3 id="63-ai-result-pipeline">6.3 AI Result Pipeline<a class="headerlink" href="#63-ai-result-pipeline" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Upload Single/Bundle → Parse → Group Validation → Batch Preview
+→ One User Confirmation → Per Atomic Group Transaction
+→ Successful/Failed Group Result → Task/Audit Update
+</code></pre>
+<p>同组严格原子，不同组容错隔离。Confirm 绑定 Bundle Hash、Preview Revision 和 Idempotency Key。</p>
+<h3 id="64-trade-pipeline">6.4 Trade Pipeline<a class="headerlink" href="#64-trade-pipeline" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Manual/Image → Draft → User Confirm
+→ Immutable Ledger / Opening / Reconciliation
+→ Projection Rebuild → Portfolio Context
+</code></pre>
+<p>OCR、AI 和外部 Agent 都不能绕过 Draft 与用户确认。</p>
+<h2 id="7">7. 并发与一致性<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<ul>
+<li>使用数据库唯一约束和幂等键防止重复导入；</li>
+<li>Atomic Group 使用独立事务；</li>
+<li>Ledger 追加使用账户/证券维度串行化或乐观版本检查；</li>
+<li>Feature Run、Context Pack、Decision 等完成后不可变；</li>
+<li>长任务使用 Run 状态和断点游标，禁止持有数据库长事务；</li>
+<li>Cache 发布使用不可变对象引用交换；</li>
+<li>读取可使用快照隔离，资金写入使用更严格行锁/版本检查；</li>
+<li>所有时间由 Clock 接口提供，测试可冻结时间。</li>
+</ul>
+<h2 id="8">8. 缓存架构<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>缓存</th>
+<th>当前</th>
+<th>V3 策略</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Quote/Market/Sector</td>
+<td>进程 TTL</td>
+<td>保留，数据带 Snapshot/Quality</td>
+</tr>
+<tr>
+<td>Live HTML</td>
+<td>后台预序列化内存</td>
+<td>保留，不等待 Provider</td>
+</tr>
+<tr>
+<td>Kline</td>
+<td>L1 + SQLite</td>
+<td>Legacy 保留；V3 正式 Bar 进入 PostgreSQL</td>
+</tr>
+<tr>
+<td>Feature/Recall</td>
+<td>无正式缓存</td>
+<td>按不可变 Run ID 查询，可加只读缓存</td>
+</tr>
+<tr>
+<td>Context Pack</td>
+<td>无</td>
+<td>生成后持久化并按 Hash 读取</td>
+</tr>
+<tr>
+<td>Portfolio Projection</td>
+<td>无</td>
+<td>数据库投影缓存，可从 Ledger 重建</td>
+</tr>
+</tbody>
+</table>
+<p>缓存失败不能清空最近成功事实；但陈旧必须显式标记。缓存不是事实来源，持久化 Revision/Ledger 才是 V3 可重放事实。</p>
+<h2 id="9">9. 安全架构<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<ul>
+<li>MCP Bearer 与 GPT Web Secret 保留现状，短期不阻塞核心闭环；</li>
+<li>V3 WRITE 仅允许认证的人类 UI；</li>
+<li>READ Scope 预留 Market 与 Portfolio 分离；</li>
+<li>URL Secret 不写访问日志，文档/截图/Envelope 做敏感信息过滤；</li>
+<li>Raw Web/News 内容仅作为数据，不进入系统 Prompt 指令区；</li>
+<li>图片存储使用不可猜 ID、Hash 和访问控制；</li>
+<li>数据库账户最小权限，Migration 与 Runtime 账户分离；</li>
+<li>审计记录操作者、来源、请求 ID、对象 Hash 和结果，但不记录明文 Secret。</li>
+</ul>
+<h2 id="10">10. 可观测性<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<p>统一日志字段：<code>request_id</code>、<code>task_run_id</code>、<code>feature_run_id</code>、<code>provider</code>、<code>operation</code>、<code>duration_ms</code>、<code>status</code>、<code>error_type</code>、<code>cache_state</code>。</p>
+<p>指标至少覆盖：</p>
+<ul>
+<li>Provider 成功率、延迟、熔断和 Fallback；</li>
+<li>Universe/Quote/Bar/Evidence Coverage 与 Freshness；</li>
+<li>Worker Queue/Run 耗时和失败；</li>
+<li>Context 大小与裁剪；</li>
+<li>Bundle 成功/失败组数；</li>
+<li>Ledger/Projection 一致性；</li>
+<li>READ API P50/P95/P99；</li>
+<li>Expected Run 的 Pending/Missed 数。</li>
+</ul>
+<p>审计日志和运行日志分离。审计不可随普通日志轮转丢失。</p>
+<h2 id="11">11. 部署架构<a class="headerlink" href="#11" title="Permanent link">&para;</a></h2>
+<h3 id="111">11.1 当前<a class="headerlink" href="#111" title="Permanent link">&para;</a></h3>
+<p>单 Docker 容器、<code>127.0.0.1:8000</code>、Nginx 80 反向代理，可选 Cloudflare Tunnel。<code>./data:/data</code> 持久化 SQLite/JSONL。</p>
+<h3 id="112-v3">11.2 V3 目标<a class="headerlink" href="#112-v3" title="Permanent link">&para;</a></h3>
+<p>Docker Compose 至少包含：</p>
+<ul>
+<li><code>market-api</code>；</li>
+<li><code>market-worker</code>；</li>
+<li><code>postgres</code>；</li>
+<li>可选 <code>backup</code>/对象存储适配器。</li>
+</ul>
+<p>Nginx 继续代理 API；数据库不暴露公网。PostgreSQL Volume、Raw 文件目录和备份目录独立。Migration 在发布前显式执行，不能由多个 API Worker 竞争自动运行。</p>
+<h2 id="12">12. 性能与容量<a class="headerlink" href="#12" title="Permanent link">&para;</a></h2>
+<ul>
+<li>约 5,905 证券 × 300 日约 177 万 Bar；</li>
+<li>每年约 148 万全市场 Feature Row；</li>
+<li>PostgreSQL 首年预留 8–20GB；</li>
+<li>全市场 Feature 不以 2 秒频率重算；</li>
+<li>分钟 K 不做全市场长期保存；</li>
+<li>常用 READ P95 &lt; 200ms，复杂 Query/Context P95 &lt; 500ms；</li>
+<li>全市场任务通过批量 I/O、受控并发和增量计算完成。</li>
+</ul>
+<h2 id="13">13. 兼容与回滚<a class="headerlink" href="#13" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>/mcp</code>、V1/V2 REST/GPT 路由保持不变；</li>
+<li>V3 只新增 <code>/api/v3</code> 和独立 Schema；</li>
+<li>旧 SQLite/JSONL 只迁移副本，不就地破坏；</li>
+<li>新数据先 Shadow 双写/比对；</li>
+<li>Feature Flag 可关闭 V3 Router/Worker；</li>
+<li>Migration 必须有备份和恢复路径；</li>
+<li>故障时继续运行冻结 V2 基线。</li>
+</ul>
+<h2 id="14">14. 技术决策待确认<a class="headerlink" href="#14" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>当前决定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL 驱动/ORM</td>
+<td><code>UNKNOWN</code>，Phase 1 评估 SQLAlchemy async 或轻量 Repository 实现</td>
+</tr>
+<tr>
+<td>Migration 工具</td>
+<td>建议 Alembic，Phase 1 确认</td>
+</tr>
+<tr>
+<td>Scheduler</td>
+<td><code>UNKNOWN</code>，先以数据库 Run Registry + Worker Loop，避免过早引入队列</td>
+</tr>
+<tr>
+<td>Raw/Image Storage</td>
+<td>初期本地受控目录，接口预留对象存储</td>
+</tr>
+<tr>
+<td>OCR 引擎</td>
+<td><code>UNKNOWN</code></td>
+</tr>
+<tr>
+<td>Secondary Universe Provider</td>
+<td><code>UNKNOWN</code></td>
+</tr>
+<tr>
+<td>正式交易日历 Provider</td>
+<td><code>UNKNOWN</code></td>
+</tr>
+</tbody>
+</table>
+<p>未知项必须在实施验证后记录 ADR，不能在设计文档中猜测。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

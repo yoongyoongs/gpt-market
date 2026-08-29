@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="0dbf26d128542a18ac10c48c223acbc70ee06e33d65d7e7b2c1f3ce9b073a307"><title>V3 版本 GPT 指导意见 2（历史设计输入）</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul></ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/archive/v3-design-inputs/v3版本-gpt指导意见-2.md · 内容哈希：0dbf26d12854</div><h1 id="v3-gpt-2">V3 版本 GPT 指导意见 2（历史设计输入）<a class="headerlink" href="#v3-gpt-2" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>归档说明：本文是 Baseline 1.0 的第二轮 Review 输入，不是当前独立实施依据。</p>
+</blockquote>
+<p>当前V3架构初稿总体认可。</p>
+<p>请不要只输出“差异稿”，也不要重新从零设计。</p>
+<p>请直接基于现有《gpt-market V3 Codex 架构设计初稿》，把下面这些Review意见正式合并进原设计，修订形成一份完整、统一、可以作为后续实施依据的：</p>
+<p>《gpt-market V3 AI投资决策系统架构设计 v0.2》</p>
+<p>要求：
+- 原稿中已经确认且没有意见的内容全部保留；
+- 有修改意见的章节直接修改原正文；
+- 新增内容插入最合适的原有章节；
+- 如原章节结构不够，可以新增章节；
+- 最终输出必须是一份从头到尾完整可读的V3设计稿；
+- 不要求用户再结合v0.1和差异清单自行拼接；
+- 文末可以附一个简短Change Log，说明v0.2相比v0.1主要改了什么，但Change Log不是主体；
+- 本轮仍然只修改设计文档，不修改任何业务代码、不提交、不部署。</p>
+<p>需要合并以下Review意见：</p>
+<p>一、ChatGPT Web READ鉴权和稳定域名暂列低优先级Known Issue</p>
+<p>目前系统主要由单个用户使用，因此：
+- ChatGPT网页无法稳定携带Bearer Header；
+- 临时trycloudflare域名；
+- 市场数据与Portfolio数据未来权限隔离；
+- Named Tunnel / 稳定域名；</p>
+<p>这些需要在架构中预留，但暂时不要作为阻塞V3核心闭环的高优先级工作。</p>
+<p>请增加：
+Known Issues / Future Hardening</p>
+<p>记录上述问题和未来解决方向。</p>
+<p>当前V3仍可沿用现有可访问HTTPS方式完成READ。</p>
+<p>不要为了现在解决完整企业级鉴权而拖慢V3。</p>
+<p>二、AI Result Import必须支持Batch / Bundle</p>
+<p>这是V3正式需求。</p>
+<p>一次ChatGPT分析可能产生：</p>
+<ul>
+<li>MarketReview</li>
+<li>多个DecisionResult</li>
+<li>多个ReviewResult</li>
+<li>多个WatchlistProposal</li>
+<li>多个EntryPlanResult</li>
+<li>多个PositionReviewResult</li>
+</ul>
+<p>不能要求每只股票分别复制和确认。</p>
+<p>新增统一：</p>
+<p>AIResultBundle</p>
+<p>支持流程：</p>
+<p>ChatGPT一次输出完整结构化Bundle
+→ 用户一次复制/上传
+→ 服务器解析
+→ Schema校验
+→ Context Pack / Evidence / Task Run校验
+→ 展示整个Batch Preview
+→ 用户一次确认
+→ 单事务完成合法结果入库。</p>
+<p>请设计：
+POST /api/v3/ai-results/import</p>
+<p>同时支持：
+Single AIResultEnvelope
+和
+AIResultBundle</p>
+<p>请根据数据一致性设计Batch事务策略。</p>
+<p>优先保证：
+Decision / EntryPlan / Watchlist / Review之间不会出现半套数据。</p>
+<p>如果部分Result存在错误，应明确：
+- 整批拒绝；
+- 或分组原子提交；
+并说明选择原因。</p>
+<p>核心目标：
+盘后分析10只甚至30只股票时，用户仍然只需要一次导入、一次确认。</p>
+<p>三、进一步明确“系统负责事实，AI负责最终判断”</p>
+<p>这是V3最重要的架构原则之一。</p>
+<p>服务器负责：</p>
+<ul>
+<li>Market Data</li>
+<li>Universe</li>
+<li>K线</li>
+<li>Full Market Features</li>
+<li>Multi-Recall</li>
+<li>Raw Opportunity</li>
+<li>Evidence整理</li>
+<li>Market Regime事实</li>
+<li>Portfolio真实事实</li>
+<li>Trade Ledger</li>
+<li>数据质量</li>
+<li>明确风险事实</li>
+<li>Performance统计</li>
+</ul>
+<p>AI / ChatGPT负责：</p>
+<ul>
+<li>多候选横向比较</li>
+<li>正方Evidence分析</li>
+<li>反方Evidence分析</li>
+<li>哪些Raw升级为Action Candidate</li>
+<li>Entry Plan</li>
+<li>持仓判断</li>
+<li>加仓判断</li>
+<li>减仓判断</li>
+<li>卖点判断</li>
+<li>Review结论</li>
+</ul>
+<p>请在架构中明确禁止重新出现：</p>
+<p>action_total_score
+final_total_score
+final_rank_score</p>
+<p>等固定统一总分替代AI最终判断。</p>
+<p>服务器可以提供：
+trend_freshness
+ignition_quality
+relative_strength
+time_efficiency相关事实
+position
+volatility
+flow
+liquidity
+fundamental metrics
+等结构化输入。</p>
+<p>这些用于帮助AI判断，不是新的硬权限墙。</p>
+<p>Multi-Recall仍然只是发现加速器。
+任何未被Recall命中的股票仍必须可以通过Full Universe Query被AI访问。</p>
+<p>四、补完整Evidence Ingestion Pipeline</p>
+<p>当前Evidence数据模型设计已经认可，但v0.2必须补充“Evidence到底怎么被采集进入系统”。</p>
+<p>至少覆盖：</p>
+<ol>
+<li>官方公司公告</li>
+<li>上交所/深交所/北交所</li>
+<li>巨潮资讯</li>
+<li>财务数据</li>
+<li>业绩预告/快报</li>
+<li>当前Vendor数据</li>
+<li>行业信息</li>
+<li>财经新闻</li>
+<li>国内政策</li>
+<li>海外宏观</li>
+<li>海外政策</li>
+<li>地缘事件</li>
+<li>商品价格及产业事件</li>
+<li>券商观点</li>
+<li>专家观点</li>
+</ol>
+<p>设计统一链路：</p>
+<p>Evidence Source / Provider
+→ Fetch
+→ Raw Document
+→ Parse
+→ Dedup
+→ Normalize
+→ 时间标准化
+→ Security / Industry / Market Entity Linking
+→ Source Type分类
+→ confidence
+→ relevance
+→ conflict detection
+→ decay / expire
+→ Evidence DB
+→ Context Pack Retrieval</p>
+<p>严格保证：</p>
+<p>FACT
+OFFICIAL_DISCLOSURE
+VENDOR_DATA
+NEWS
+OPINION</p>
+<p>不能混淆。</p>
+<p>Opinion不能因为多个专家一致看多就自动变成Fact。</p>
+<p>多Source冲突必须保留。</p>
+<p>known_at必须满足未来Replay。</p>
+<p>网页、新闻和外部文本必须当作Untrusted Data，
+不能把其中的指令拼入Agent Prompt。</p>
+<p>同时请把Evidence Ingestion明确加入V3实施Phase。</p>
+<p>五、Portfolio只提供事实，不做新的硬筛选器</p>
+<p>这里需要修改之前可能存在的“PortfolioRiskProfile硬规则”方向。</p>
+<p>V3服务器主要记录Portfolio真实事实。</p>
+<p>例如：</p>
+<ul>
+<li>当前真实持仓</li>
+<li>数量</li>
+<li>平均成本</li>
+<li>实际成交历史</li>
+<li>当前市值</li>
+<li>已实现收益</li>
+<li>未实现收益</li>
+<li>当前可确认资金</li>
+<li>当前行业/主题分布</li>
+<li>当前持仓股票数量</li>
+<li>当前Action候选</li>
+<li>Portfolio整体变化</li>
+</ul>
+<p>这些数据进入Portfolio Context提供给AI。</p>
+<p>由AI综合判断：</p>
+<ul>
+<li>当前是否仓位集中；</li>
+<li>某行业是否已经持仓很多；</li>
+<li>新候选与已有仓位是否高度重复；</li>
+<li>当前是否应该继续开新仓；</li>
+<li>应优先哪个机会；</li>
+<li>是否需要留出资金；</li>
+<li>是否应该降低整体风险。</li>
+</ul>
+<p>V3不要建立新的固定硬门槛，例如：</p>
+<p>max_sector_exposure = 30%
+max_open_positions = 5
+max_single_position = 20%</p>
+<p>然后据此直接删除机会。</p>
+<p>如果未来需要用户偏好，可以设计：</p>
+<p>PortfolioPreference
+UserInvestmentPreference</p>
+<p>作为AI Context软信息，例如：</p>
+<p>preferred_horizon
+risk_tolerance
+desired_cash_buffer
+position_preference</p>
+<p>但它们默认是AI判断输入，不是Machine Recall/Raw的硬过滤条件。</p>
+<p>核心原则仍然是：</p>
+<p>“系统记录事实和偏好，AI综合判断。”</p>
+<p>六、增加MarketRegimeSnapshot，但保持事实属性</p>
+<p>Market Regime应该正式进入V3。</p>
+<p>服务器负责计算/记录可验证事实，例如：</p>
+<ul>
+<li>主要指数趋势；</li>
+<li>市场宽度；</li>
+<li>上涨/下跌家数；</li>
+<li>全市场成交额；</li>
+<li>涨停/跌停数量与结构；</li>
+<li>大盘/小盘风格；</li>
+<li>成长/价值风格；</li>
+<li>行业轮动；</li>
+<li>强势行业；</li>
+<li>弱势行业；</li>
+<li>风险偏好；</li>
+<li>重要国内风险；</li>
+<li>重要海外风险。</li>
+</ul>
+<p>可以形成结构化：</p>
+<p>MarketRegimeSnapshot</p>
+<p>但不要让系统简单通过固定MarketRegime总分决定“今天不准买”。</p>
+<p>Regime属于AI判断上下文。</p>
+<p>Performance未来可以按Market Regime统计：</p>
+<p>某Opportunity Type
+某Recall Channel
+某Strategy Version
+某AI Decision模式</p>
+<p>在不同市场环境下表现如何。</p>
+<p>七、Trade和Performance增加Execution Deviation</p>
+<p>必须区分：</p>
+<p>AI计划错误
+和
+用户没有按AI计划执行。</p>
+<p>例如：</p>
+<p>AI计划：
+22.45~22.70买入</p>
+<p>实际成交：
+23.60</p>
+<p>应该记录：</p>
+<p>entry_plan_matched = false
+execution_type = USER_OVERRIDE
+execution_deviation_pct
+execution_note</p>
+<p>建议执行分类：</p>
+<p>PLAN_MATCHED
+PARTIAL_MATCH
+USER_OVERRIDE
+MANUAL_TRADE_WITHOUT_AI_ENTRY
+UNKNOWN</p>
+<p>Performance以后需要分别评价：</p>
+<p>Selection Quality
+Entry Plan Quality
+User Execution Quality
+Add Quality
+Reduce Quality
+Exit Quality
+Risk Control Quality</p>
+<p>例如：</p>
+<p>AI选股正确
+AI买点正确
+但用户追高买入导致亏损</p>
+<p>不能直接算成AI Entry失败。</p>
+<p>反过来：</p>
+<p>AI没有建议买入
+用户自主买入</p>
+<p>也必须明确记录为：
+MANUAL_TRADE_WITHOUT_AI_ENTRY</p>
+<p>不要污染AI绩效。</p>
+<p>八、增加OPENING_POSITION / RECONCILIATION</p>
+<p>V3上线时，用户可能已经持有股票。</p>
+<p>如果第一次只上传一张持仓截图，例如：</p>
+<p>1000股
+平均成本10.20</p>
+<p>系统并不知道历史是：</p>
+<p>一次买1000股
+还是多次买入。</p>
+<p>因此：</p>
+<p>持仓截图不能伪造成过去的BUY Trade。</p>
+<p>请增加：</p>
+<p>OPENING_POSITION
+RECONCILIATION</p>
+<p>语义。</p>
+<p>表示：
+“这是系统开始记录之前已经存在的真实持仓基准。”</p>
+<p>从这个基准以后发生的真实BUY/SELL再正常写入Immutable Trade Ledger。</p>
+<p>同时设计：
+后续成交如何与Opening Position一起计算平均成本、已实现收益和剩余持仓。</p>
+<p>九、Context Pack Evidence增加选择解释</p>
+<p>进入最终Context Pack的Evidence建议增加：</p>
+<p>selection_reason
+side = SUPPORT / CONTRARY / NEUTRAL
+retrieval_score / relevance
+source_priority</p>
+<p>这样未来Replay可以知道：</p>
+<p>当时数据库可能有100条新闻，
+为什么只有这5条进入GPT Context。</p>
+<p>Context Pack仍采用：</p>
+<p>FAST 2k~4k
+NORMAL 5k~8k
+DEEP 10k~14k</p>
+<p>这个设计保持不变。</p>
+<p>十、更新Phase实施计划</p>
+<p>请基于上述修改重新检查当前Phase。</p>
+<p>重点保证：</p>
+<ul>
+<li>AI Result Batch/Bundle Import进入正式V3 Phase；</li>
+<li>Evidence Ingestion有明确开发阶段；</li>
+<li>MarketRegime有明确开发阶段；</li>
+<li>Execution Deviation进入Trade/Performance阶段；</li>
+<li>Opening Position/Reconciliation进入Portfolio阶段；</li>
+<li>ChatGPT READ Auth /稳定域名归入Known Issues/Future Hardening，不阻塞核心V3。</li>
+</ul>
+<p>其余v0.1已经认可的内容不要删除，包括：</p>
+<ul>
+<li>V3 / V4边界；</li>
+<li>Full Market Features；</li>
+<li>Full Universe Query；</li>
+<li>Multi-Recall；</li>
+<li>Recall Miss；</li>
+<li>Agent Contract；</li>
+<li>CHATGPT_WEB为当前主要Agent；</li>
+<li>Model-Agnostic Contract；</li>
+<li>V4才实现真正LLM Gateway和模型API；</li>
+<li>Task Profile；</li>
+<li>Task Run Registry；</li>
+<li>FAST/NORMAL/DEEP Context；</li>
+<li>AI Result Import；</li>
+<li>AI Watchlist；</li>
+<li>Immutable Decision；</li>
+<li>Append-only Review；</li>
+<li>Entry Plan；</li>
+<li>Immutable Trade Ledger；</li>
+<li>Screenshot → Draft →用户确认；</li>
+<li>Portfolio / Position Context；</li>
+<li>Raw / Action / Entry / ActualTrade严格分层；</li>
+<li>expected_horizon；</li>
+<li>time_efficiency；</li>
+<li>601233禁止未来数据泄漏；</li>
+<li>Replay / Regression；</li>
+<li>Strategy Guardrail；</li>
+<li>V1/V2继续作为Baseline；</li>
+<li>V3通过Feature Flag独立上线。</li>
+</ul>
+<p>最终请直接输出完整：</p>
+<p>《gpt-market V3 AI投资决策系统架构设计 v0.2》</p>
+<p>从Scope开始一直写到Phase、数据库、API、性能、风险与回滚。</p>
+<p>文末额外附：
+“v0.2 Change Log”</p>
+<p>简要列出相比v0.1新增和修改内容即可。</p>
+<p>再次强调：
+本轮只更新设计稿。
+不要修改代码。
+不要创建Migration。
+不要进入Phase 1。
+输出完整v0.2后停止，等待Review。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

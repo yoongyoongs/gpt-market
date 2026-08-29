@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="a0d017777fa58b92e19fdc365d76604b241ba725aa19996a302868196d4ceaef"><title>gpt-market 功能清单与开发状态</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 状态定义</a></li>
+<li><a href="#2-v1v2">2. 当前 V1/V2 已实现功能</a><ul>
+<li><a href="#21-provider">2.1 数据与 Provider</a></li>
+<li><a href="#22">2.2 缓存与后台刷新</a></li>
+<li><a href="#23-apimcp">2.3 API、MCP 与页面</a></li>
+<li><a href="#24">2.4 扫描与评分</a></li>
+<li><a href="#25">2.5 测试与部署</a></li>
+</ul>
+</li>
+<li><a href="#3-v3">3. V3 文档与工程治理</a></li>
+<li><a href="#4-v3-phase">4. V3 Phase 状态</a></li>
+<li><a href="#5">5. 待开发功能点（按优先顺序）</a><ul>
+<li><a href="#p0">P0：核心闭环前置</a></li>
+<li><a href="#p1">P1：评价与质量</a></li>
+<li><a href="#p2">P2：稳定化与扩展</a></li>
+</ul>
+</li>
+<li><a href="#6-v3">6. 明确不在 V3 开发</a></li>
+<li><a href="#7-blocked">7. 已知缺口与 BLOCKED</a></li>
+<li><a href="#8">8. 状态更新规则</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/功能清单与开发状态.md · 内容哈希：a0d017777fa5</div><h1 id="gpt-market">gpt-market 功能清单与开发状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>最后更新：2026-08-29（Asia/Shanghai）
+说明：本文件是功能级状态矩阵；日常任务进度见《工作状态》。状态必须有代码/测试依据，设计完成不等于功能实现。</p>
+</blockquote>
+<h2 id="1">1. 状态定义<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已实现</td>
+<td>当前代码存在且有相应测试/运行证据</td>
+</tr>
+<tr>
+<td>部分实现</td>
+<td>有基础能力，但未满足 V3 完整要求</td>
+</tr>
+<tr>
+<td>仅设计</td>
+<td>Baseline/详细设计已完成，尚无实现</td>
+</tr>
+<tr>
+<td>未开始</td>
+<td>尚未开发</td>
+</tr>
+<tr>
+<td>BLOCKED</td>
+<td>缺少必要时点数据或外部条件，禁止伪完成</td>
+</tr>
+<tr>
+<td>V4</td>
+<td>明确不属于 V3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-v1v2">2. 当前 V1/V2 已实现功能<a class="headerlink" href="#2-v1v2" title="Permanent link">&para;</a></h2>
+<h3 id="21-provider">2.1 数据与 Provider<a class="headerlink" href="#21-provider" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+<th>代码/证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Eastmoney Quote/Index/Batch/Kline/Universe/Sector</td>
+<td>已实现</td>
+<td><code>app/providers/eastmoney.py</code>、Provider Tests</td>
+</tr>
+<tr>
+<td>Tencent Quote/Kline Fallback</td>
+<td>已实现</td>
+<td><code>app/providers/tencent.py</code></td>
+</tr>
+<tr>
+<td>Provider 自动排序、健康、Fallback</td>
+<td>已实现</td>
+<td><code>app/providers/manager.py</code></td>
+</tr>
+<tr>
+<td>标准 Symbol/Secid 转换</td>
+<td>已实现</td>
+<td><code>app/providers/symbols.py</code></td>
+</tr>
+<tr>
+<td>Data Quality/Freshness/Snapshot ID</td>
+<td>已实现</td>
+<td><code>app/services/data_quality.py</code></td>
+</tr>
+<tr>
+<td>Fundamental 主源+Fallback</td>
+<td>已实现</td>
+<td><code>app/fundamentals/*</code></td>
+</tr>
+<tr>
+<td>多类 Evidence Provider</td>
+<td>未开始</td>
+<td>V3 Phase 4</td>
+</tr>
+<tr>
+<td>Secondary Universe Provider</td>
+<td>未开始/UNKNOWN</td>
+<td>Tencent 当前不支持完整 Universe</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22">2.2 缓存与后台刷新<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+<th>代码/证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Async TTL Cache</td>
+<td>已实现</td>
+<td><code>app/cache.py</code></td>
+</tr>
+<tr>
+<td>Kline L1 + SQLite L2</td>
+<td>已实现</td>
+<td><code>app/kline_cache.py</code></td>
+</tr>
+<tr>
+<td>周/月/分钟本地聚合 Fallback</td>
+<td>已实现</td>
+<td><code>kline_aggregation.py</code>、测试</td>
+</tr>
+<tr>
+<td>Live Snapshot 后台刷新、Handler 只读缓存</td>
+<td>已实现</td>
+<td><code>app/api/live.py</code></td>
+</tr>
+<tr>
+<td>Live HTML 预序列化与原子引用交换</td>
+<td>已实现</td>
+<td><code>LiveSnapshotCache</code></td>
+</tr>
+<tr>
+<td>V2 Dashboard 后台刷新</td>
+<td>已实现</td>
+<td><code>app/api/v2_dashboard_cache.py</code></td>
+</tr>
+<tr>
+<td>V3 PostgreSQL Feature/Context Cache</td>
+<td>未开始</td>
+<td>Phase 1–3</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-apimcp">2.3 API、MCP 与页面<a class="headerlink" href="#23-apimcp" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FastAPI REST Quote/Kline/Detail/Fundamental/Market/Sector/Scan</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>GPT Secret 对应 READ 路由</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td><code>/live</code> nonce 防 URL 缓存</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td><code>/coverage</code> 与 CoverageReport</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>V2 HTML Dashboard</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>FastMCP 工具</td>
+<td>已实现（当前 10 个，包括 V2/AB/Coverage）</td>
+</tr>
+<tr>
+<td>V3 <code>/api/v3</code> READ</td>
+<td>未开始</td>
+</tr>
+<tr>
+<td>V3 WRITE/Import</td>
+<td>未开始</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24">2.4 扫描与评分<a class="headerlink" href="#24" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>V1 Mainboard Scan</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>V1 Coverage 统计</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>V2 Multi-Channel Candidate Pool</td>
+<td>已实现（V2 设计，不等同 V3 Multi-Recall）</td>
+</tr>
+<tr>
+<td>V2 Opportunity Score / Raw / Action Top</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>Phase2A Fundamental Score/Risk</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>V3 Full Market Features</td>
+<td>未开始</td>
+</tr>
+<tr>
+<td>V3 Full Universe Query</td>
+<td>未开始</td>
+</tr>
+<tr>
+<td>V3 Multi-Recall/Recall Miss</td>
+<td>未开始</td>
+</tr>
+<tr>
+<td>CandidateComparisonPack N→TopK</td>
+<td>未开始</td>
+</tr>
+</tbody>
+</table>
+<h3 id="25">2.5 测试与部署<a class="headerlink" href="#25" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Provider/Scanner/Kline/Indicator/Fundamental 单测</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>MCP/Web Parity Test</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>Live Eastmoney 可选联网测试</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>Docker/Uvicorn</td>
+<td>已实现</td>
+</tr>
+<tr>
+<td>Nginx IP:80 Reverse Proxy 文档</td>
+<td>已实现/已部署过，当前服务器状态需实时核验</td>
+</tr>
+<tr>
+<td>Cloudflare Quick Tunnel</td>
+<td>已部署过，地址临时，当前状态需实时核验</td>
+</tr>
+<tr>
+<td>PostgreSQL/Worker Compose</td>
+<td>未开始</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-v3">3. V3 文档与工程治理<a class="headerlink" href="#3-v3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Architecture Baseline 1.0</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>需求规格说明</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>系统功能架构</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>技术架构设计</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>数据库逻辑设计</td>
+<td>已完成，物理 DDL 未开始</td>
+</tr>
+<tr>
+<td>详细设计</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>架构设计实施稿/Phase</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>开发规范与工作状态</td>
+<td>已完成</td>
+</tr>
+<tr>
+<td>Markdown/HTML 双格式生成与同步检查</td>
+<td>已实现</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-v3-phase">4. V3 Phase 状态<a class="headerlink" href="#4-v3-phase" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Phase</th>
+<th>目标</th>
+<th>状态</th>
+<th>开始条件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td>冻结 V2/Phase2A Baseline</td>
+<td>已完成</td>
+<td><code>556a335</code> + Tag</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td>PostgreSQL、时点、Agent/Audit/Task 基础</td>
+<td>未开始</td>
+<td>用户明确授权</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>Universe 冗余、全市场 Raw Bar/Factor</td>
+<td>未开始</td>
+<td>Phase 1 验收</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td>Full Features、Universe Query、Regime</td>
+<td>未开始</td>
+<td>Phase 2 验收</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>Evidence Core Pipeline</td>
+<td>未开始</td>
+<td>Phase 1 基础可用；Extended 不阻塞</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>Multi-Recall、Raw、Recall Miss 基础</td>
+<td>未开始</td>
+<td>Feature Published</td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td>Context、Comparison、Task、READ JSON</td>
+<td>未开始</td>
+<td>Evidence Core/Discovery 可用</td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td>Single/Bundle Import、Decision State</td>
+<td>未开始</td>
+<td>Agent Contract/Context 可用</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td>Trade Ledger、Opening、Portfolio</td>
+<td>未开始</td>
+<td>DB/Audit/Import 基础可用</td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td>Action/Entry/Position Review</td>
+<td>未开始</td>
+<td>Discovery + Portfolio</td>
+</tr>
+<tr>
+<td style="text-align: right;">10</td>
+<td>Performance/Replay/Regression</td>
+<td>未开始</td>
+<td>时点数据和成熟观察</td>
+</tr>
+<tr>
+<td style="text-align: right;">11</td>
+<td>Shadow/A-B 与稳定化</td>
+<td>未开始</td>
+<td>前序验收</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 待开发功能点（按优先顺序）<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<h3 id="p0">P0：核心闭环前置<a class="headerlink" href="#p0" title="Permanent link">&para;</a></h3>
+<ol>
+<li>PostgreSQL 选型 ADR、Compose、Migration、Backup/Restore；</li>
+<li>Observation/Evidence 时间模型、<code>known_at</code>、Hash、Audit；</li>
+<li>Agent Contract、Task Profile/Run 基础；</li>
+<li>冗余 Universe 和 LKG；</li>
+<li>全市场 raw/unadjusted Bar、Factor、Revision 和增量任务；</li>
+<li>Full Market Feature Run 与 Query；</li>
+<li>Evidence Core；</li>
+<li>Multi-Recall、Raw、Candidate Comparison；</li>
+<li>Context Pack 与 ChatGPT READ；</li>
+<li>Atomic Group AI Result Import；</li>
+<li>Watchlist、Decision、Entry、Review、MarketReview；</li>
+<li>Trade Ledger、Opening、Reconciliation、Portfolio。</li>
+</ol>
+<h3 id="p1">P1：评价与质量<a class="headerlink" href="#p1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Market Regime；</li>
+<li>Recall Miss；</li>
+<li>Evidence Selection Explain；</li>
+<li>Screenshot Draft/OCR；</li>
+<li>Execution Deviation；</li>
+<li>Position Review；</li>
+<li>七类 Performance；</li>
+<li>Replay/Regression。</li>
+</ul>
+<h3 id="p2">P2：稳定化与扩展<a class="headerlink" href="#p2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Evidence Extended；</li>
+<li>Strategy Proposal/Shadow/A-B；</li>
+<li>完整 Metrics/Alert；</li>
+<li>Named Tunnel/稳定域名/权限加固。</li>
+</ul>
+<h2 id="6-v3">6. 明确不在 V3 开发<a class="headerlink" href="#6-v3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Browser Bridge / DOM 监听</td>
+<td>V4</td>
+</tr>
+<tr>
+<td>ChatGPT 自动 POST</td>
+<td>V4</td>
+</tr>
+<tr>
+<td>模型 API Gateway/Router</td>
+<td>V4</td>
+</tr>
+<tr>
+<td>多模型/多 Agent 辩论</td>
+<td>V4</td>
+</tr>
+<tr>
+<td>券商 API 和自动对账</td>
+<td>V4</td>
+</tr>
+<tr>
+<td>AI 自动下单或激活 Strategy</td>
+<td>禁止/V4 也需严格授权</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-blocked">7. 已知缺口与 BLOCKED<a class="headerlink" href="#7-blocked" title="Permanent link">&para;</a></h2>
+<ul>
+<li>601233 严格 Replay：<code>BLOCKED_BY_MISSING_POINT_IN_TIME_DATA</code>；</li>
+<li>Secondary Universe Provider：<code>UNKNOWN</code>；</li>
+<li>正式 A 股 Trading Calendar Provider：<code>UNKNOWN</code>；</li>
+<li>OCR Engine：<code>UNKNOWN</code>；</li>
+<li>PostgreSQL ORM/Driver/Scheduler：待 Phase 1 ADR；</li>
+<li>前复权-only 历史数据不能宣称完全 Point-in-Time；</li>
+<li>当前服务器/隧道/公网地址属于运行时状态，不能只凭历史文档判断。</li>
+</ul>
+<h2 id="8">8. 状态更新规则<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>功能开发每完成一个可验证步骤：</p>
+<ol>
+<li>更新本矩阵对应行；</li>
+<li>更新《工作状态》的完成、验证和下一步；</li>
+<li>运行文档 HTML 生成与同步检查；</li>
+<li>中文提交并立即推送；</li>
+<li>设计完成只标“仅设计”，直到代码、测试和必要真实验证通过才改“已实现”。</li>
+</ol></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="df2bc06f76c3799cf7e420ec4bb80b3c8ca9a277b96a72e2ce815ecfc1a4714d"><title>V3 版本蓝图（历史设计输入）</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul></ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/archive/v3-design-inputs/v3版本蓝图.md · 内容哈希：df2bc06f76c3</div><h1 id="v3">V3 版本蓝图（历史设计输入）<a class="headerlink" href="#v3" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>归档说明：本文是 Baseline 1.0 的历史输入，不是当前独立实施依据。</p>
+</blockquote>
+<p>先暂停继续堆功能，也不要继续微调V2评分。现在基于当前项目真实代码，设计“V3 AI投资决策系统”总体架构。本轮只做架构设计和实施规划，不修改任何代码。</p>
+<p>【最终目标】
+系统不是单纯算Top30，而是形成：
+全市场发现机会 → ChatGPT综合分析 → AI自选 → 等待买点 → 持续跟踪 → 判断增强/减弱/失效 → 复盘结果 → 受控优化分析方法
+的完整闭环。</p>
+<p>核心原则：
+1. 保留现有行情、多Provider、K线、缓存、基本面等成熟底座；
+2. 修正现在“全市场→单一预筛→420→Top30”的架构问题；
+3. 服务器负责事实数据、计算、状态、历史记忆和审计；
+4. ChatGPT网页版负责综合分析、横向比较、正反判断和最终决策；
+5. 固定评分算法只能辅助召回/计算/风险检查，不能成为最终选股大脑；
+6. 当前优先适配ChatGPT Plus网页版，不依赖OpenAI API自动调用；
+7. 现有ChatGPT定时任务继续使用，未来Prompt尽量简化，由服务器返回task_profile/context；
+8. 所有历史数据长期保存，但每次只给ChatGPT有限且最相关的上下文；
+9. AI不能因为最近几个案例自动修改正式策略，只允许提出strategy proposal，经过历史验证/A-B测试和人工确认后才能升级。</p>
+<p>【一、重新设计选股入口】
+所有符合基础交易条件的股票尽量先做全市场轻量特征计算，而不是先由单一preliminary_score决定谁有资格被深入分析。</p>
+<p>建立Multi-Recall多路召回，至少包括：
+- 低位转强
+- 趋势刚启动
+- 首次有效突破
+- 突破后第一次回踩
+- 周K筑底+日K转强
+- 相对指数增强
+- 相对行业增强
+- 量价开始扩张
+- 基本面改善
+- 业绩拐点
+- 催化事件
+- 其他可扩展召回策略</p>
+<p>每一路独立召回TopN，合并去重后形成深度候选池。
+420/600/1000只能作为可配置容量，不能再成为单一公式截断结果。</p>
+<p>必须保留：
+machine_recall
+raw_opportunity
+action_candidate
+entry_plan
+不同层级，不能混成一个total_score。</p>
+<p>【二、必须保留601233桐昆股份历史案例作为V3设计基准】
+之前在约22.45~22.70时系统外的ChatGPT全市场分析曾将601233列为关注对象，并给出：
+回踩22.45~22.70企稳再考虑；
+21.65附近为失效/止损参考；
+24.90第一目标；
+高开超过约3%不追；
+同时观察化纤板块是否转弱。</p>
+<p>V3设计必须支持未来用历史快照严格重放这种案例：
+- 当时601233能否被全市场召回？
+- 被哪一路召回？
+- 当时能否识别“趋势刚开始改善而非已过热”？
+- 能否识别第一次回踩/等待确认，而不是直接追涨？
+- 能否给出观察区、触发、取消、止损、目标和预计周期？
+- 严禁使用后来上涨结果作为当时判断依据，避免前视偏差。</p>
+<p>以后601233以及其他正/负样本应成为回归测试集，每次策略升级都必须重放。</p>
+<p>【三、Full Market Features】
+设计全市场5000+股票轻量特征层，至少考虑：
+3/5/10/20/60/120/250日收益；
+MA5/20/60及斜率；
+250/120/60日位置；
+ATR/ATR%；
+波动率；
+距高低点；
+成交额/换手/量比；
+相对指数强弱；
+相对行业强弱；
+周K/日K状态；
+突破、回踩、放量、缩量、过热、趋势新鲜度等。</p>
+<p>要求说明哪些字段全市场计算，哪些只在深度候选中计算，控制性能。</p>
+<p>【四、Evidence系统】
+Evidence不能只有行情，要统一支持：
+- 实时行情
+- 日/周/60m/15m/5m K线
+- 财务
+- 业绩预告/快报
+- 公司公告
+- 回购/增减持/解禁/质押/监管等
+- 行业状态
+- 国内政策
+- 海外宏观/地缘/商品/产业事件
+- 财经新闻
+- 券商/专家/行业观点</p>
+<p>必须区分：
+FACT
+OFFICIAL_DISCLOSURE
+VENDOR_DATA
+NEWS
+OPINION</p>
+<p>专家/券商观点只能作为Opinion Evidence，不得自动当成事实。</p>
+<p>每条Evidence至少保留：
+source
+source_type
+publish_time
+event_time
+fetch_time
+known_at
+confidence
+relevance
+expire_at / decay
+raw_reference</p>
+<p>历史复盘必须使用known_at保证“当时只能使用当时已经公开的信息”。</p>
+<p>【五、GPT Context Pack】
+历史数据可以无限增长，但绝不能把全部历史塞给ChatGPT。</p>
+<p>设计Relevant Evidence Pack，每次分析只返回：
+- 当前市场环境摘要
+- 当前股票核心状态
+- 最新行情和多周期趋势
+- 最新重要基本面
+- 最近真正重要公告/新闻/政策
+- 支持当前判断的新证据
+- 反对当前判断的新证据
+- 上一次Decision
+- 上一次Review后发生的变化
+- 少量最相关历史成功/失败案例</p>
+<p>设计明确context budget，例如：
+核心事实固定上限；
+公告Top N；
+新闻Top N；
+历史Review Top N；
+相似案例Top N。</p>
+<p>支持ChatGPT继续调用detail接口向下钻取，而不是一次返回全部数据。</p>
+<p>【六、AI Watchlist】
+不是普通自选股。</p>
+<p>至少支持：
+WATCHING
+WAIT_ENTRY
+ACTION_READY
+TRIGGERED
+HOLDING
+SLOW
+DOWNGRADED
+INVALIDATED
+TARGET_HIT
+STOPPED
+CLOSED</p>
+<p>记录：
+加入时间
+加入价格
+来源(USER/GPT/SYSTEM)
+机会类型
+预计周期
+为什么加入
+正方证据
+反方证据
+观察价格区间
+entry_trigger
+cancel_condition
+stop_loss
+target1/target2
+confidence
+strategy_version</p>
+<p>GPT建议加入自选后，默认由用户确认再正式写入；架构上保留未来可授权自动写入能力。</p>
+<p>【七、Decision Snapshot】
+首次分析必须永久冻结，后续不能覆盖。</p>
+<p>必须记录当时：
+价格
+市场环境
+周K/日K/60m/15m
+基本面
+行业
+资金量价
+催化
+支持理由
+反方理由
+最大风险
+机会类型
+预计兑现周期
+观察区
+触发条件
+取消条件
+止损
+目标
+confidence
+strategy_version
+prompt/profile version
+当次使用的Evidence ID集合</p>
+<p>以后只能新增Review，禁止重写历史Decision。</p>
+<p>【八、Review与辩证分析】
+每次重新分析自选股必须强制同时输出：
+supporting_evidence
+contrary_evidence
+changed_facts
+new_risks
+time_efficiency
+thesis_status
+action
+reason</p>
+<p>不能只判断“涨没涨”。</p>
+<p>必须能判断：
+原逻辑增强
+原逻辑保持
+没有证伪但时间效率下降
+逻辑减弱
+逻辑彻底失效</p>
+<p>例如股票一直横盘但没跌破止损，也不能无限“继续观察”，必须考虑资金时间成本。</p>
+<p>【九、Performance】
+选股能力、择时能力、持仓管理能力必须分开统计。</p>
+<p>至少统计：
+T+1
+T+3
+T+5
+T+10
+T+20
+相对指数收益
+MFE
+MAE
+目标命中
+止损
+实际兑现时间
+方向判断是否正确
+entry是否触发
+entry触发后表现
+取消条件是否正确</p>
+<p>例如：
+股票后来上涨但从未进入我的买入区，应记录“方向判断正确 / Entry未触发”，不能伪装成盈利交易。</p>
+<p>支持按：
+机会类型
+行业
+市场环境
+strategy_version
+分析模型/Prompt版本
+统计效果。</p>
+<p>【十、受控自我优化】
+GPT可以自动：
+发现失败模式
+提出策略假设
+创建strategy proposal
+要求历史重放/A-B验证</p>
+<p>但不能自动修改正式策略。</p>
+<p>必须设计：
+最小样本数
+最近20/60/120日滚动窗口
+不同市场环境验证
+新旧策略A/B
+收益、回撤、胜率、时间效率共同评价
+单次权重变化限制
+版本回滚
+人工批准</p>
+<p>禁止类似“最近银行没涨→银行直接扣10分”的过拟合优化。</p>
+<p>【十一、ChatGPT网页版与服务器交互】
+当前主要使用ChatGPT Plus网页版，不依赖OpenAI API。</p>
+<p>服务器设计独立AI Gateway，底层提供结构化JSON REST API，并为未来Action/MCP/其他Agent接入预留兼容层。</p>
+<p>至少设计READ：
+get_market_overview
+get_universe_features
+search_candidates
+get_stock_evidence
+get_context_pack
+get_watchlist
+get_watchlist_changes
+get_decision_history
+get_performance
+get_similar_cases
+get_task_context
+get_strategy_versions</p>
+<p>WRITE：
+propose_watchlist
+add_watchlist
+update_watchlist_status
+create_decision
+create_review
+create_strategy_proposal</p>
+<p>READ和WRITE权限必须分离，所有WRITE有审计日志。</p>
+<p>不要再要求ChatGPT解析HTML作为主要机器接口。</p>
+<p>【十二、ChatGPT定时任务】
+当前定时任务继续运行，但未来Prompt尽量改成：
+读取服务器task_profile/context → 执行分析。</p>
+<p>服务器管理：
+analysis_profile
+prompt_version
+strategy_version
+required_data
+output_schema
+review_rules</p>
+<p>至少设计：
+盘前
+开盘后
+上午盘中
+下午盘中
+尾盘
+盘后全市场
+自选复核
+等不同task profile。</p>
+<p>这样以后策略变化不需要手工修改大量定时任务长Prompt。</p>
+<p>【十三、Raw / Action / Entry必须分层】
+Raw：
+哪些股票值得研究。</p>
+<p>Action：
+未来约3~15交易日哪些值得真正占用资金重点观察。</p>
+<p>Entry：
+当前是否出现可以买的执行条件。</p>
+<p>必须加入：
+expected_horizon
+time_efficiency
+trend_freshness
+ignition quality</p>
+<p>避免深圳机场、银行等“结构安全但可能长期不动”的股票因为低位置+高纸面RR长期占据Action榜前排。</p>
+<p>【十四、安全与数据质量】
+设计：
+多源fallback
+source conflict
+stale
+coverage
+confidence
+数据缺失
+数据污染
+外部新闻/网页Prompt Injection防护
+Bearer Token/OAuth/HMAC等鉴权方案
+读写权限隔离
+日志审计</p>
+<p>不能再依赖URL中长secret作为长期正式方案。</p>
+<p>【十五、V2迁移】
+不要推倒现有系统。</p>
+<p>请明确列出：
+KEEP：现有哪些代码/Provider/K线/缓存/数据库可保留
+REFACTOR：哪些需要重构
+DEPRECATE：哪些V2逻辑保留兼容但不再作为主流程
+NEW：哪些V3模块新增</p>
+<p>V2必须能作为baseline继续跑，用于和V3 A/B对比。</p>
+<p>【本轮最终只输出】
+1. V3总体架构图；
+2. V2→V3 KEEP/REFACTOR/DEPRECATE/NEW清单；
+3. 完整数据流；
+4. 关键时序图：盘后扫描、用户手动分析、盘中复核、自选Review；
+5. 数据库表及核心字段；
+6. API清单，READ/WRITE分开；
+7. 关键API JSON请求/返回示例；
+8. Evidence Pack和上下文控制方案；
+9. ChatGPT网页版、定时任务、服务器之间完整交互流程；
+10. 选股/Action/Entry三级流程；
+11. Decision/Review/Performance闭环；
+12. 受控策略优化流程；
+13. V2历史数据如何迁移；
+14. 分Phase实施顺序；
+15. 每个Phase明确验收标准；
+16. 涉及当前项目哪些真实文件需要修改/新增；
+17. 性能、存储量、接口调用量、上下文规模的预估；
+18. 主要技术风险和回滚方案。</p>
+<p>要求：
+- 必须先阅读当前真实代码和现有审计结果；
+- 设计必须贴合当前项目实际能力，不允许脱离代码空想；
+- 有无法确认的现状请标UNKNOWN，不要猜；
+- 本轮绝对不要修改任何代码；
+- 不要自动进入实施；
+- 输出设计完成后等待我确认。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
