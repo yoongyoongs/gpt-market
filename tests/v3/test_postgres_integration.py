@@ -13,6 +13,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.application.register_agent_task import RegisterAgentTaskService
 from app.v3.contracts.agent import AgentTask, Subject, SubjectType
+from app.v3.domain.market_data import (
+    Market,
+    SecurityMember,
+    UniverseSnapshot,
+    UniverseSnapshotContent,
+    UniverseSnapshotStatus,
+)
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
 
 
@@ -84,7 +91,6 @@ async def test_phase1_schema_and_immutable_raw_document(connection) -> None:
             {"id": document_id},
         )
     await connection.rollback()
-
 
 @pytest.mark.asyncio
 async def test_task_group_count_constraint_rejects_inconsistent_state(connection) -> None:
@@ -256,6 +262,7 @@ async def test_phase2_schema_constraints_and_immutable_market_bars(connection) -
         )
     await connection.rollback()
 
+
     await connection.execute(
         text("INSERT INTO v3.securities (security_id, code, market, name) VALUES (:id, :code, 'SH', 'fixture')"),
         {"id": security_id, "code": f"{security_id.int % 1_000_000:06d}"},
@@ -296,3 +303,72 @@ async def test_phase2_schema_constraints_and_immutable_market_bars(connection) -
             {"revision_id": revision_id, "bar_time": now - timedelta(days=1), "now": now},
         )
     await connection.rollback()
+
+
+@pytest.mark.asyncio
+async def test_universe_repository_publishes_latest_and_diffs_atomically() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    seed = uuid4().int % 800_000
+
+    def member(offset: int, name: str) -> SecurityMember:
+        return SecurityMember(
+            code=f"{(seed + offset) % 1_000_000:06d}",
+            market=Market.SH,
+            name=name,
+        )
+
+    first = UniverseSnapshot.build(
+        UniverseSnapshotContent(
+            snapshot_id=uuid4(),
+            source_code=f"integration-{uuid4()}",
+            status=UniverseSnapshotStatus.PRIMARY,
+            as_of=now,
+            fetch_time=now,
+            known_at=now,
+            coverage=1,
+            stale=False,
+            members=(member(1, "甲"), member(2, "乙")),
+        )
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.universes.publish(first) is True
+        await uow.commit()
+
+    later = now + timedelta(seconds=1)
+    second = UniverseSnapshot.build(
+        UniverseSnapshotContent(
+            snapshot_id=uuid4(),
+            source_code=first.source_code,
+            status=UniverseSnapshotStatus.PRIMARY,
+            as_of=later,
+            fetch_time=later,
+            known_at=later,
+            coverage=1,
+            stale=False,
+            previous_snapshot_id=first.snapshot_id,
+            members=(member(1, "甲更名"), member(3, "丙")),
+        )
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.universes.publish(second) is True
+        await uow.commit()
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        latest = await uow.universes.latest()
+    assert latest == second
+
+    async with engine.connect() as connection:
+        diff_types = (
+            await connection.execute(
+                text(
+                    "SELECT change_type, count(*) FROM v3.universe_diffs "
+                    "WHERE snapshot_id=:snapshot_id GROUP BY change_type ORDER BY change_type"
+                ),
+                {"snapshot_id": second.snapshot_id},
+            )
+        ).all()
+    await engine.dispose()
+    assert diff_types == [("ADDED", 1), ("CHANGED", 1), ("REMOVED", 1)]

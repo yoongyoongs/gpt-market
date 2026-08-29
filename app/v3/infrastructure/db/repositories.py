@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
-from app.v3.infrastructure.db.models import AgentTaskModel, AuditEventModel
+from app.v3.domain.market_data import Market, SecurityMember, UniverseSnapshot
+from app.v3.infrastructure.db.models import (
+    AgentTaskModel,
+    AuditEventModel,
+    SecurityModel,
+    UniverseDiffModel,
+    UniverseMemberModel,
+    UniverseSnapshotModel,
+    UniverseSourceModel,
+)
 
 
 class SQLAlchemyAgentTaskRepository:
@@ -58,3 +68,179 @@ class SQLAlchemyAuditRepository:
                 metadata_payload=event.metadata,
             )
         )
+
+
+class SQLAlchemyUniverseRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def latest(self) -> UniverseSnapshot | None:
+        row = (
+            await self._session.execute(
+                select(UniverseSnapshotModel, UniverseSourceModel.code)
+                .join(UniverseSourceModel, UniverseSourceModel.source_id == UniverseSnapshotModel.source_id)
+                .order_by(UniverseSnapshotModel.known_at.desc(), UniverseSnapshotModel.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if row is None:
+            return None
+        snapshot, source_code = row
+        member_rows = (
+            await self._session.execute(
+                select(UniverseMemberModel, SecurityModel)
+                .join(SecurityModel, SecurityModel.security_id == UniverseMemberModel.security_id)
+                .where(UniverseMemberModel.snapshot_id == snapshot.snapshot_id)
+                .order_by(SecurityModel.market, SecurityModel.code)
+            )
+        ).all()
+        return UniverseSnapshot(
+            snapshot_id=snapshot.snapshot_id,
+            source_code=source_code,
+            status=snapshot.status,
+            as_of=snapshot.as_of,
+            fetch_time=snapshot.fetch_time,
+            known_at=snapshot.known_at,
+            coverage=float(snapshot.coverage),
+            stale=snapshot.stale,
+            previous_snapshot_id=snapshot.previous_snapshot_id,
+            members=tuple(
+                SecurityMember(
+                    code=security.code,
+                    market=Market(security.market),
+                    name=member.name,
+                    trading_status=member.trading_status,
+                    is_st=member.is_st,
+                    suspended=member.suspended,
+                    is_new_listing=member.is_new_listing,
+                    delisting_risk=member.delisting_risk,
+                    raw_reference=member.raw_reference,
+                )
+                for member, security in member_rows
+            ),
+            content_hash=snapshot.content_hash,
+        )
+
+    async def publish(self, snapshot: UniverseSnapshot) -> bool:
+        source_id = (
+            await self._session.execute(
+                insert(UniverseSourceModel)
+                .values(
+                    code=snapshot.source_code,
+                    source_type="MARKET_UNIVERSE",
+                    priority={"PRIMARY": 1, "SECONDARY": 2, "LKG": 3}[snapshot.status.value],
+                    capability_version="v3-phase2",
+                )
+                .on_conflict_do_update(
+                    index_elements=[UniverseSourceModel.code],
+                    set_={"enabled": True},
+                )
+                .returning(UniverseSourceModel.source_id)
+            )
+        ).scalar_one()
+        inserted = (
+            await self._session.execute(
+                insert(UniverseSnapshotModel)
+                .values(
+                    snapshot_id=snapshot.snapshot_id,
+                    source_id=source_id,
+                    as_of=snapshot.as_of,
+                    fetch_time=snapshot.fetch_time,
+                    known_at=snapshot.known_at,
+                    coverage=snapshot.coverage,
+                    stale=snapshot.stale,
+                    content_hash=snapshot.content_hash,
+                    previous_snapshot_id=snapshot.previous_snapshot_id,
+                    status=snapshot.status.value,
+                )
+                .on_conflict_do_nothing(index_elements=[UniverseSnapshotModel.content_hash])
+                .returning(UniverseSnapshotModel.snapshot_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return False
+
+        previous = await self._members_by_key(snapshot.previous_snapshot_id)
+        current: dict[tuple[str, str], tuple[SecurityMember, object]] = {}
+        for member in snapshot.members:
+            security_id = (
+                await self._session.execute(
+                    insert(SecurityModel)
+                    .values(code=member.code, market=member.market.value, name=member.name)
+                    .on_conflict_do_update(
+                        index_elements=[SecurityModel.market, SecurityModel.code],
+                        set_={"name": member.name},
+                    )
+                    .returning(SecurityModel.security_id)
+                )
+            ).scalar_one()
+            current[(member.market.value, member.code)] = (member, security_id)
+            self._session.add(
+                UniverseMemberModel(
+                    snapshot_id=snapshot.snapshot_id,
+                    security_id=security_id,
+                    **self._member_values(member),
+                )
+            )
+
+        for key in sorted(previous.keys() | current.keys()):
+            before = previous.get(key)
+            after = current.get(key)
+            before_payload = self._member_values(before[0]) if before else None
+            after_payload = self._member_values(after[0]) if after else None
+            if before_payload == after_payload:
+                continue
+            change_type = "ADDED" if before is None else "REMOVED" if after is None else "CHANGED"
+            security_id = (after or before)[1]
+            self._session.add(
+                UniverseDiffModel(
+                    snapshot_id=snapshot.snapshot_id,
+                    previous_snapshot_id=snapshot.previous_snapshot_id,
+                    security_id=security_id,
+                    change_type=change_type,
+                    before_value=before_payload,
+                    after_value=after_payload,
+                    reason="snapshot membership comparison",
+                )
+            )
+        return True
+
+    async def _members_by_key(
+        self, snapshot_id
+    ) -> dict[tuple[str, str], tuple[SecurityMember, object]]:
+        if snapshot_id is None:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(UniverseMemberModel, SecurityModel)
+                .join(SecurityModel, SecurityModel.security_id == UniverseMemberModel.security_id)
+                .where(UniverseMemberModel.snapshot_id == snapshot_id)
+            )
+        ).all()
+        return {
+            (security.market, security.code): (
+                SecurityMember(
+                    code=security.code,
+                    market=Market(security.market),
+                    **self._member_values_from_model(member),
+                ),
+                security.security_id,
+            )
+            for member, security in rows
+        }
+
+    @staticmethod
+    def _member_values(member: SecurityMember) -> dict:
+        return member.model_dump(mode="json", exclude={"code", "market"})
+
+    @staticmethod
+    def _member_values_from_model(member: UniverseMemberModel) -> dict:
+        return {
+            "name": member.name,
+            "trading_status": member.trading_status,
+            "is_st": member.is_st,
+            "suspended": member.suspended,
+            "is_new_listing": member.is_new_listing,
+            "delisting_risk": member.delisting_risk,
+            "raw_reference": member.raw_reference,
+        }

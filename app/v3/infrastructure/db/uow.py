@@ -4,7 +4,11 @@ from types import TracebackType
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.v3.infrastructure.db.repositories import SQLAlchemyAgentTaskRepository, SQLAlchemyAuditRepository
+from app.v3.infrastructure.db.repositories import (
+    SQLAlchemyAgentTaskRepository,
+    SQLAlchemyAuditRepository,
+    SQLAlchemyUniverseRepository,
+)
 
 
 class SQLAlchemyUnitOfWork:
@@ -18,6 +22,7 @@ class SQLAlchemyUnitOfWork:
         self._committed = False
         self.tasks = SQLAlchemyAgentTaskRepository(self._session)
         self.audits = SQLAlchemyAuditRepository(self._session)
+        self.universes = SQLAlchemyUniverseRepository(self._session)
         return self
 
     async def __aexit__(

@@ -5,6 +5,7 @@ from typing import Protocol
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
+from app.v3.domain.market_data import UniverseSnapshot
 
 
 class AgentTaskRepository(Protocol):
@@ -15,9 +16,16 @@ class AuditRepository(Protocol):
     async def add(self, event: AuditEvent) -> None: ...
 
 
+class UniverseRepository(Protocol):
+    async def latest(self) -> UniverseSnapshot | None: ...
+
+    async def publish(self, snapshot: UniverseSnapshot) -> bool: ...
+
+
 class UnitOfWork(Protocol):
     tasks: AgentTaskRepository
     audits: AuditRepository
+    universes: UniverseRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

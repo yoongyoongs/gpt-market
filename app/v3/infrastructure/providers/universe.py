@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import asyncio
+import re
+from html.parser import HTMLParser
+from typing import Any
+
+import httpx
+
+from app.providers.base import MarketDataProvider
+from app.utils.time import now_shanghai
+from app.v3.domain.market_data import Market, SecurityMember, UniverseFetchResult
+from app.v3.providers.universe import UniverseProviderError
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _plain_text(value: object) -> str:
+    parser = _TextExtractor()
+    parser.feed(str(value or ""))
+    return "".join(parser.parts).strip()
+
+
+def _risk_flags(name: str) -> tuple[bool, bool]:
+    normalized = name.upper().replace(" ", "")
+    return "ST" in normalized, "退" in name
+
+
+class LegacyUniverseProvider:
+    code = "eastmoney"
+
+    def __init__(self, provider: MarketDataProvider) -> None:
+        self._provider = provider
+
+    async def fetch_snapshot(self) -> UniverseFetchResult:
+        total, quotes = await self._provider.get_all_a_shares()
+        fetched_at = now_shanghai()
+        members = []
+        for quote in quotes:
+            is_st, delisting_risk = _risk_flags(quote.name)
+            members.append(
+                SecurityMember(
+                    code=quote.code,
+                    market=Market(quote.market),
+                    name=quote.name,
+                    trading_status="SUSPENDED" if quote.suspended else "ACTIVE",
+                    is_st=is_st,
+                    suspended=quote.suspended,
+                    delisting_risk=delisting_risk,
+                    raw_reference={"snapshot_id": quote.snapshot_id, "source": quote.source},
+                )
+            )
+        return UniverseFetchResult(
+            source_code=self.code,
+            as_of=max((quote.data_timestamp for quote in quotes), default=fetched_at),
+            fetch_time=fetched_at,
+            expected_total=max(total, len(members)),
+            members=tuple(members),
+        )
+
+    async def close(self) -> None:
+        return None
+
+
+class ExchangeUniverseProvider:
+    code = "official_exchanges"
+    sse_url = "https://query.sse.com.cn/sseQuery/commonQuery.do"
+    szse_url = "https://www.szse.cn/api/report/ShowReport/data"
+
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 20,
+        concurrency: int = 4,
+        attempts: int = 3,
+        request_gap: float = 0.05,
+    ) -> None:
+        self._client = client
+        self._owns_client = client is None
+        self._timeout = timeout
+        self._semaphore = asyncio.Semaphore(concurrency)
+        self._attempts = attempts
+        self._request_gap = request_gap
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self._timeout),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"},
+                follow_redirects=True,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+            self._client = None
+
+    async def _request_json(self, url: str, params: dict[str, Any], referer: str) -> Any:
+        client = await self._get_client()
+        last_error: Exception | None = None
+        for attempt in range(self._attempts):
+            try:
+                async with self._semaphore:
+                    response = await client.get(url, params=params, headers={"Referer": referer})
+                    await asyncio.sleep(self._request_gap)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+                if attempt + 1 < self._attempts:
+                    await asyncio.sleep(0.25 * (2**attempt))
+        raise UniverseProviderError(f"official universe request failed: {last_error}") from last_error
+
+    async def _sse_page(self, stock_type: str, page: int) -> dict[str, Any]:
+        payload = await self._request_json(
+            self.sse_url,
+            {
+                "sqlId": "COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L",
+                "STOCK_TYPE": stock_type,
+                "REG_PROVINCE": "",
+                "CSRC_CODE": "",
+                "STOCK_CODE": "",
+                "COMPANY_STATUS": "2,4,5,7,8",
+                "type": "inParams",
+                "isPagination": "true",
+                "pageHelp.cacheSize": 1,
+                "pageHelp.beginPage": page,
+                "pageHelp.pageSize": 500,
+                "pageHelp.pageNo": page,
+            },
+            "https://www.sse.com.cn/assortment/stock/list/share/",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("pageHelp"), dict):
+            raise UniverseProviderError("SSE universe payload is malformed")
+        return payload
+
+    async def _szse_page(self, page: int) -> list[dict[str, Any]]:
+        payload = await self._request_json(
+            self.szse_url,
+            {
+                "SHOWTYPE": "JSON",
+                "CATALOGID": "1110",
+                "TABKEY": "tab1",
+                "PAGENO": page,
+                "random": "0.6180339887",
+            },
+            "https://www.szse.cn/market/stock/company/",
+        )
+        if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+            raise UniverseProviderError("SZSE universe payload is malformed")
+        return payload
+
+    @staticmethod
+    def _parse_sse(payload: dict[str, Any]) -> list[SecurityMember]:
+        rows = payload["pageHelp"].get("data") or []
+        members = []
+        for row in rows:
+            code = str(row.get("A_STOCK_CODE") or row.get("COMPANY_CODE") or "").strip()
+            name = str(row.get("SEC_NAME_CN") or row.get("COMPANY_ABBR") or "").strip()
+            if not re.fullmatch(r"\d{6}", code) or not name:
+                continue
+            is_st, delisting_risk = _risk_flags(name)
+            members.append(
+                SecurityMember(
+                    code=code,
+                    market=Market.SH,
+                    name=name,
+                    trading_status="ACTIVE",
+                    is_st=is_st,
+                    delisting_risk=delisting_risk,
+                    raw_reference={"exchange": "SSE", "state_code": row.get("STATE_CODE_STOCK")},
+                )
+            )
+        return members
+
+    @staticmethod
+    def _parse_szse(payload: list[dict[str, Any]]) -> list[SecurityMember]:
+        rows = payload[0].get("data") or []
+        members = []
+        for row in rows:
+            code = str(row.get("agdm") or "").strip()
+            name = _plain_text(row.get("agjc"))
+            if not re.fullmatch(r"\d{6}", code) or not name:
+                continue
+            is_st, delisting_risk = _risk_flags(name)
+            members.append(
+                SecurityMember(
+                    code=code,
+                    market=Market.SZ,
+                    name=name,
+                    trading_status="ACTIVE",
+                    is_st=is_st,
+                    delisting_risk=delisting_risk,
+                    raw_reference={"exchange": "SZSE", "board": row.get("bk")},
+                )
+            )
+        return members
+
+    async def fetch_snapshot(self) -> UniverseFetchResult:
+        fetched_at = now_shanghai()
+        sse_main, sse_star, szse_first = await asyncio.gather(
+            self._sse_page("1", 1), self._sse_page("8", 1), self._szse_page(1)
+        )
+        sse_payloads = [sse_main, sse_star]
+        sse_requests = []
+        for stock_type, first in (("1", sse_main), ("8", sse_star)):
+            page_count = int(first["pageHelp"].get("pageCount") or 1)
+            sse_requests.extend(self._sse_page(stock_type, page) for page in range(2, page_count + 1))
+        szse_metadata = szse_first[0].get("metadata") or {}
+        szse_page_count = int(szse_metadata.get("pagecount") or 1)
+        remaining = await asyncio.gather(*sse_requests)
+        szse_remaining = await asyncio.gather(
+            *(self._szse_page(page) for page in range(2, szse_page_count + 1))
+        )
+        sse_payloads.extend(remaining)
+        members = [member for payload in sse_payloads for member in self._parse_sse(payload)]
+        szse_payloads = [szse_first, *szse_remaining]
+        szse_members = [member for payload in szse_payloads for member in self._parse_szse(payload)]
+        szse_expected = int(szse_metadata.get("recordcount") or 0)
+        if szse_expected and len(szse_members) != szse_expected:
+            raise UniverseProviderError(
+                f"SZSE universe incomplete: expected {szse_expected}, parsed {len(szse_members)}"
+            )
+        members.extend(szse_members)
+        expected_total = sum(int(payload["pageHelp"].get("total") or 0) for payload in (sse_main, sse_star))
+        expected_total += max(szse_expected, len(szse_members))
+        return UniverseFetchResult(
+            source_code=self.code,
+            as_of=fetched_at,
+            fetch_time=fetched_at,
+            expected_total=max(expected_total, len(members)),
+            members=tuple(members),
+        )

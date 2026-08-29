@@ -52,6 +52,28 @@ class SecurityMember(V3Contract):
     raw_reference: dict[str, Any] = Field(default_factory=dict)
 
 
+class UniverseFetchResult(V3Contract):
+    source_code: str = Field(min_length=1, max_length=64)
+    as_of: datetime
+    fetch_time: datetime
+    expected_total: int = Field(gt=0)
+    members: tuple[SecurityMember, ...]
+
+    @field_validator("as_of", "fetch_time")
+    @classmethod
+    def validate_datetimes(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "UniverseFetchResult":
+        if not self.members:
+            raise ValueError("universe provider returned no members")
+        keys = [(member.market, member.code) for member in self.members]
+        if len(keys) != len(set(keys)):
+            raise ValueError("universe provider returned duplicate members")
+        return self
+
+
 class UniverseSnapshotContent(V3Contract):
     snapshot_id: UUID
     source_code: str = Field(min_length=1, max_length=64)
