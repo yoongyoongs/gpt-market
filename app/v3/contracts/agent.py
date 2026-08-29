@@ -68,6 +68,9 @@ class AgentTask(V3Contract):
     def validate_as_of(cls, value: datetime) -> datetime:
         return require_aware(value, "as_of")
 
+    def computed_content_hash(self) -> str:
+        return canonical_hash(self)
+
 
 class AIResultEnvelopeContent(V3Contract):
     schema_version: str = "v3.0"
