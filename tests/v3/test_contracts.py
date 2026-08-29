@@ -19,6 +19,14 @@ def test_canonical_hash_is_stable_across_mapping_order() -> None:
     assert canonical_hash(first) == canonical_hash(second)
 
 
+def test_canonical_hash_normalizes_equivalent_timezone_offsets() -> None:
+    utc_value = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
+    shanghai_value = utc_value.astimezone(timezone(timedelta(hours=8)))
+
+    assert canonical_json({"at": utc_value}) == canonical_json({"at": shanghai_value})
+    assert canonical_hash({"at": utc_value}) == canonical_hash({"at": shanghai_value})
+
+
 def test_canonical_json_rejects_non_finite_numbers() -> None:
     with pytest.raises(ValueError, match="Out of range float"):
         canonical_json({"invalid": float("nan")})

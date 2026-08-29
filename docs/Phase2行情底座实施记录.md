@@ -36,6 +36,8 @@
 
 上游声明 5,551，解析 5,551，唯一代码 5,551，覆盖率 100%，墙钟 5.309 秒；北交所 339 只全部为当前 `920xxx` 代码。任一交易所分页不完整都会拒绝整份 Secondary 快照，不以沪深数据冒充全 A 股。
 
+集合对账进一步发现东方财富列表 5,905 是官方 5,551 的超集，多出 354 条：BJ 12、SH 151、SZ 191；样本包含定向可转债、转板旧代码及大量退市证券，官方集合没有 `official_only` 缺口。因此 Job 调整为三交易所官方源 PRIMARY、东方财富 SECONDARY，并增加相对 LKG 最大 5% 异常扩张门禁；数量更多不再自动等于覆盖更好。
+
 ## 3. Bar Provider 实测
 
 探针：`scripts/v3_phase2_bar_probe.py`，300 个交易日，4 并发，最后 Bar 不得早于当前日期前 10 个自然日。
@@ -83,6 +85,9 @@
 - PostgreSQL 端到端测试：`test_backfill_run_reads_universe_checkpoints_and_replays_without_duplicates`，服务器隔离 PostgreSQL 17 实测通过。
 - 6 目标、并发上限 3 的故障注入测试实测最大并发为 3，并产生初始、两个批次和终态共 4 次 checkpoint；
 - 真实 PostgreSQL 17 以默认并发重跑 2 目标发布与幂等重放通过。
+- Universe 成员在 Domain 按 `(market, code)` 规范排序后再哈希，Provider 返回顺序不再影响集合事实；
+- Canonical Hash 将 aware datetime 统一转换为 UTC；Universe coverage、Factor、OHLC、成交额分别规范到 DDL 的 5/12/6/4 位小数，保证 PostgreSQL 往返可复算；
+- `scripts/v3_phase2_universe_hash_audit.py` 在 5,551 成员快照上验证存储 Hash 与数据库重建 Hash 完全一致。
 
 ## 6. 交易日历验收
 
@@ -92,7 +97,19 @@
 - 2026-02-24 至 2026-02-27 节后短周只含 4 个 Session，周五 15:10 后可发布完整周 Bar，不要求伪造第 5 根；
 - 本地严格日历及聚合测试 8 项通过，服务器 Python 3.12 镜像复测 6 项通过。
 
-## 7. 当前未完成
+## 7. Job 冷启动与恢复验收
+
+入口：`scripts/v3_phase2_market_job.py`。
+
+- 支持 `universe`、`backfill`、`all` 三种模式；数据库地址必填且错误输出会脱敏；
+- 支持 `run_id` 恢复、`stop_after` 分段、300 日限制、1..32 并发和 JSON/原子文件报告；
+- 最近完整交易日由严格日历计算，2026-08-30 运行时门禁日期为 2026-08-28；
+- 服务器新建 `gpt_market_phase2_job3`，从空库 Migration `0001 -> 0002` 后执行 `all --stop-after 20`；
+- Universe PRIMARY 为官方 5,551（BJ 339、SH 2,315、SZ 2,897），前 20 只行情 `20/20`，失败 0，墙钟 24.772 秒；
+- 使用同一 `run_id` 恢复后从 `next_index=20` 推进到 40，新增 20 只 `20/20`，失败 0，墙钟 9.708 秒；
+- 运行终态若为 `PARTIAL/FAILED`，CLI 返回非零，供 Scheduler/容器健康检查报警。
+
+## 8. 当前未完成
 
 - 全市场 5,000+ 证券正式跑批及覆盖率/耗时验收（受控并发能力已具备）；
 - 日常增量调度，以及 2027 年交易日历发布后的升级复验；

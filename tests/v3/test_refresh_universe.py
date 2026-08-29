@@ -164,6 +164,20 @@ async def test_coverage_drop_is_rejected_and_falls_back_to_lkg() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unexpected_universe_expansion_is_rejected() -> None:
+    previous = snapshot()
+    store = Store(previous)
+    result = await service(
+        store,
+        FakeProvider("primary", result=fetched("primary", 106, 106)),
+    ).execute()
+
+    assert result.snapshot.status is UniverseSnapshotStatus.LKG
+    assert result.snapshot.members == previous.members
+    assert "grew too far" in result.provider_errors[0]
+
+
+@pytest.mark.asyncio
 async def test_all_fail_without_lkg_raises_explicit_error() -> None:
     store = Store()
     with pytest.raises(AllUniverseProvidersFailed, match="primary"):

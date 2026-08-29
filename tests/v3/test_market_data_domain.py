@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.v3.domain.market_data import (
     AdjustType,
+    AdjustmentFactorPoint,
     BarPeriod,
     BarSeriesRevision,
     BarSeriesRevisionContent,
@@ -59,6 +60,59 @@ def test_universe_snapshot_hash_and_unique_members() -> None:
 
     with pytest.raises(ValidationError, match="unique"):
         UniverseSnapshotContent(**content.model_dump(exclude={"members"}), members=(member(), member()))
+
+
+def test_universe_snapshot_hash_is_independent_of_provider_member_order() -> None:
+    snapshot_id = uuid4()
+    first = SecurityMember(code="600000", market=Market.SH, name="浦发银行")
+    second = SecurityMember(code="000001", market=Market.SZ, name="平安银行")
+    values = {
+        "snapshot_id": snapshot_id,
+        "source_code": "fixture",
+        "status": UniverseSnapshotStatus.PRIMARY,
+        "as_of": NOW,
+        "fetch_time": NOW,
+        "known_at": NOW,
+        "coverage": 1,
+        "stale": False,
+    }
+
+    ordered = UniverseSnapshot.build(UniverseSnapshotContent(**values, members=(first, second)))
+    reversed_input = UniverseSnapshot.build(
+        UniverseSnapshotContent(**values, members=(second, first))
+    )
+
+    assert ordered.content_hash == reversed_input.content_hash
+    assert ordered.members == reversed_input.members
+
+
+def test_market_data_values_are_normalized_to_database_precision() -> None:
+    content = UniverseSnapshotContent(
+        snapshot_id=uuid4(),
+        source_code="fixture",
+        status=UniverseSnapshotStatus.PRIMARY,
+        as_of=NOW,
+        fetch_time=NOW,
+        known_at=NOW,
+        coverage=0.9400508044,
+        stale=False,
+        members=(member(),),
+    )
+    value = MarketBar(
+        bar_time=NOW,
+        open=10.1234567,
+        high=11.1234567,
+        low=9.1234567,
+        close=10.5234567,
+        volume=100,
+        amount=1234.56789,
+        fetch_time=NOW,
+    )
+
+    assert content.coverage == 0.94005
+    assert value.open == 10.123457
+    assert value.amount == 1234.5679
+    assert AdjustmentFactorPoint(trading_time=NOW, factor=1.1234567890126).factor == 1.123456789013
 
 
 def test_lkg_snapshot_must_be_stale() -> None:

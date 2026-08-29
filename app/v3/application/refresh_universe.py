@@ -39,6 +39,7 @@ class RefreshUniverseService:
         minimum_members: int = 4500,
         minimum_coverage: float = 0.9,
         minimum_retention: float = 0.9,
+        maximum_growth: float = 1.05,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if not providers:
@@ -48,6 +49,7 @@ class RefreshUniverseService:
         self._minimum_members = minimum_members
         self._minimum_coverage = minimum_coverage
         self._minimum_retention = minimum_retention
+        self._maximum_growth = maximum_growth
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     async def execute(self) -> RefreshUniverseResult:
@@ -121,6 +123,8 @@ class RefreshUniverseService:
             )
         if latest and member_count / len(latest.members) < self._minimum_retention:
             raise UniverseCoverageError("member count dropped too far from latest snapshot")
+        if latest and member_count / len(latest.members) > self._maximum_growth:
+            raise UniverseCoverageError("member count grew too far from latest snapshot")
         return min(coverage, 1.0)
 
     def _build_snapshot(

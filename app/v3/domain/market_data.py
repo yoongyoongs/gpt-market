@@ -94,6 +94,11 @@ class AdjustmentFactorPoint(V3Contract):
     def validate_trading_time(cls, value: datetime) -> datetime:
         return require_aware(value, "trading_time")
 
+    @field_validator("factor")
+    @classmethod
+    def normalize_factor_precision(cls, value: float) -> float:
+        return round(value, 12)
+
 
 class AdjustmentFactorRevisionContent(V3Contract):
     factor_revision_id: UUID
@@ -192,6 +197,18 @@ class UniverseSnapshotContent(V3Contract):
     def validate_datetimes(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
 
+    @field_validator("members")
+    @classmethod
+    def canonicalize_members(
+        cls, value: tuple[SecurityMember, ...]
+    ) -> tuple[SecurityMember, ...]:
+        return tuple(sorted(value, key=lambda member: (member.market.value, member.code)))
+
+    @field_validator("coverage")
+    @classmethod
+    def normalize_coverage_precision(cls, value: float) -> float:
+        return round(value, 5)
+
     @model_validator(mode="after")
     def validate_snapshot(self) -> "UniverseSnapshotContent":
         if self.known_at < self.fetch_time:
@@ -239,6 +256,16 @@ class MarketBar(V3Contract):
     @classmethod
     def validate_datetimes(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
+
+    @field_validator("open", "high", "low", "close")
+    @classmethod
+    def normalize_price_precision(cls, value: float) -> float:
+        return round(value, 6)
+
+    @field_validator("amount")
+    @classmethod
+    def normalize_amount_precision(cls, value: float | None) -> float | None:
+        return None if value is None else round(value, 4)
 
     @model_validator(mode="after")
     def validate_ohlc(self) -> "MarketBar":
