@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="38ca8f6e32387bb7abf6a675e17ee188ab64815cc1bf97c3e2c65f8987e92487"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="ce2af51f7a3576bd0b1b10db5bb29a52b56f91a7f51ba43f1a4013f01f493d35"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,15 +16,15 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：38ca8f6e3238</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：ce2af51f7a35</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-29（Asia/Shanghai）
-当前分支：<code>main</code>
+当前分支：<code>codex/phase1-foundation</code>
 当前稳定基线：<code>V3 Architecture Baseline 1.0</code>
 状态对应提交：以本文件所在的 <code>origin/main</code> 最新提交为准</p>
 </blockquote>
 <h2 id="_1">当前结论<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
-<p>V3 架构设计已经冻结为 Baseline 1.0。最新文档审查要求的 PositionReview 持久化、账户级 Portfolio Adjustment、Task Partial Completed、EntryPlan Version 和 Requirements Traceability Matrix 已全部完成并通过一致性检查。此次只修改文档；Phase 1 尚未开始，也尚未获得实施授权。当前仓库仍以现有 V1/V2 行情服务代码为运行基础。</p>
+<p>V3 架构设计已经冻结为 Baseline 1.0。用户已于 2026-08-29 验收 Phase 1，并明确授权继续完成 Phase 2–11 全部 V3。当前进入 Phase 1 合并检查点和 Phase 2 全市场历史底座实施；继续保持 V1/V2 兼容，不修改其评分规则，线上仍以现有 V1/V2 + Phase2A 部署为运行基线。</p>
 <h2 id="_2">已完成<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
 <ul>
 <li>V2/Phase2A 基线提交：<code>556a335</code>；</li>
@@ -41,22 +41,33 @@
 <li>五份核心 V3 设计文档及架构实施稿已完成五项一致性修补；</li>
 <li>《需求追踪矩阵》已覆盖全部 49 项 P0/P1，并映射 Phase、模块、表/存储、API/Job、测试、状态和证据；</li>
 <li>《Baseline 一致性修补摘要》已建立，最新审查输入已归档。</li>
+<li>Phase 1 启动检查点已创建并推送：<code>ca754f3</code>；</li>
+<li>已审计配置、Container、Compose、依赖、SQLite/JSONL 和测试结构；</li>
+<li>ADR-0001 已确认 PostgreSQL 17 + SQLAlchemy 2.0 async + asyncpg + Alembic async，V3 默认关闭并与 Legacy 生命周期隔离。</li>
+<li>已增加 V3 Feature Flag、数据库配置、PostgreSQL Compose Profile、SQLAlchemy async 生命周期和禁用态 Container；</li>
+<li>默认禁用与配置约束测试已通过，现有 Container 只增加隔离的 V3 生命周期挂点。</li>
+<li>已建立 Alembic async 环境、统一 SQLAlchemy Metadata、离线 Migration 能力和独立迁移说明；应用启动不会自动运行 Migration。</li>
+<li>已实现 Canonical JSON/Hash、时区与 <code>known_at</code> 契约、AgentTask/AIResultEnvelope、Evidence Contract 和 Task Group Count 状态机；</li>
+<li>首个 Migration 已定义 Evidence、Task、Agent Envelope 和 Audit 共 9 张基础表，并为 Raw/Evidence/Task/Envelope/Audit 关键事实增加数据库不可变触发器。</li>
+<li>已在服务器隔离网络和隔离目录完成 Python 3.12 镜像构建及 PostgreSQL 17 真实验收；Upgrade、9 表检查、<code>known_at</code>/组计数约束、不可变触发器、Downgrade、Backup/Restore 均通过，未改动生产容器。</li>
+<li>已完成 Repository Protocol、SQLAlchemy Repository、Unit of Work、Audit Contract 和 AgentTask 注册用例；Task 与 Audit 同事务提交，失败整体回滚。</li>
+<li>Phase 1 技术验收记录已建立；用户已确认验收并授权继续完成全部 V3。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>无；等待用户 Review，未获授权前不进入 Phase 1。</li>
+<li>创建 Phase 1 合并检查点和标签；</li>
+<li>启动 Phase 2 的 Universe 冗余、全市场 Raw Bar/Factor、Revision、增量更新和本地周/月聚合。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 1：PostgreSQL、迁移框架、Observation/Evidence Schema、<code>known_at</code>、Agent Contract、Audit、Task 基础；</li>
 <li>Phase 2 及后续所有 V3 实施阶段；</li>
-<li>V3 数据库 Migration；</li>
+<li>生产环境 V3 PostgreSQL 部署和正式 Migration；</li>
 <li>V3 API、Worker、Feature、Recall、Evidence Ingestion、AI Import 和 Portfolio 实现；</li>
 <li>服务器 V3 部署。</li>
 </ul>
 <h2 id="unknown">阻塞与 UNKNOWN<a class="headerlink" href="#unknown" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 1 必须等待用户明确确认后才能开始；</li>
+<li>Scheduler 技术实现仍待进入对应 Phase 后确认；</li>
 <li>Secondary Universe Provider 仍为 <code>UNKNOWN</code>；</li>
 <li>严格交易日历 Provider 尚未实施验证；</li>
 <li>部分历史数据可能只有前复权序列，Point-in-Time 精度需在 Phase 2 实测；</li>
@@ -71,17 +82,29 @@
 <li>文档生成检查：29 组 Markdown/HTML 内容 Hash 同步（包含根 README、CONTRIBUTING 与 <code>docs</code>）；</li>
 <li>需求追踪检查：需求规格中的 49 项 P0/P1 与矩阵 49 项一一对应，无缺失、无重复、无额外编号；</li>
 <li>术语检查：正式文档不存在 <code>corporate_action_adjustments</code> 或整包 <code>ALL_OR_NOTHING</code> 旧设计；</li>
-<li>项目 <code>.venv</code> 当前没有 <code>pip</code>，本轮使用 Codex 随附 Python 安装文档开发依赖并执行生成器。</li>
+<li>当前本地 <code>.venv</code> 使用 Python 3.13；Phase 1 应用镜像已在服务器使用 Python 3.12 构建通过。</li>
+<li>Phase 1 启动前全套测试：<code>72 passed, 5 skipped</code>；</li>
+<li>本机 Docker/Compose 可用；仓库内不存在既有 SQLAlchemy/Alembic/PostgreSQL 实现；</li>
+<li>SQLAlchemy/Alembic/asyncpg 选型已对照官方 async 文档核验。</li>
+<li>V3 数据库基础单元与 Legacy 回归：<code>75 passed, 5 skipped</code>；</li>
+<li>Compose YAML 结构检查通过；本机 Docker CLI 可用但守护进程未运行，改在服务器隔离环境完成 Python 3.12 镜像和 PostgreSQL 17 验收。</li>
+<li>Alembic 环境、Metadata 和离线 SQL 验证通过；全套测试：<code>77 passed, 5 skipped</code>。</li>
+<li>Contract、Task 状态、Metadata 与首个 Migration 离线验证通过；全套测试：<code>83 passed, 5 skipped</code>；</li>
+<li>真实 PostgreSQL 17 验收：Upgrade 至 <code>0001_phase1_foundation</code> 成功，<code>v3</code> 下 9 张表齐全；不可变触发器、<code>known_at &gt;= fetch_time</code> 和任务组计数不变量均实际拒绝非法写入。</li>
+<li>Migration 可逆性与灾备验收：Downgrade 至 <code>base</code> 后 <code>v3</code> schema 和版本记录均为空；<code>pg_dump</code> 恢复后 9 张表、版本号、测试数据和不可变触发器均正常。</li>
+<li>PostgreSQL 集成测试入口：<code>tests/v3/test_postgres_integration.py</code>，由 <code>V3_TEST_DATABASE_URL</code> 显式启用；未配置真实数据库时跳过，禁止伪装为已通过。</li>
+<li>当前全套本地回归：<code>86 passed, 8 skipped</code>；3 项 PostgreSQL 集成测试因本机未配置 <code>V3_TEST_DATABASE_URL</code> 明确跳过，其等价断言已在服务器隔离 PostgreSQL 17 上通过。</li>
+<li>Repository/Audit Fake 测试覆盖同事务提交、顺序幂等和 Audit 失败回滚；真实 PostgreSQL 进一步通过相同 Task ID 内容冲突及 8 并发幂等验证。</li>
+<li>验收期间生产 <code>market-mcp</code> 持续为 <code>healthy</code>，Phase 1 仍未合并 <code>main</code>、未正式部署。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
-<p>停止在 Baseline 文档阶段，等待用户 Review 和是否进入 Phase 1 的明确确认。获得授权后的第一步是：</p>
 <ol>
-<li>从最新 <code>main</code> 创建 <code>codex/phase1-foundation</code> 分支；</li>
-<li>再次核对架构实施稿 Phase 1 的范围与验收标准；</li>
-<li>审计当前配置、容器、存储和测试结构；</li>
-<li>先提交 Phase 1 的最小实施计划与状态更新；</li>
-<li>按“一个可验证步骤、一次状态更新、一次中文提交、一次立即推送”执行。</li>
+<li>合并 Phase 1 到 <code>main</code> 并建立可回滚标签；</li>
+<li>新建 Phase 2 分支和实施检查点；</li>
+<li>实现 Universe、Raw Bar、Factor Revision、增量任务和质量验收；</li>
+<li>保持生产 V3 关闭，直到对应部署验收通过。</li>
 </ol>
+<p>当前回滚点为 <code>origin/main@68884db</code>；Phase 1 未验收前不合并 <code>main</code>、不部署服务器。</p>
 <h2 id="_7">接手关键文件<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
 <pre><code class="language-text">README.md
 docs/架构设计实施稿.md

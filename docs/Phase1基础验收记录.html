@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="0401a9438bca0272d9ef191a634e2ccd1f3eef69a57d2ef59690f2d03f99d00c"><title>V3 Phase 1 基础验收记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 验收范围</a></li>
+<li><a href="#2">2. 运行环境</a></li>
+<li><a href="#3-phase-1">3. Phase 1 输出核对</a></li>
+<li><a href="#4-postgresql">4. 真实 PostgreSQL 结果</a></li>
+<li><a href="#5-migration">5. 后续 Migration 计划</a></li>
+<li><a href="#6">6. 已知边界</a></li>
+<li><a href="#7">7. 回滚与进入下一阶段</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase1基础验收记录.md · 内容哈希：0401a9438bca</div><h1 id="v3-phase-1">V3 Phase 1 基础验收记录<a class="headerlink" href="#v3-phase-1" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>验收日期：2026-08-29（Asia/Shanghai）
+验收分支：<code>codex/phase1-foundation</code>
+结论：技术验收通过；用户已于 2026-08-29 确认继续完成全部 V3</p>
+</blockquote>
+<h2 id="1">1. 验收范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>本轮只验收《架构设计实施稿》Phase 1：PostgreSQL、Migration、正式时点、Agent Contract、Task、Audit 和 Repository 基础。未修改 V1/V2 评分规则、Scanner、Provider、MCP 和 Web 路由，也未进入 Phase 2 数据工程。</p>
+<h2 id="2">2. 运行环境<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>实际环境</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>应用运行时</td>
+<td>Python 3.12 Docker 镜像</td>
+</tr>
+<tr>
+<td>数据库</td>
+<td>PostgreSQL 17 bookworm</td>
+</tr>
+<tr>
+<td>ORM/Driver</td>
+<td>SQLAlchemy 2.0 async + asyncpg</td>
+</tr>
+<tr>
+<td>Migration</td>
+<td>Alembic async</td>
+</tr>
+<tr>
+<td>隔离方式</td>
+<td>独立目录、独立 Docker Network、无宿主端口</td>
+</tr>
+<tr>
+<td>生产影响</td>
+<td><code>market-mcp</code> 未重启、持续 healthy</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-phase-1">3. Phase 1 输出核对<a class="headerlink" href="#3-phase-1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>输出要求</th>
+<th>状态</th>
+<th>证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>持久化选型 ADR</td>
+<td>通过</td>
+<td><code>docs/adr/0001-phase1-persistence.md</code></td>
+</tr>
+<tr>
+<td>PostgreSQL Compose</td>
+<td>通过</td>
+<td><code>docker-compose.yml</code> 的 <code>v3</code> Profile</td>
+</tr>
+<tr>
+<td>初始 Migration</td>
+<td>通过</td>
+<td><code>0001_phase1_foundation</code>，包含 9 张基础表</td>
+</tr>
+<tr>
+<td>Down/Restore</td>
+<td>通过</td>
+<td>Downgrade 到 <code>base</code> 后 schema 清空；<code>pg_dump</code> 恢复后表、版本、数据和触发器正常</td>
+</tr>
+<tr>
+<td>时间与 Hash</td>
+<td>通过</td>
+<td>时区感知契约、Canonical JSON/Hash、<code>known_at</code> 数据库约束</td>
+</tr>
+<tr>
+<td>Agent/Task 契约</td>
+<td>通过</td>
+<td>AgentTask、AIResultEnvelope、组计数状态机及数据库约束</td>
+</tr>
+<tr>
+<td>Audit/Repository</td>
+<td>通过</td>
+<td>Repository Protocol、SQLAlchemy Adapter、Unit of Work、Task + Audit 同事务用例</td>
+</tr>
+<tr>
+<td>不可变事实</td>
+<td>通过</td>
+<td>Raw/Evidence/Task/Envelope/Audit 的 UPDATE/DELETE 触发器</td>
+</tr>
+<tr>
+<td>Legacy 回归</td>
+<td>通过</td>
+<td>完整测试套件通过；V3 默认关闭</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-postgresql">4. 真实 PostgreSQL 结果<a class="headerlink" href="#4-postgresql" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Upgrade 到 <code>0001_phase1_foundation</code> 成功，<code>v3</code> schema 下 9 张表齐全。</li>
+<li><code>known_at &lt; fetch_time</code> 被数据库约束拒绝。</li>
+<li><code>expected_group_count != successful + failed + pending</code> 被数据库约束拒绝。</li>
+<li>Raw Document UPDATE 被不可变触发器拒绝。</li>
+<li>AgentTask 与 Audit 在同一 Unit of Work 提交，结果为 1 Task + 1 Audit。</li>
+<li>同一内容顺序重试不重复写 Task 或 Audit。</li>
+<li>Audit 契约失败后 Task 未落库，事务整体回滚。</li>
+<li>相同 Task ID 携带不同内容被完整性约束拒绝，不冒充幂等成功。</li>
+<li>8 个并发事务提交相同任务，最终只有 1 Task + 1 Audit。</li>
+<li>Downgrade、空库重建和 Restore 后，9 张表、Migration 版本、数据及不可变触发器均恢复正常。</li>
+</ol>
+<p>可重复集成测试位于 <code>tests/v3/test_postgres_integration.py</code>，必须通过 <code>V3_TEST_DATABASE_URL</code> 显式连接真实 PostgreSQL；未配置时测试明确跳过。</p>
+<h2 id="5-migration">5. 后续 Migration 计划<a class="headerlink" href="#5-migration" title="Permanent link">&para;</a></h2>
+<p>Phase 1 不提前创建尚未进入实施阶段的业务表。后续按 Phase 单独增加版本，禁止修改已发布的 <code>0001</code>：</p>
+<table>
+<thead>
+<tr>
+<th>计划版本</th>
+<th style="text-align: right;">对应 Phase</th>
+<th>主要对象</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0002_market_data_foundation</code></td>
+<td style="text-align: right;">2</td>
+<td>Universe、Raw Bar、Corporate Action、Factor Revision</td>
+</tr>
+<tr>
+<td><code>0003_feature_and_regime</code></td>
+<td style="text-align: right;">3</td>
+<td>Feature Run、Published Snapshot、Market Regime</td>
+</tr>
+<tr>
+<td><code>0004_evidence_pipeline</code></td>
+<td style="text-align: right;">4</td>
+<td>Entity Link、Conflict、Decay、Parser Run</td>
+</tr>
+<tr>
+<td><code>0005_recall_and_context</code></td>
+<td style="text-align: right;">5–6</td>
+<td>Recall、Comparison、Context Pack、Expected Run 扩展</td>
+</tr>
+<tr>
+<td><code>0006_ai_import_and_decision</code></td>
+<td style="text-align: right;">7</td>
+<td>Import、Atomic Group、Decision、Review、EntryPlan</td>
+</tr>
+<tr>
+<td><code>0007_portfolio_ledger</code></td>
+<td style="text-align: right;">8–9</td>
+<td>Trade Ledger、Adjustment、Portfolio、Position Review</td>
+</tr>
+<tr>
+<td><code>0008_performance_replay</code></td>
+<td style="text-align: right;">10</td>
+<td>Performance、Replay、Regression、Recall Miss</td>
+</tr>
+</tbody>
+</table>
+<p>具体编号可因实际依赖拆分，但每个版本必须独立执行 Upgrade/Downgrade，并在合并前验证 Restore。</p>
+<h2 id="6">6. 已知边界<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>当前不是 V3 可用产品版本，没有新增 V3 API 或页面。</li>
+<li>PostgreSQL 尚未部署到生产，V3 Feature Flag 保持关闭。</li>
+<li>Secondary Universe Provider、严格交易日历和历史 Point-in-Time 精度仍按文档标记为 <code>UNKNOWN</code>，由后续 Phase 实测。</li>
+<li>Phase 7 的 Atomic Group Import、Phase 8 的 Trade Ledger 和后续业务审计尚未实现；本轮只提供可复用事务基础。</li>
+</ul>
+<h2 id="7">7. 回滚与进入下一阶段<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p>Phase 1 验收前的生产回滚基线为 <code>origin/main@68884db</code>。用户已确认继续完成全部 V3；下一步创建 Phase 1 合并检查点并进入 Phase 2，生产 V3 仍须在对应部署验收通过后启用。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="8fb6524e08013e40672106347badb45fe8dc66ced76654d9ad1209929adcdb9c"><title>ADR-0001：Phase 1 PostgreSQL 持久化与迁移选型</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#_1">背景</a></li>
+<li><a href="#_2">决策</a></li>
+<li><a href="#_3">依赖范围</a></li>
+<li><a href="#_4">目录边界</a></li>
+<li><a href="#_5">事务与生命周期</a></li>
+<li><a href="#_6">测试和验收</a></li>
+<li><a href="#_7">回滚</a></li>
+<li><a href="#_8">未决项</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/adr/0001-phase1-persistence.md · 内容哈希：8fb6524e0801</div><h1 id="adr-0001phase-1-postgresql">ADR-0001：Phase 1 PostgreSQL 持久化与迁移选型<a class="headerlink" href="#adr-0001phase-1-postgresql" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>状态：Accepted
+日期：2026-08-29
+范围：V3 Phase 1 正式状态与时点基础</p>
+</blockquote>
+<h2 id="_1">背景<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>现有 V1/V2 使用进程内缓存、SQLite Kline 和 JSONL Scan History。它们继续作为 Legacy 运行底座，但不能满足 V3 对不可变 Revision、<code>known_at</code>、事务、外键、幂等、审计和严格 Replay 的要求。V3 Baseline 要求 PostgreSQL 正式状态、显式 Migration、可回滚发布，以及与现有行情链隔离的 Repository 边界。</p>
+<p>仓库审计确认：当前没有 PostgreSQL Driver、ORM、Migration、V3 Repository 或 Worker 基础；<code>Container</code> 只装配现有行情和基本面服务；Compose 只有一个只读根文件系统的 API 服务。</p>
+<h2 id="_2">决策<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ol>
+<li>PostgreSQL 使用 <code>postgres:17-bookworm</code>。生产和测试固定大版本，补丁版本由镜像更新管理；数据库不暴露公网。</li>
+<li>Python 持久化采用 SQLAlchemy 2.0 async API，Driver 使用 <code>asyncpg</code>。</li>
+<li>Migration 使用 Alembic async 模板。Migration 由发布步骤显式执行，API/Worker 启动时禁止自动抢跑 Migration。</li>
+<li>Application 每个事务创建独立 <code>AsyncSession</code>；禁止跨并发任务共享 Session，也不使用全局 <code>async_scoped_session</code>。</li>
+<li>Domain Entity、Value Object 和 Policy 不依赖 SQLAlchemy。Repository Protocol 位于内层，SQLAlchemy Model/Repository 位于 <code>app/v3/infrastructure/db</code>。</li>
+<li>V3 使用独立 <code>app/v3</code>、独立配置和 <code>V3_ENABLED</code> Feature Flag。默认关闭时不创建 Engine、不连接 PostgreSQL，不改变 V1/V2 生命周期。</li>
+<li>数据库 URL 只来自环境变量；Alembic 配置文件不保存密码。Runtime 与 Migration 账户的权限分离在生产部署前落实。</li>
+<li>Migration 必须支持空库 <code>upgrade head</code>、逐版本 downgrade 或明确恢复脚本，并在发布前执行备份与恢复验证。</li>
+</ol>
+<h2 id="_3">依赖范围<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">SQLAlchemy&gt;=2.0,&lt;2.2
+asyncpg&gt;=0.30,&lt;1
+alembic&gt;=1.16,&lt;2
+</code></pre>
+<p>范围允许兼容补丁升级，锁定前由测试验证。选择 SQLAlchemy 2.0 系列是为了使用稳定的 <code>create_async_engine</code>、<code>async_sessionmaker</code> 和类型化映射；Alembic 通过 Async Engine 的 <code>run_sync</code> 执行同步迁移核心。</p>
+<h2 id="_4">目录边界<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">app/v3/
+├── contracts/
+├── domain/
+├── repositories/
+└── infrastructure/db/
+    ├── models/
+    ├── repositories/
+    └── session.py
+migrations/
+├── env.py
+└── versions/
+tests/v3/
+</code></pre>
+<p>首个 Migration 只承载 Phase 1 基础：Schema Version、Audit、Task/Agent Contract、不可变时点记录所需的最小表和约束。Universe、Bar、Feature、Recall、Trade 与 Portfolio 表按后续 Phase 增量加入，不提前创建空壳大表。</p>
+<h2 id="_5">事务与生命周期<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Application Use Case 拥有事务边界；Repository 不自行提交。</li>
+<li>一个 Atomic Group 对应一个数据库事务；Phase 1 先建立可复用事务基础，不提前实现 Phase 7 Import。</li>
+<li>Engine 在 V3 Container 启动时创建、关闭时 <code>dispose()</code>；<code>V3_ENABLED=false</code> 时整个 V3 Container 为禁用状态。</li>
+<li>Migration 使用独立命令执行；健康检查区分 Legacy 健康与 V3 数据库状态。</li>
+</ul>
+<h2 id="_6">测试和验收<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<ol>
+<li>默认测试不需要 PostgreSQL，V1/V2 全套测试必须继续通过；</li>
+<li>Domain 时间、Hash、Contract 和状态不变量使用纯单元测试；</li>
+<li>PostgreSQL 集成测试通过 Compose 启动隔离数据库；</li>
+<li>验证空库 Upgrade、Schema 约束、Downgrade/Restore 和重复执行；</li>
+<li><code>V3_ENABLED=false</code> 时数据库不可达也不影响现有 <code>/health</code> 和 V1/V2；</li>
+<li>只有集成证据齐全后，Phase 1 数据库能力才可标记为已实现。</li>
+</ol>
+<h2 id="_7">回滚<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<ul>
+<li>代码回滚：关闭 <code>V3_ENABLED</code>，Legacy Runtime 不读取 V3 表；</li>
+<li>Schema 回滚：发布前备份，执行已验证的 Alembic downgrade；破坏性变更优先使用恢复而非猜测修复；</li>
+<li>数据迁移：Legacy SQLite/JSONL 只复制到 V3，不原地修改；</li>
+<li>Phase 1 未验收前不合并 <code>main</code>、不部署生产服务器。</li>
+</ul>
+<h2 id="_8">未决项<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Worker Scheduler 继续保持 <code>UNKNOWN</code>，Phase 1 只建立 Run Registry/接口边界；</li>
+<li>Runtime/Migration 数据库账户的具体权限 DDL 在服务器部署前验证；</li>
+<li>备份工具和保留周期结合服务器环境形成单独运维 ADR。</li>
+</ul></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
