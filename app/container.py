@@ -16,6 +16,7 @@ from app.services.technical_indicator_service import TechnicalIndicatorService
 from app.services.market_data_service import MarketDataService
 from app.fundamentals.eastmoney import EastmoneyDatacenterFundamentalProvider, EastmoneyF10FundamentalProvider
 from app.fundamentals.manager import FundamentalProviderManager
+from app.v3.container import V3Container
 
 
 class Container:
@@ -61,11 +62,14 @@ class Container:
             self.data_quality,
             self.fundamentals,
         )
+        self.v3 = V3Container.from_settings(settings)
 
     async def start(self) -> None:
         await self.market_data.start()
+        await self.v3.start()
 
     async def close(self) -> None:
+        await self.v3.close()
         await self.fundamentals.close()
         await self.market_data.close()
 

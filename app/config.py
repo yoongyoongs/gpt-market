@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     max_kline_concurrency: int = Field(default_factory=lambda: int(os.getenv("MAX_KLINE_CONCURRENCY", "8")))
     kline_cache_path: str = Field(default_factory=lambda: os.getenv("KLINE_CACHE_PATH", "data/kline_cache.sqlite3"))
     scan_history_path: str = Field(default_factory=lambda: os.getenv("SCAN_HISTORY_PATH", "data/scan_history"))
+    v3_enabled: bool = Field(default_factory=lambda: os.getenv("V3_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
+    v3_database_url: str | None = Field(default_factory=lambda: os.getenv("V3_DATABASE_URL") or None)
+    v3_database_echo: bool = Field(
+        default_factory=lambda: os.getenv("V3_DATABASE_ECHO", "false").lower() in {"1", "true", "yes", "on"}
+    )
+    v3_database_pool_size: int = Field(default_factory=lambda: int(os.getenv("V3_DATABASE_POOL_SIZE", "5")), ge=1)
+    v3_database_max_overflow: int = Field(
+        default_factory=lambda: int(os.getenv("V3_DATABASE_MAX_OVERFLOW", "5")), ge=0
+    )
     kline_refresh_trading_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_TRADING_SECONDS", "300")))
     kline_refresh_closed_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_CLOSED_SECONDS", "1800")))
     stale_after_seconds: int = 30
