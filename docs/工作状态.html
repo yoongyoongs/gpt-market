@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="fa3c0d33b2d95ed09faf16fd8301c338cb6b8ba88378d5ea3db4c01d9e1a4a80"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="643a3e4bff8e20a59045c1dac83c6a6722ec0eece3767d164648fd2ecd8ceca0"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：fa3c0d33b2d9</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：643a3e4bff8e</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-29（Asia/Shanghai）
 当前分支：<code>codex/phase1-foundation</code>
@@ -46,11 +46,12 @@
 <li>ADR-0001 已确认 PostgreSQL 17 + SQLAlchemy 2.0 async + asyncpg + Alembic async，V3 默认关闭并与 Legacy 生命周期隔离。</li>
 <li>已增加 V3 Feature Flag、数据库配置、PostgreSQL Compose Profile、SQLAlchemy async 生命周期和禁用态 Container；</li>
 <li>默认禁用与配置约束测试已通过，现有 Container 只增加隔离的 V3 生命周期挂点。</li>
+<li>已建立 Alembic async 环境、统一 SQLAlchemy Metadata、离线 Migration 能力和独立迁移说明；应用启动不会自动运行 Migration。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 1 下一实现步骤：建立 Alembic async 骨架和首个基础 Migration；</li>
-<li>准备 <code>known_at</code>、Canonical Hash、Agent Contract、Audit 与 Task 基础的最小 Domain/Schema。</li>
+<li>Phase 1 下一实现步骤：实现 <code>known_at</code>、Canonical Hash、Agent Contract、Audit 与 Task 基础的最小 Domain/Schema；</li>
+<li>创建首个可升级/降级的 Phase 1 Migration。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
@@ -82,11 +83,12 @@
 <li>SQLAlchemy/Alembic/asyncpg 选型已对照官方 async 文档核验。</li>
 <li>V3 数据库基础单元与 Legacy 回归：<code>75 passed, 5 skipped</code>；</li>
 <li>Compose YAML 结构检查通过；本机 Docker CLI 可用但守护进程未运行，Python 3.12 镜像构建尚未验证，保留为集成验收项。</li>
+<li>Alembic 环境、Metadata 和离线 SQL 验证通过；全套测试：<code>77 passed, 5 skipped</code>。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
-<li>增加 Alembic async 配置和首个 Phase 1 Migration；</li>
 <li>实现 <code>known_at</code>、Canonical Hash、Agent Contract、Audit 与 Task 基础；</li>
+<li>创建首个 Phase 1 Migration 及约束测试；</li>
 <li>启动隔离 PostgreSQL 执行 Upgrade/Downgrade/Restore 集成验收；</li>
 <li>每个步骤按“状态更新、测试、中文提交、立即推送”执行。</li>
 </ol>
