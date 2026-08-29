@@ -1,0 +1,480 @@
+当前V3架构初稿总体认可。
+
+请不要只输出“差异稿”，也不要重新从零设计。
+
+请直接基于现有《gpt-market V3 Codex 架构设计初稿》，把下面这些Review意见正式合并进原设计，修订形成一份完整、统一、可以作为后续实施依据的：
+
+《gpt-market V3 AI投资决策系统架构设计 v0.2》
+
+要求：
+- 原稿中已经确认且没有意见的内容全部保留；
+- 有修改意见的章节直接修改原正文；
+- 新增内容插入最合适的原有章节；
+- 如原章节结构不够，可以新增章节；
+- 最终输出必须是一份从头到尾完整可读的V3设计稿；
+- 不要求用户再结合v0.1和差异清单自行拼接；
+- 文末可以附一个简短Change Log，说明v0.2相比v0.1主要改了什么，但Change Log不是主体；
+- 本轮仍然只修改设计文档，不修改任何业务代码、不提交、不部署。
+
+需要合并以下Review意见：
+
+一、ChatGPT Web READ鉴权和稳定域名暂列低优先级Known Issue
+
+目前系统主要由单个用户使用，因此：
+- ChatGPT网页无法稳定携带Bearer Header；
+- 临时trycloudflare域名；
+- 市场数据与Portfolio数据未来权限隔离；
+- Named Tunnel / 稳定域名；
+
+这些需要在架构中预留，但暂时不要作为阻塞V3核心闭环的高优先级工作。
+
+请增加：
+Known Issues / Future Hardening
+
+记录上述问题和未来解决方向。
+
+当前V3仍可沿用现有可访问HTTPS方式完成READ。
+
+不要为了现在解决完整企业级鉴权而拖慢V3。
+
+二、AI Result Import必须支持Batch / Bundle
+
+这是V3正式需求。
+
+一次ChatGPT分析可能产生：
+
+- MarketReview
+- 多个DecisionResult
+- 多个ReviewResult
+- 多个WatchlistProposal
+- 多个EntryPlanResult
+- 多个PositionReviewResult
+
+不能要求每只股票分别复制和确认。
+
+新增统一：
+
+AIResultBundle
+
+支持流程：
+
+ChatGPT一次输出完整结构化Bundle
+→ 用户一次复制/上传
+→ 服务器解析
+→ Schema校验
+→ Context Pack / Evidence / Task Run校验
+→ 展示整个Batch Preview
+→ 用户一次确认
+→ 单事务完成合法结果入库。
+
+请设计：
+POST /api/v3/ai-results/import
+
+同时支持：
+Single AIResultEnvelope
+和
+AIResultBundle
+
+请根据数据一致性设计Batch事务策略。
+
+优先保证：
+Decision / EntryPlan / Watchlist / Review之间不会出现半套数据。
+
+如果部分Result存在错误，应明确：
+- 整批拒绝；
+- 或分组原子提交；
+并说明选择原因。
+
+核心目标：
+盘后分析10只甚至30只股票时，用户仍然只需要一次导入、一次确认。
+
+三、进一步明确“系统负责事实，AI负责最终判断”
+
+这是V3最重要的架构原则之一。
+
+服务器负责：
+
+- Market Data
+- Universe
+- K线
+- Full Market Features
+- Multi-Recall
+- Raw Opportunity
+- Evidence整理
+- Market Regime事实
+- Portfolio真实事实
+- Trade Ledger
+- 数据质量
+- 明确风险事实
+- Performance统计
+
+AI / ChatGPT负责：
+
+- 多候选横向比较
+- 正方Evidence分析
+- 反方Evidence分析
+- 哪些Raw升级为Action Candidate
+- Entry Plan
+- 持仓判断
+- 加仓判断
+- 减仓判断
+- 卖点判断
+- Review结论
+
+请在架构中明确禁止重新出现：
+
+action_total_score
+final_total_score
+final_rank_score
+
+等固定统一总分替代AI最终判断。
+
+服务器可以提供：
+trend_freshness
+ignition_quality
+relative_strength
+time_efficiency相关事实
+position
+volatility
+flow
+liquidity
+fundamental metrics
+等结构化输入。
+
+这些用于帮助AI判断，不是新的硬权限墙。
+
+Multi-Recall仍然只是发现加速器。
+任何未被Recall命中的股票仍必须可以通过Full Universe Query被AI访问。
+
+四、补完整Evidence Ingestion Pipeline
+
+当前Evidence数据模型设计已经认可，但v0.2必须补充“Evidence到底怎么被采集进入系统”。
+
+至少覆盖：
+
+1. 官方公司公告
+2. 上交所/深交所/北交所
+3. 巨潮资讯
+4. 财务数据
+5. 业绩预告/快报
+6. 当前Vendor数据
+7. 行业信息
+8. 财经新闻
+9. 国内政策
+10. 海外宏观
+11. 海外政策
+12. 地缘事件
+13. 商品价格及产业事件
+14. 券商观点
+15. 专家观点
+
+设计统一链路：
+
+Evidence Source / Provider
+→ Fetch
+→ Raw Document
+→ Parse
+→ Dedup
+→ Normalize
+→ 时间标准化
+→ Security / Industry / Market Entity Linking
+→ Source Type分类
+→ confidence
+→ relevance
+→ conflict detection
+→ decay / expire
+→ Evidence DB
+→ Context Pack Retrieval
+
+严格保证：
+
+FACT
+OFFICIAL_DISCLOSURE
+VENDOR_DATA
+NEWS
+OPINION
+
+不能混淆。
+
+Opinion不能因为多个专家一致看多就自动变成Fact。
+
+多Source冲突必须保留。
+
+known_at必须满足未来Replay。
+
+网页、新闻和外部文本必须当作Untrusted Data，
+不能把其中的指令拼入Agent Prompt。
+
+同时请把Evidence Ingestion明确加入V3实施Phase。
+
+五、Portfolio只提供事实，不做新的硬筛选器
+
+这里需要修改之前可能存在的“PortfolioRiskProfile硬规则”方向。
+
+V3服务器主要记录Portfolio真实事实。
+
+例如：
+
+- 当前真实持仓
+- 数量
+- 平均成本
+- 实际成交历史
+- 当前市值
+- 已实现收益
+- 未实现收益
+- 当前可确认资金
+- 当前行业/主题分布
+- 当前持仓股票数量
+- 当前Action候选
+- Portfolio整体变化
+
+这些数据进入Portfolio Context提供给AI。
+
+由AI综合判断：
+
+- 当前是否仓位集中；
+- 某行业是否已经持仓很多；
+- 新候选与已有仓位是否高度重复；
+- 当前是否应该继续开新仓；
+- 应优先哪个机会；
+- 是否需要留出资金；
+- 是否应该降低整体风险。
+
+V3不要建立新的固定硬门槛，例如：
+
+max_sector_exposure = 30%
+max_open_positions = 5
+max_single_position = 20%
+
+然后据此直接删除机会。
+
+如果未来需要用户偏好，可以设计：
+
+PortfolioPreference
+UserInvestmentPreference
+
+作为AI Context软信息，例如：
+
+preferred_horizon
+risk_tolerance
+desired_cash_buffer
+position_preference
+
+但它们默认是AI判断输入，不是Machine Recall/Raw的硬过滤条件。
+
+核心原则仍然是：
+
+“系统记录事实和偏好，AI综合判断。”
+
+六、增加MarketRegimeSnapshot，但保持事实属性
+
+Market Regime应该正式进入V3。
+
+服务器负责计算/记录可验证事实，例如：
+
+- 主要指数趋势；
+- 市场宽度；
+- 上涨/下跌家数；
+- 全市场成交额；
+- 涨停/跌停数量与结构；
+- 大盘/小盘风格；
+- 成长/价值风格；
+- 行业轮动；
+- 强势行业；
+- 弱势行业；
+- 风险偏好；
+- 重要国内风险；
+- 重要海外风险。
+
+可以形成结构化：
+
+MarketRegimeSnapshot
+
+但不要让系统简单通过固定MarketRegime总分决定“今天不准买”。
+
+Regime属于AI判断上下文。
+
+Performance未来可以按Market Regime统计：
+
+某Opportunity Type
+某Recall Channel
+某Strategy Version
+某AI Decision模式
+
+在不同市场环境下表现如何。
+
+七、Trade和Performance增加Execution Deviation
+
+必须区分：
+
+AI计划错误
+和
+用户没有按AI计划执行。
+
+例如：
+
+AI计划：
+22.45~22.70买入
+
+实际成交：
+23.60
+
+应该记录：
+
+entry_plan_matched = false
+execution_type = USER_OVERRIDE
+execution_deviation_pct
+execution_note
+
+建议执行分类：
+
+PLAN_MATCHED
+PARTIAL_MATCH
+USER_OVERRIDE
+MANUAL_TRADE_WITHOUT_AI_ENTRY
+UNKNOWN
+
+Performance以后需要分别评价：
+
+Selection Quality
+Entry Plan Quality
+User Execution Quality
+Add Quality
+Reduce Quality
+Exit Quality
+Risk Control Quality
+
+例如：
+
+AI选股正确
+AI买点正确
+但用户追高买入导致亏损
+
+不能直接算成AI Entry失败。
+
+反过来：
+
+AI没有建议买入
+用户自主买入
+
+也必须明确记录为：
+MANUAL_TRADE_WITHOUT_AI_ENTRY
+
+不要污染AI绩效。
+
+八、增加OPENING_POSITION / RECONCILIATION
+
+V3上线时，用户可能已经持有股票。
+
+如果第一次只上传一张持仓截图，例如：
+
+1000股
+平均成本10.20
+
+系统并不知道历史是：
+
+一次买1000股
+还是多次买入。
+
+因此：
+
+持仓截图不能伪造成过去的BUY Trade。
+
+请增加：
+
+OPENING_POSITION
+RECONCILIATION
+
+语义。
+
+表示：
+“这是系统开始记录之前已经存在的真实持仓基准。”
+
+从这个基准以后发生的真实BUY/SELL再正常写入Immutable Trade Ledger。
+
+同时设计：
+后续成交如何与Opening Position一起计算平均成本、已实现收益和剩余持仓。
+
+九、Context Pack Evidence增加选择解释
+
+进入最终Context Pack的Evidence建议增加：
+
+selection_reason
+side = SUPPORT / CONTRARY / NEUTRAL
+retrieval_score / relevance
+source_priority
+
+这样未来Replay可以知道：
+
+当时数据库可能有100条新闻，
+为什么只有这5条进入GPT Context。
+
+Context Pack仍采用：
+
+FAST 2k~4k
+NORMAL 5k~8k
+DEEP 10k~14k
+
+这个设计保持不变。
+
+十、更新Phase实施计划
+
+请基于上述修改重新检查当前Phase。
+
+重点保证：
+
+- AI Result Batch/Bundle Import进入正式V3 Phase；
+- Evidence Ingestion有明确开发阶段；
+- MarketRegime有明确开发阶段；
+- Execution Deviation进入Trade/Performance阶段；
+- Opening Position/Reconciliation进入Portfolio阶段；
+- ChatGPT READ Auth /稳定域名归入Known Issues/Future Hardening，不阻塞核心V3。
+
+其余v0.1已经认可的内容不要删除，包括：
+
+- V3 / V4边界；
+- Full Market Features；
+- Full Universe Query；
+- Multi-Recall；
+- Recall Miss；
+- Agent Contract；
+- CHATGPT_WEB为当前主要Agent；
+- Model-Agnostic Contract；
+- V4才实现真正LLM Gateway和模型API；
+- Task Profile；
+- Task Run Registry；
+- FAST/NORMAL/DEEP Context；
+- AI Result Import；
+- AI Watchlist；
+- Immutable Decision；
+- Append-only Review；
+- Entry Plan；
+- Immutable Trade Ledger；
+- Screenshot → Draft →用户确认；
+- Portfolio / Position Context；
+- Raw / Action / Entry / ActualTrade严格分层；
+- expected_horizon；
+- time_efficiency；
+- 601233禁止未来数据泄漏；
+- Replay / Regression；
+- Strategy Guardrail；
+- V1/V2继续作为Baseline；
+- V3通过Feature Flag独立上线。
+
+最终请直接输出完整：
+
+《gpt-market V3 AI投资决策系统架构设计 v0.2》
+
+从Scope开始一直写到Phase、数据库、API、性能、风险与回滚。
+
+文末额外附：
+“v0.2 Change Log”
+
+简要列出相比v0.1新增和修改内容即可。
+
+再次强调：
+本轮只更新设计稿。
+不要修改代码。
+不要创建Migration。
+不要进入Phase 1。
+输出完整v0.2后停止，等待Review。
