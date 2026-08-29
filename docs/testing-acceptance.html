@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="5ef599992628569c053406d7d9eb5ba868676d9943d55569d7423b4b2f7a54c1"><title>测试与验收规范</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 测试目标</a></li>
+<li><a href="#2">2. 测试分层</a></li>
+<li><a href="#3">3. 本地确定性测试</a></li>
+<li><a href="#4-mcpweb-parity">4. MCP/Web parity</a></li>
+<li><a href="#5">5. 价格缩放验收</a></li>
+<li><a href="#6">6. 联网测试</a></li>
+<li><a href="#7">7. 综合验收脚本</a></li>
+<li><a href="#8-mcp">8. 远程 MCP 验收</a></li>
+<li><a href="#9-parity">9. 线上 parity 验收表</a></li>
+<li><a href="#10">10. 发布门禁</a></li>
+<li><a href="#11">11. 回归处理</a></li>
+<li><a href="#12-live-refresh">12. Live Refresh 性能验收</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/testing-acceptance.md · 内容哈希：5ef599992628</div><h1 id="_1">测试与验收规范<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<h2 id="1">1. 测试目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>测试必须证明两件事：</p>
+<ol>
+<li>东方财富原始字段被正确转换成标准业务事实。</li>
+<li>MCP 与 Web 是同一业务系统的不同入口，业务结果完全一致。</li>
+</ol>
+<p>联网行情具有时间和外部可用性波动，因此确定性单元测试与联网验收分开执行。</p>
+<h2 id="2">2. 测试分层<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>文件</th>
+<th>重点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Provider 解析</td>
+<td><code>test_provider_parsing.py</code></td>
+<td>secid、价格/百分比缩放、成交量、K 线格式</td>
+</tr>
+<tr>
+<td>技术指标</td>
+<td><code>test_indicators.py</code></td>
+<td>MA、ATR、RSI、高低点和收益</td>
+</tr>
+<tr>
+<td>扫描业务</td>
+<td><code>test_scanner.py</code></td>
+<td>板块过滤、ST、涨跌停、评分、coverage、缓存键</td>
+</tr>
+<tr>
+<td>入口一致性</td>
+<td><code>test_mcp_web_parity.py</code></td>
+<td>三只股票、详情、市场、行业 Top10、扫描 Top10</td>
+</tr>
+<tr>
+<td>联网验证</td>
+<td><code>test_live_eastmoney.py</code></td>
+<td>当前 Quote 和日 K 可用性</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3">3. 本地确定性测试<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">python -m pytest -q
+</code></pre>
+<p>联网用例默认跳过。当前基线为：</p>
+<pre><code class="language-text">35 passed, 5 skipped
+</code></pre>
+<p>任何变更不得通过删除断言、放宽关键字段比较或把失败改为跳过来维持基线。</p>
+<h2 id="4-mcpweb-parity">4. MCP/Web parity<a class="headerlink" href="#4-mcpweb-parity" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">python -m pytest tests/test_mcp_web_parity.py -q
+</code></pre>
+<p>自动覆盖：</p>
+<ul>
+<li><code>002284/600722/600519</code> Quote 全业务数据一致；</li>
+<li>价格、涨跌幅、成交额、换手率、量比、源时间和 snapshot_id 一致；</li>
+<li>单股详情的 MA、ATR、RSI 和 20 日高低点一致；</li>
+<li>市场概况一致；</li>
+<li>行业 Top10 顺序一致；</li>
+<li>扫描 coverage、候选顺序、total_score 和 scan_id 一致；</li>
+<li>错误 Web secret 被拒绝。</li>
+</ul>
+<p>测试使用固定快照，避免第三方接口变化导致伪失败。两 Adapter 会被替换为同一个测试 Container，验证公共序列化和入口契约。</p>
+<h2 id="5">5. 价格缩放验收<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<p>离线 fixture 至少覆盖：</p>
+<ul>
+<li>002284</li>
+<li>600722</li>
+<li>600519</li>
+<li>000001</li>
+</ul>
+<p>变更 <code>fltt</code>、字段映射或缩放函数前，必须先运行：</p>
+<pre><code class="language-bash">python scripts/probe_eastmoney.py
+</code></pre>
+<p>并人工核对 <code>docs/eastmoney_probe.json</code> 与东方财富页面显示。原始样本只是当次审计证据，不得作为当前行情数据源。</p>
+<h2 id="6">6. 联网测试<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">RUN_LIVE_TESTS=1 python -m pytest tests/test_live_eastmoney.py -q -vv
+</code></pre>
+<p>判定原则：</p>
+<ul>
+<li>Quote 失败通常意味着源接口、网络出口或字段发生变化，必须调查。</li>
+<li>K 线空数组或服务端断连记录为外部可用性失败，不得用历史 fixture 让联网测试“通过”。</li>
+<li>非交易时段 Quote 可以返回 <code>OLD/UNAVAILABLE</code>；只要时间和质量真实，不应改成 <code>LIVE</code>。</li>
+</ul>
+<h2 id="7">7. 综合验收脚本<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">python scripts/acceptance.py
+</code></pre>
+<p>脚本调用三类真实服务并写入 <code>docs/acceptance_results.json</code>。该文件带运行时间，只是验收记录，不是稳定 API 返回，也不能作为投资分析依据。</p>
+<h2 id="8-mcp">8. 远程 MCP 验收<a class="headerlink" href="#8-mcp" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">MCP_URL=https://HOST/mcp/ MCP_TOKEN=YOUR_TOKEN \
+  python scripts/test_mcp_client.py
+</code></pre>
+<p>至少验证：</p>
+<ol>
+<li>initialize；</li>
+<li>tools/list；</li>
+<li><code>get_quote("002284")</code>；</li>
+<li>返回含源时间、质量和 snapshot_id；</li>
+<li>token 错误时返回 401。</li>
+</ol>
+<h2 id="9-parity">9. 线上 parity 验收表<a class="headerlink" href="#9-parity" title="Permanent link">&para;</a></h2>
+<p>同一应用进程中按 MCP→Web 顺序紧邻调用，并比较：</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>必须比较</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>002284/600722/600519 Quote</td>
+<td>价格、涨跌幅、成交额、换手率、量比、源时间、snapshot_id</td>
+</tr>
+<tr>
+<td>002284 Detail</td>
+<td>MA5/20/60、ATR14、RSI14、20 日高低点</td>
+</tr>
+<tr>
+<td>Market</td>
+<td>上涨家数、下跌家数、总成交额、snapshot_id</td>
+</tr>
+<tr>
+<td>Sector Top10</td>
+<td>名称、顺序、涨跌幅</td>
+</tr>
+<tr>
+<td>Scan Top10</td>
+<td>代码顺序、每项 total_score、coverage、scan_id</td>
+</tr>
+</tbody>
+</table>
+<p>如果外部源返回不可用，必须把该行标记为 <code>UNAVAILABLE</code>，不能把“两个入口都失败”伪装成数据字段 PASS。</p>
+<h2 id="10">10. 发布门禁<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<p>部署前：</p>
+<ul>
+<li>全部确定性测试通过；</li>
+<li>parity 测试通过；</li>
+<li><code>.env</code> 和凭据未进入 Git；</li>
+<li><code>nginx -t</code> 通过；</li>
+<li>Docker 镜像构建成功。</li>
+</ul>
+<p>部署后：</p>
+<ul>
+<li><code>/health</code> 返回 200；</li>
+<li>容器 health 正常；</li>
+<li>MCP tools/list 显示 8 个工具；</li>
+<li>公网 MCP 至少一次 tools/call 成功；</li>
+<li>公网 Web Quote 成功；</li>
+<li><code>/gpt/</code> 路径未出现在 Nginx/Uvicorn access log；</li>
+<li>systemd tunnel、Nginx、Docker 均 active。</li>
+</ul>
+<h2 id="11">11. 回归处理<a class="headerlink" href="#11" title="Permanent link">&para;</a></h2>
+<p>发现 MCP/Web 不一致时按以下顺序排查：</p>
+<ol>
+<li>比较两入口是否落在同一进程和 Container；</li>
+<li>检查 Service 参数类型是否生成不同缓存键；</li>
+<li>比较 snapshot_id/scan_id；</li>
+<li>检查是否某 Adapter 自行序列化或计算；</li>
+<li>检查缓存 TTL 是否在两次调用之间过期；</li>
+<li>检查 Provider 是否对同一原始字段执行了不同缩放。</li>
+</ol>
+<p>修复必须发生在共享 Provider、模型、Service 或缓存层，禁止在某个 Adapter 中打补丁。</p>
+<h2 id="12-live-refresh">12. Live Refresh 性能验收<a class="headerlink" href="#12-live-refresh" title="Permanent link">&para;</a></h2>
+<ul>
+<li>后台先生成一份成功快照；</li>
+<li>连续请求 <code>/gpt/{secret}/live</code> 或 nonce 快照页至少 10 次；</li>
+<li>请求期间将 Market/Scanner/Quote 调用替换为失败桩，确认 live 仍从缓存成功返回；</li>
+<li>检查 <code>snapshot_time</code>、<code>server_time</code>、<code>age_ms</code>、<code>market_status</code> 和 <code>stale</code>；</li>
+<li>检查全部响应的 <code>Cache-Control</code>、<code>Pragma</code>、<code>Expires</code>；</li>
+<li>检查成功响应为 <code>X-Live-Cache: HIT</code>，初始化响应为 <code>X-Live-Cache: MISS</code>；</li>
+<li>服务器本机使用 <code>curl -w</code> 验证大部分响应低于 500ms；</li>
+<li>重新运行 MCP 8 工具与 JSON/MCP 一致性测试。</li>
+</ul></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

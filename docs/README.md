@@ -6,9 +6,11 @@
 
 1. [项目 README](../README.md)
 2. [V3 架构设计实施稿](架构设计实施稿.md)
-3. [开发工作规范](开发规范.md)
-4. [当前工作状态](工作状态.md)
-5. 当前任务相关代码与测试
+3. [V3 需求规格说明](需求规格说明.md)
+4. [V3 系统功能架构](系统功能架构.md)
+5. [开发工作规范](开发规范.md)
+6. [当前工作状态](工作状态.md)
+7. 当前任务相关代码与测试
 
 换电脑、换模型或新会话时，默认只需要上述内容。归档材料不是必读项。
 
@@ -22,6 +24,17 @@
 - `acceptance_results.json`：带时间戳的验收样例。
 
 这些文档用于处理现有 V1/V2 服务、部署或排障，按任务需要读取，不属于 V3 架构接手的默认阅读集合。
+
+## 双格式规则
+
+每份 Markdown 都必须有同目录、同名 HTML：Markdown 供大模型和版本审查，HTML 供人阅读。执行：
+
+```bash
+python scripts/build_docs_html.py
+python scripts/build_docs_html.py --check
+```
+
+HTML 由 Markdown 自动生成，Markdown 是内容源；禁止只手工修改 HTML。
 
 ## 历史归档
 

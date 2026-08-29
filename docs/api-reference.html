@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="aef3ce64054344f4c063d091681629baebf515e5a381e6de461d4e72f1ada740"><title>API 与 MCP 工具参考</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 基础地址和认证</a></li>
+<li><a href="#2-mcp-tools">2. MCP tools</a></li>
+<li><a href="#3-gpt-web">3. GPT Web 路由</a><ul>
+<li><a href="#live-refresh-html-adapter">Live Refresh HTML Adapter</a></li>
+</ul>
+</li>
+<li><a href="#4">4. 公共行情元数据</a></li>
+<li><a href="#5-quoteresponse">5. QuoteResponse</a></li>
+<li><a href="#6-klineresult">6. KlineResult</a></li>
+<li><a href="#7-stockdetailresponse">7. StockDetailResponse</a></li>
+<li><a href="#8-marketoverviewresponse">8. MarketOverviewResponse</a></li>
+<li><a href="#9-sectorrankingresponse">9. SectorRankingResponse</a></li>
+<li><a href="#10-scanresponse">10. ScanResponse</a></li>
+<li><a href="#101-opportunityscanresponse">10.1 OpportunityScanResponse</a></li>
+<li><a href="#11-coverageresponse">11. CoverageResponse</a></li>
+<li><a href="#12">12. 调用示例</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/api-reference.md · 内容哈希：aef3ce640543</div><h1 id="api-mcp">API 与 MCP 工具参考<a class="headerlink" href="#api-mcp" title="Permanent link">&para;</a></h1>
+<p>本文描述当前 1.0.0 接口。业务字段以 <code>app/models.py</code> 为唯一 schema 来源。</p>
+<h2 id="1">1. 基础地址和认证<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>地址</th>
+<th>认证</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>健康检查</td>
+<td><code>GET /health</code></td>
+<td>无</td>
+</tr>
+<tr>
+<td>数据源健康</td>
+<td><code>GET /health/providers</code></td>
+<td>无；建议只在受控网络开放</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td><code>/mcp/</code></td>
+<td><code>Authorization: Bearer &lt;MCP_TOKEN&gt;</code></td>
+</tr>
+<tr>
+<td>GPT Web</td>
+<td><code>/gpt/{secret}/...</code></td>
+<td>URL 中的 <code>GPT_WEB_SECRET</code></td>
+</tr>
+<tr>
+<td>REST 调试</td>
+<td><code>/quote</code>、<code>/market</code> 等</td>
+<td>当前版本无认证，仅用于受控环境调试</td>
+</tr>
+</tbody>
+</table>
+<p>生产环境应在 Nginx 或防火墙限制 REST 调试端点，不应依赖其公开可访问性。</p>
+<h2 id="2-mcp-tools">2. MCP tools<a class="headerlink" href="#2-mcp-tools" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>主要参数</th>
+<th>返回模型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_quote</code></td>
+<td><code>code</code></td>
+<td><code>QuoteResponse</code></td>
+</tr>
+<tr>
+<td><code>get_quotes</code></td>
+<td><code>codes</code>，最多 100 个</td>
+<td><code>list[QuoteResponse]</code></td>
+</tr>
+<tr>
+<td><code>get_kline</code></td>
+<td><code>code, period=day, limit=120</code></td>
+<td><code>KlineResult</code></td>
+</tr>
+<tr>
+<td><code>get_stock_detail</code></td>
+<td><code>code</code></td>
+<td><code>StockDetailResponse</code></td>
+</tr>
+<tr>
+<td><code>get_market_overview</code></td>
+<td>无</td>
+<td><code>MarketOverviewResponse</code></td>
+</tr>
+<tr>
+<td><code>get_sector_ranking</code></td>
+<td><code>sector_type=industry, limit=30</code></td>
+<td><code>SectorRankingResponse</code></td>
+</tr>
+<tr>
+<td><code>scan_mainboard</code></td>
+<td>扫描参数</td>
+<td><code>ScanResponse</code></td>
+</tr>
+<tr>
+<td><code>get_scan_coverage</code></td>
+<td>无</td>
+<td><code>CoverageResponse</code></td>
+</tr>
+<tr>
+<td><code>scan_mainboard_v2</code></td>
+<td><code>top_n=30, pool_size=420</code></td>
+<td><code>OpportunityScanResponse</code></td>
+</tr>
+<tr>
+<td><code>scan_mainboard_ab</code></td>
+<td><code>top_n=30</code></td>
+<td><code>{v1_top30, v2_top30}</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-gpt-web">3. GPT Web 路由<a class="headerlink" href="#3-gpt-web" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>路由</th>
+<th>对应 MCP tool</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /gpt/{secret}/stock/{code}</code></td>
+<td><code>get_quote</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/stocks?codes=002284&amp;codes=600519</code></td>
+<td><code>get_quotes</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/stock/{code}/kline?period=day&amp;limit=120</code></td>
+<td><code>get_kline</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/stock/{code}/detail</code></td>
+<td><code>get_stock_detail</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/market</code></td>
+<td><code>get_market_overview</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/sectors?sector_type=industry&amp;limit=10</code></td>
+<td><code>get_sector_ranking</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/scan?top_n=10</code></td>
+<td><code>scan_mainboard</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/scan/v2?top_n=10&amp;pool_size=420</code></td>
+<td><code>scan_mainboard_v2</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/scan/v2/html?top_n=30&amp;pool_size=420</code></td>
+<td>V2 HTML Top30 与评分拆解页面</td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/scan/ab?top_n=30</code></td>
+<td>V1/V2 并行 A/B</td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/scan/coverage</code></td>
+<td><code>get_scan_coverage</code></td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/coverage</code></td>
+<td>读取 Live 缓存中与当前页面完全一致的完整覆盖报告</td>
+</tr>
+</tbody>
+</table>
+<h3 id="live-refresh-html-adapter">Live Refresh HTML Adapter<a class="headerlink" href="#live-refresh-html-adapter" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /gpt/{secret}/live</code></td>
+<td>立即读取后台成功快照，渲染市场、覆盖率、行业/概念 Top20 及股票 Top30，并生成新 nonce 链接</td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/live/{nonce}</code></td>
+<td>立即读取同一个内存快照并渲染 HTML，不调用行情源</td>
+</tr>
+<tr>
+<td><code>GET /gpt/{secret}/live/{nonce}/stock/{code}</code></td>
+<td>读取快照内的共享 QuoteService 结果，不调用行情源</td>
+</tr>
+</tbody>
+</table>
+<p>每个页面生成的后续链接都使用 <code>secrets.token_urlsafe(24)</code> 产生新的 nonce。所有 live 页面返回 <code>text/html</code>，并设置：</p>
+<pre><code class="language-text">Cache-Control: no-store, no-cache, must-revalidate, max-age=0
+Pragma: no-cache
+Expires: 0
+</code></pre>
+<p>Header 是第二道防线；核心机制仍是每次点击进入不同 URL。原 JSON 路由及 MCP 工具不受影响。</p>
+<p>Live 缓存状态包含 <code>snapshot_time</code>、<code>server_time</code>、<code>age_ms</code>、<code>market_status</code>、<code>stale</code> 和可选 <code>warning</code>。后台刷新原子替换整个成功快照；刷新异常时保留上一份数据并设置 <code>stale=true</code>。首份快照尚未生成时立即返回 HTTP 503 HTML，内容为 <code>INITIALIZING / market snapshot is initializing</code>。</p>
+<p>Web 成功响应：</p>
+<pre><code class="language-json">{
+  &quot;ok&quot;: true,
+  &quot;data&quot;: {}
+}
+</code></pre>
+<p><code>data</code> 与对应 MCP tool 的业务结果逐字段相同。</p>
+<h2 id="4">4. 公共行情元数据<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>除纯 Kline 行外，主要成功模型包含：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>当前为 <code>eastmoney</code></td>
+</tr>
+<tr>
+<td><code>source_timestamp</code></td>
+<td>ISO datetime</td>
+<td>兼容字段；对 f86/f124 仅代表 Provider 返回的更新时间，不能解释为最后成交时间</td>
+</tr>
+<tr>
+<td><code>data_timestamp</code></td>
+<td>ISO datetime</td>
+<td>兼容字段，等于源时间</td>
+</tr>
+<tr>
+<td><code>server_timestamp</code></td>
+<td>ISO datetime</td>
+<td>标准对象生成时间</td>
+</tr>
+<tr>
+<td><code>age_seconds</code></td>
+<td>number</td>
+<td>数据年龄</td>
+</tr>
+<tr>
+<td><code>stale</code></td>
+<td>boolean</td>
+<td>是否不再 LIVE</td>
+</tr>
+<tr>
+<td><code>quality</code></td>
+<td>enum</td>
+<td><code>LIVE/STALE/OLD/UNAVAILABLE/CONFLICT</code></td>
+</tr>
+<tr>
+<td><code>timestamp_source</code></td>
+<td>enum</td>
+<td><code>eastmoney/fetch_time</code></td>
+</tr>
+<tr>
+<td><code>snapshot_id</code></td>
+<td>string</td>
+<td>标准行情快照标识</td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td>enum</td>
+<td><code>HIGH/MEDIUM/LOW</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-quoteresponse">5. QuoteResponse<a class="headerlink" href="#5-quoteresponse" title="Permanent link">&para;</a></h2>
+<pre><code class="language-json">{
+  &quot;code&quot;: &quot;002284&quot;,
+  &quot;name&quot;: &quot;亚太股份&quot;,
+  &quot;market&quot;: &quot;SZ&quot;,
+  &quot;price&quot;: 9.8,
+  &quot;prev_close&quot;: 9.84,
+  &quot;open&quot;: 9.79,
+  &quot;high&quot;: 9.82,
+  &quot;low&quot;: 9.69,
+  &quot;pct_change&quot;: -0.41,
+  &quot;change&quot;: -0.04,
+  &quot;volume&quot;: 23110900,
+  &quot;amount&quot;: 225577871.29,
+  &quot;turnover_rate&quot;: 3.16,
+  &quot;volume_ratio&quot;: 0.65,
+  &quot;amplitude&quot;: 1.32,
+  &quot;suspended&quot;: false,
+  &quot;source&quot;: &quot;eastmoney&quot;,
+  &quot;source_timestamp&quot;: &quot;2026-08-27T15:34:15+08:00&quot;,
+  &quot;data_timestamp&quot;: &quot;2026-08-27T15:34:15+08:00&quot;,
+  &quot;server_timestamp&quot;: &quot;2026-08-27T15:34:16+08:00&quot;,
+  &quot;age_seconds&quot;: 1.0,
+  &quot;stale&quot;: false,
+  &quot;quality&quot;: &quot;LIVE&quot;,
+  &quot;timestamp_source&quot;: &quot;eastmoney&quot;,
+  &quot;snapshot_id&quot;: &quot;snapshot-20260827T153415.000&quot;,
+  &quot;confidence&quot;: &quot;HIGH&quot;
+}
+</code></pre>
+<p>价格、涨跌、成交等字段在源端缺失时为 <code>null</code>，不会自动补值。</p>
+<h2 id="6-klineresult">6. KlineResult<a class="headerlink" href="#6-klineresult" title="Permanent link">&para;</a></h2>
+<p><code>period</code> 可选：<code>1m/5m/15m/30m/60m/day/week/month</code>；<code>limit</code> 范围 1–1000。</p>
+<pre><code class="language-json">{
+  &quot;code&quot;: &quot;002284&quot;,
+  &quot;period&quot;: &quot;day&quot;,
+  &quot;klines&quot;: [
+    {
+      &quot;timestamp&quot;: &quot;2026-08-27T00:00:00+08:00&quot;,
+      &quot;open&quot;: 9.79,
+      &quot;high&quot;: 9.82,
+      &quot;low&quot;: 9.69,
+      &quot;close&quot;: 9.80,
+      &quot;volume&quot;: 20355600,
+      &quot;amount&quot;: 198606168.71,
+      &quot;provisional&quot;: false
+    }
+  ],
+  &quot;source&quot;: &quot;eastmoney&quot;,
+  &quot;source_timestamp&quot;: &quot;2026-08-27T15:34:15+08:00&quot;,
+  &quot;data_timestamp&quot;: &quot;2026-08-27T15:34:15+08:00&quot;,
+  &quot;server_timestamp&quot;: &quot;2026-08-27T15:34:16+08:00&quot;,
+  &quot;age_seconds&quot;: 1.0,
+  &quot;stale&quot;: false,
+  &quot;quality&quot;: &quot;LIVE&quot;,
+  &quot;timestamp_source&quot;: &quot;eastmoney&quot;,
+  &quot;snapshot_id&quot;: &quot;snapshot-20260827T153415.000&quot;,
+  &quot;confidence&quot;: &quot;HIGH&quot;
+}
+</code></pre>
+<p>日 K 在盘中可能附加由同一 Quote 快照生成的今日行，此时 <code>provisional=true</code>；该行不在 15:10 前持久化。正式历史行均为 <code>false</code>。<code>source</code> 可能为 <code>eastmoney</code>、<code>tencent</code>、<code>cache:eastmoney</code>、<code>cache:tencent</code>，与盘中 Quote 合并时会追加 <code>+&lt;quote source&gt;</code>。这些是向后兼容的来源/状态扩展，路由和既有字段不变。</p>
+<h2 id="7-stockdetailresponse">7. StockDetailResponse<a class="headerlink" href="#7-stockdetailresponse" title="Permanent link">&para;</a></h2>
+<p>包含 <code>quote</code>、<code>technical</code>、<code>day_klines</code> 和 <code>minute_5_klines</code>。<code>technical</code> 字段：</p>
+<ul>
+<li><code>ma5/ma10/ma20/ma60</code></li>
+<li><code>atr14/rsi14</code></li>
+<li><code>high_20d/low_20d/high_60d/low_60d</code></li>
+<li><code>distance_ma20_pct/distance_high_20d_pct</code></li>
+<li><code>return_5d/return_20d</code></li>
+</ul>
+<p>历史长度不足时，对应指标为 <code>null</code>。详情的公共元数据与内部 <code>quote</code> 使用同一快照。</p>
+<h2 id="8-marketoverviewresponse">8. MarketOverviewResponse<a class="headerlink" href="#8-marketoverviewresponse" title="Permanent link">&para;</a></h2>
+<pre><code class="language-json">{
+  &quot;indices&quot;: {
+    &quot;shanghai&quot;: {&quot;code&quot;: &quot;000001&quot;, &quot;name&quot;: &quot;上证指数&quot;, &quot;price&quot;: 0, &quot;pct_change&quot;: 0},
+    &quot;shenzhen&quot;: {&quot;code&quot;: &quot;399001&quot;, &quot;name&quot;: &quot;深证成指&quot;, &quot;price&quot;: 0, &quot;pct_change&quot;: 0},
+    &quot;chinext&quot;: {&quot;code&quot;: &quot;399006&quot;, &quot;name&quot;: &quot;创业板指&quot;, &quot;price&quot;: 0, &quot;pct_change&quot;: 0}
+  },
+  &quot;breadth&quot;: {
+    &quot;up_count&quot;: 0,
+    &quot;down_count&quot;: 0,
+    &quot;flat_count&quot;: 0,
+    &quot;limit_up_count&quot;: {&quot;value&quot;: null, &quot;available&quot;: false},
+    &quot;limit_down_count&quot;: {&quot;value&quot;: null, &quot;available&quot;: false}
+  },
+  &quot;amount&quot;: 0
+}
+</code></pre>
+<p>示例中的 0 仅用于说明结构，不是行情样例。</p>
+<h2 id="9-sectorrankingresponse">9. SectorRankingResponse<a class="headerlink" href="#9-sectorrankingresponse" title="Permanent link">&para;</a></h2>
+<p><code>sector_type</code> 只能为 <code>industry</code> 或 <code>concept</code>，<code>limit</code> 范围 1–100。每项包含名称、板块代码、涨跌幅、成交额、涨跌家数、排名和可选历史排名字段。</p>
+<p>未找到可靠源字段的 <code>limit_up_count</code>、<code>rank_10m_ago</code>、<code>rank_30m_ago</code>、<code>rank_change_10m</code>、<code>rank_change_30m</code> 返回 <code>null</code>。</p>
+<h2 id="10-scanresponse">10. ScanResponse<a class="headerlink" href="#10-scanresponse" title="Permanent link">&para;</a></h2>
+<p>请求参数：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th style="text-align: right;">默认值</th>
+<th>限制/含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>top_n</code></td>
+<td style="text-align: right;">30</td>
+<td>1–100</td>
+</tr>
+<tr>
+<td><code>max_pct_change</code></td>
+<td style="text-align: right;">5.0</td>
+<td>排除涨幅更高标的</td>
+</tr>
+<tr>
+<td><code>min_amount</code></td>
+<td style="text-align: right;">50000000</td>
+<td>最低成交额，元</td>
+</tr>
+<tr>
+<td><code>exclude_st</code></td>
+<td style="text-align: right;">true</td>
+<td>排除 ST、*ST、退市名称</td>
+</tr>
+<tr>
+<td><code>exclude_limit_up</code></td>
+<td style="text-align: right;">true</td>
+<td>排除涨停</td>
+</tr>
+<tr>
+<td><code>exclude_limit_down</code></td>
+<td style="text-align: right;">true</td>
+<td>排除跌停</td>
+</tr>
+</tbody>
+</table>
+<p>返回：</p>
+<ul>
+<li><code>coverage.total/success/filtered_mainboard/failed/coverage_rate</code></li>
+<li><code>candidates[]</code></li>
+<li><code>scan_id</code></li>
+<li>公共质量元数据</li>
+</ul>
+<p>每个候选包含行情、MA、五维分数、<code>total_score</code>、<code>reason[]</code> 和其 Quote 的 <code>snapshot_id</code>。</p>
+<h2 id="101-opportunityscanresponse">10.1 OpportunityScanResponse<a class="headerlink" href="#101-opportunityscanresponse" title="Permanent link">&para;</a></h2>
+<p>V2 响应不替换 V1，独立由 <code>/scan/v2</code>、<code>/gpt/{secret}/scan/v2</code> 和 MCP <code>scan_mainboard_v2</code> 返回。</p>
+<p>请求参数：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th style="text-align: right;">默认值</th>
+<th>限制/含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>top_n</code></td>
+<td style="text-align: right;">30</td>
+<td>1–100</td>
+</tr>
+<tr>
+<td><code>pool_size</code></td>
+<td style="text-align: right;">420</td>
+<td>300–500，宽候选池大小</td>
+</tr>
+<tr>
+<td><code>min_amount</code></td>
+<td style="text-align: right;">50000000</td>
+<td>最低成交额，元，仅作流动性门槛</td>
+</tr>
+<tr>
+<td><code>exclude_st</code></td>
+<td style="text-align: right;">true</td>
+<td>排除 ST、*ST、退市名称</td>
+</tr>
+<tr>
+<td><code>exclude_limit_up</code></td>
+<td style="text-align: right;">true</td>
+<td>排除涨停</td>
+</tr>
+<tr>
+<td><code>exclude_limit_down</code></td>
+<td style="text-align: right;">true</td>
+<td>排除跌停</td>
+</tr>
+</tbody>
+</table>
+<p>返回顶层字段：</p>
+<ul>
+<li><code>coverage</code></li>
+<li><code>raw_top30</code></li>
+<li><code>action_top30</code></li>
+<li><code>top100</code></li>
+<li><code>candidate_pool_size</code></li>
+<li><code>channel_counts</code></li>
+<li><code>score_version=v2</code></li>
+<li><code>score_formula</code></li>
+<li><code>missing_data_sources</code></li>
+<li><code>duration_seconds</code></li>
+</ul>
+<p>每只股票至少包含：</p>
+<pre><code class="language-json">{
+  &quot;stock_code&quot;: &quot;002284&quot;,
+  &quot;stock_name&quot;: &quot;亚太股份&quot;,
+  &quot;opportunity_score&quot;: 61.5,
+  &quot;position_score&quot;: 12.5,
+  &quot;fundamental_score&quot;: null,
+  &quot;trend_score&quot;: 17.0,
+  &quot;flow_score&quot;: 12.0,
+  &quot;catalyst_score&quot;: null,
+  &quot;risk_reward_score&quot;: 14.0,
+  &quot;liquidity_score&quot;: 5.0,
+  &quot;risk_penalty&quot;: -2.0,
+  &quot;grade&quot;: &quot;B&quot;,
+  &quot;support&quot;: 9.3,
+  &quot;resistance&quot;: 10.8,
+  &quot;stop_loss&quot;: 9.0,
+  &quot;target_1&quot;: 10.8,
+  &quot;target_2&quot;: 11.6,
+  &quot;risk_reward_ratio&quot;: 2.2,
+  &quot;week_trend&quot;: &quot;BASE_BUILDING&quot;,
+  &quot;day_trend&quot;: &quot;TURNING_UP&quot;,
+  &quot;data_coverage&quot;: {},
+  &quot;data_quality&quot;: {},
+  &quot;score_version&quot;: &quot;v2&quot;,
+  &quot;score_breakdown&quot;: {},
+  &quot;score_formula&quot;: &quot;...&quot;
+}
+</code></pre>
+<p><code>score_breakdown</code> 中每个模块保存 <code>raw_value / normalized_value / score / max_score / reason / data_source / data_timestamp / coverage</code>。Phase 1 不接入真实基本面和催化数据，因此 <code>fundamental_score</code> 与 <code>catalyst_score</code> 为 <code>null</code>，并在 <code>missing_fields</code> 中列明。</p>
+<h2 id="11-coverageresponse">11. CoverageResponse<a class="headerlink" href="#11-coverageresponse" title="Permanent link">&para;</a></h2>
+<p>覆盖率状态：</p>
+<ul>
+<li><code>FULL</code>：≥ 90%</li>
+<li><code>BROAD</code>：≥ 60% 且 &lt; 90%</li>
+<li><code>PARTIAL</code>：&lt; 60%</li>
+</ul>
+<p>完整报告的 <code>coverage_rate</code> 固定按 <code>quotes_success / quotes_requested</code> 计算，不能用过滤后的主板数量或 Top30 反推。除公共质量元数据、<code>snapshot_id</code>、<code>scan_id</code> 和时间戳外，还包括：</p>
+<ul>
+<li><code>total_securities</code>、<code>quotes_requested/success/failed</code>、<code>filtered_mainboard</code></li>
+<li>各市场、ST、停牌、流动性、涨跌停等互斥过滤计数</li>
+<li><code>industry_total/success</code>、<code>concept_total/success</code></li>
+<li><code>scan_candidates_total</code>、<code>scan_top_n</code></li>
+<li><code>freshness.live/stale/old/unavailable</code></li>
+<li><code>failure_sources</code> 与 <code>missing_fields</code> 汇总</li>
+<li>基金、ETF、LOF、REIT 的预留可空字段</li>
+</ul>
+<p>这些数字由当前扫描和板块读取过程顺带记录；<code>/coverage</code> 和 <code>/live</code> 只读取已发布内存快照，不会为统计再抓取一遍股票行情。</p>
+<p>返回最新扫描的证券总数、成功/失败数、过滤后主板数、扫描时间、数据年龄、覆盖率和 <code>scan_id</code>。</p>
+<h2 id="12">12. 调用示例<a class="headerlink" href="#12" title="Permanent link">&para;</a></h2>
+<p>Web：</p>
+<pre><code class="language-bash">curl &quot;https://HOST/gpt/$GPT_WEB_SECRET/stock/002284&quot;
+curl &quot;https://HOST/gpt/$GPT_WEB_SECRET/sectors?sector_type=industry&amp;limit=10&quot;
+curl &quot;https://HOST/gpt/$GPT_WEB_SECRET/scan?top_n=10&quot;
+</code></pre>
+<p>MCP：</p>
+<pre><code class="language-bash">MCP_URL=https://HOST/mcp/ MCP_TOKEN=YOUR_TOKEN \
+  python scripts/test_mcp_client.py
+</code></pre>
+<p>不要把真实 secret 或 token 写入命令历史、截图、Issue 或公开 CI 日志。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

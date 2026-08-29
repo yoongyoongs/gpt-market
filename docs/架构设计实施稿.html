@@ -1,12 +1,121 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>gpt-market V3 AI 投资决策系统架构设计实施稿 — V3 Architecture Baseline 1.0</title><style>
-:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--brand-soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc a{display:flex;gap:9px;padding:6px 8px;border-radius:7px;color:#46536b;font-size:13px;line-height:1.4}.toc a:hover{background:var(--brand-soft);color:var(--brand);text-decoration:none}.toc a span{color:#929bb0;font-variant-numeric:tabular-nums}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25;letter-spacing:-.02em}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}h4{font-size:16px}.anchor{visibility:hidden;margin-left:8px;color:#aab2c1;font-weight:400}.paper h2:hover .anchor{visibility:visible}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--brand-soft);color:#44506a;border-radius:0 9px 9px 0}blockquote p{margin:0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}.language-mermaid{white-space:pre}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa;font-weight:650}hr{border:0;border-top:1px solid var(--line);margin:46px 0}.footer{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
-@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.toc nav{columns:2}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px;border-radius:10px}.toc nav{columns:1}h1{font-size:25px}h2{font-size:21px;margin-top:38px}pre{padding:14px 13px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}.anchor{display:none}}
-</style></head><body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><nav><a href="#section-1"><span>01</span>1. V3 Scope 与 V4 Deferred Scope</a><a href="#section-2"><span>02</span>2. 更新后的总体架构</a><a href="#section-3"><span>03</span>3. ChatGPT Web 当前真实交互模式</a><a href="#section-4"><span>04</span>4. 未来模型扩展边界</a><a href="#section-5"><span>05</span>5. Agent Contract</a><a href="#section-6"><span>06</span>6. Full Market Feature 设计</a><a href="#section-7"><span>07</span>7. Multi-Recall 与 Recall Miss</a><a href="#section-8"><span>08</span>8. Full Universe Query</a><a href="#section-9"><span>09</span>9. Evidence 模型</a><a href="#section-10"><span>10</span>10. Context Pack 三级预算</a><a href="#section-11"><span>11</span>11. Task Profile 与 Task Run Registry</a><a href="#section-12"><span>12</span>12. AI Result Import</a><a href="#section-13"><span>13</span>13. Watchlist 状态机</a><a href="#section-14"><span>14</span>14. Immutable Decision</a><a href="#section-15"><span>15</span>15. Append-only Review</a><a href="#section-16"><span>16</span>16. Portfolio 与 Immutable Trade Ledger</a><a href="#section-17"><span>17</span>17. 截图持仓/成交导入流程</a><a href="#section-18"><span>18</span>18. Position Context</a><a href="#section-19"><span>19</span>19. Performance 模型</a><a href="#section-20"><span>20</span>20. Machine Recall / Raw / Action / Entry 严格分层</a><a href="#section-21"><span>21</span>21. expected_horizon 与 time_efficiency</a><a href="#section-22"><span>22</span>22. 601233 Regression 设计</a><a href="#section-23"><span>23</span>23. Model-Agnostic 扩展方案</a><a href="#section-24"><span>24</span>24. 数据库表变化</a><a href="#section-25"><span>25</span>25. READ API</a><a href="#section-26"><span>26</span>26. 当前可落地 WRITE / Import API</a><a href="#section-27"><span>27</span>27. V4 WRITE / MCP / Bridge 扩展点</a><a href="#section-28"><span>28</span>28. V2 → V3 迁移</a><a href="#section-29"><span>29</span>29. 新 Phase 实施顺序</a><a href="#section-30"><span>30</span>30. 每个 Phase 验收标准</a><a href="#section-31"><span>31</span>31. 涉及当前项目的真实文件</a><a href="#section-32"><span>32</span>32. 性能、存储与数据量估算</a><a href="#section-33"><span>33</span>33. 风险与回滚方案</a><a href="#section-34"><span>34</span>34. Known Issues / Future Hardening</a><a href="#section-35"><span>35</span>Review 结论</a><a href="#section-36"><span>36</span>Baseline 1.0 Change Log</a></nav></aside><main class="paper"><h1 id="doc-title">gpt-market V3 AI 投资决策系统架构设计实施稿 — V3 Architecture Baseline 1.0</h1>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="7fcd3b288eaeb2f401dc9e190a51bbff1098bc6d27ef99da1edcf105ae9d15de"><title>gpt-market V3 AI 投资决策系统架构设计实施稿 — V3 Architecture Baseline 1.0</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1-v3-scope-v4-deferred-scope">1. V3 Scope 与 V4 Deferred Scope</a><ul>
+<li><a href="#11-v3-scope">1.1 V3 Scope</a></li>
+<li><a href="#12-v4-deferred-scope">1.2 V4 Deferred Scope</a></li>
+</ul>
+</li>
+<li><a href="#2">2. 更新后的总体架构</a></li>
+<li><a href="#3-chatgpt-web">3. ChatGPT Web 当前真实交互模式</a><ul>
+<li><a href="#31-ai">3.1 系统、AI 与用户的职责边界</a></li>
+</ul>
+</li>
+<li><a href="#4">4. 未来模型扩展边界</a></li>
+<li><a href="#5-agent-contract">5. Agent Contract</a><ul>
+<li><a href="#51-agenttask">5.1 AgentTask</a></li>
+<li><a href="#52-airesultenvelope">5.2 AIResultEnvelope</a></li>
+<li><a href="#53-airesultbundle">5.3 AIResultBundle</a></li>
+</ul>
+</li>
+<li><a href="#6-full-market-feature">6. Full Market Feature 设计</a><ul>
+<li><a href="#61">6.1 数据底座</a></li>
+<li><a href="#62">6.2 全市场每日轻量特征</a></li>
+<li><a href="#63">6.3 深度候选特征</a></li>
+<li><a href="#64">6.4 复权修订与回放</a></li>
+<li><a href="#65-marketregimesnapshot">6.5 MarketRegimeSnapshot</a></li>
+</ul>
+</li>
+<li><a href="#7-multi-recall-recall-miss">7. Multi-Recall 与 Recall Miss</a></li>
+<li><a href="#8-full-universe-query">8. Full Universe Query</a></li>
+<li><a href="#9-evidence">9. Evidence 模型</a><ul>
+<li><a href="#91-evidence-ingestion-pipeline">9.1 Evidence Ingestion Pipeline</a></li>
+<li><a href="#92-evidence">9.2 Evidence 生命周期与质量</a></li>
+</ul>
+</li>
+<li><a href="#10-context-pack">10. Context Pack 三级预算</a><ul>
+<li><a href="#101-context-evidence">10.1 Context Evidence 选择解释</a></li>
+<li><a href="#102-candidatecomparisonpack">10.2 CandidateComparisonPack</a></li>
+</ul>
+</li>
+<li><a href="#11-task-profile-task-run-registry">11. Task Profile 与 Task Run Registry</a></li>
+<li><a href="#12-ai-result-import">12. AI Result Import</a><ul>
+<li><a href="#121-bundle">12.1 Bundle 校验与事务策略</a></li>
+</ul>
+</li>
+<li><a href="#13-watchlist">13. Watchlist 状态机</a></li>
+<li><a href="#14-immutable-decision">14. Immutable Decision</a></li>
+<li><a href="#15-append-only-review">15. Append-only Review</a><ul>
+<li><a href="#151-append-only-marketreview">15.1 Append-only MarketReview</a></li>
+</ul>
+</li>
+<li><a href="#16-portfolio-immutable-trade-ledger">16. Portfolio 与 Immutable Trade Ledger</a><ul>
+<li><a href="#161-portfolio">16.1 Portfolio 只保存事实和软偏好</a></li>
+<li><a href="#162-execution-deviation">16.2 Execution Deviation</a></li>
+</ul>
+</li>
+<li><a href="#17">17. 截图持仓/成交导入流程</a><ul>
+<li><a href="#171-opening_position-reconciliation">17.1 OPENING_POSITION 与 RECONCILIATION</a></li>
+</ul>
+</li>
+<li><a href="#18-position-context">18. Position Context</a></li>
+<li><a href="#19-performance">19. Performance 模型</a></li>
+<li><a href="#20-machine-recall-raw-action-entry">20. Machine Recall / Raw / Action / Entry 严格分层</a></li>
+<li><a href="#21-expected_horizon-time_efficiency">21. expected_horizon 与 time_efficiency</a></li>
+<li><a href="#22-601233-regression">22. 601233 Regression 设计</a></li>
+<li><a href="#23-model-agnostic">23. Model-Agnostic 扩展方案</a></li>
+<li><a href="#24">24. 数据库表变化</a><ul>
+<li><a href="#241-universebar-feature">24.1 Universe、Bar 与 Feature</a></li>
+<li><a href="#242-evidence-market-regime">24.2 Evidence 与 Market Regime</a></li>
+<li><a href="#243-recall">24.3 Recall 与评估</a></li>
+<li><a href="#244-agent">24.4 Agent、任务与导入</a></li>
+<li><a href="#245">24.5 决策状态</a></li>
+<li><a href="#246">24.6 交易与持仓</a></li>
+<li><a href="#247">24.7 评价与策略</a></li>
+</ul>
+</li>
+<li><a href="#25-read-api">25. READ API</a></li>
+<li><a href="#26-write-import-api">26. 当前可落地 WRITE / Import API</a></li>
+<li><a href="#27-v4-write-mcp-bridge">27. V4 WRITE / MCP / Bridge 扩展点</a></li>
+<li><a href="#28-v2-v3">28. V2 → V3 迁移</a></li>
+<li><a href="#29-phase">29. 新 Phase 实施顺序</a><ul>
+<li><a href="#phase-0">Phase 0：冻结基线</a></li>
+<li><a href="#phase-1">Phase 1：正式状态与时点基础</a></li>
+<li><a href="#phase-2universe">Phase 2：Universe 冗余与全市场历史底座</a></li>
+<li><a href="#phase-3full-market-features-universe-query">Phase 3：Full Market Features 与 Universe Query</a></li>
+<li><a href="#phase-4evidence-ingestion-pipeline">Phase 4：Evidence Ingestion Pipeline</a></li>
+<li><a href="#phase-5multi-recallraw-recall-miss">Phase 5：Multi-Recall、Raw 与 Recall Miss 基础</a></li>
+<li><a href="#phase-6contexttask-read-json">Phase 6：Context、Task 与 READ JSON</a></li>
+<li><a href="#phase-7singlebundle-ai-import">Phase 7：Single/Bundle AI Import 与决策状态</a></li>
+<li><a href="#phase-8trade-ledgeropening-position-portfolio">Phase 8：Trade Ledger、截图、Opening Position 与 Portfolio</a></li>
+<li><a href="#phase-9actionentryposition-review">Phase 9：Action、Entry、Position Review 与时间效率</a></li>
+<li><a href="#phase-10performancereplayregression-recall-miss">Phase 10：Performance、Replay、Regression 与 Recall Miss</a></li>
+<li><a href="#phase-11-shadowa-b">Phase 11：初始 Shadow/A-B 与稳定化</a></li>
+</ul>
+</li>
+<li><a href="#30-phase">30. 每个 Phase 验收标准</a></li>
+<li><a href="#31">31. 涉及当前项目的真实文件</a></li>
+<li><a href="#32">32. 性能、存储与数据量估算</a></li>
+<li><a href="#33">33. 风险与回滚方案</a></li>
+<li><a href="#34-known-issues-future-hardening">34. Known Issues / Future Hardening</a></li>
+<li><a href="#review">Review 结论</a></li>
+<li><a href="#baseline-10-change-log">Baseline 1.0 Change Log</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/架构设计实施稿.md · 内容哈希：7fcd3b288eae</div><h1 id="gpt-market-v3-ai-v3-architecture-baseline-10">gpt-market V3 AI 投资决策系统架构设计实施稿 — V3 Architecture Baseline 1.0<a class="headerlink" href="#gpt-market-v3-ai-v3-architecture-baseline-10" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>文档状态：<strong>V3 Architecture Baseline 1.0</strong><br>设计基线：<code>556a335 / v2-phase2a-baseline-20260829</code><br>适用范围：V3 架构设计，不代表已经实施<br>本文档不修改 V1/V2 行情、扫描、评分、Provider、缓存、MCP 或 Web API 业务逻辑。</p>
+<p>文档状态：<strong>V3 Architecture Baseline 1.0</strong>
+设计基线：<code>556a335 / v2-phase2a-baseline-20260829</code>
+适用范围：V3 架构设计，不代表已经实施
+本文档不修改 V1/V2 行情、扫描、评分、Provider、缓存、MCP 或 Web API 业务逻辑。</p>
 </blockquote>
-<h2 id="section-1">1. V3 Scope 与 V4 Deferred Scope<a class="anchor" href="#section-1" aria-label="链接到本节">#</a></h2>
-<h3>1.1 V3 Scope</h3>
+<h2 id="1-v3-scope-v4-deferred-scope">1. V3 Scope 与 V4 Deferred Scope<a class="headerlink" href="#1-v3-scope-v4-deferred-scope" title="Permanent link">&para;</a></h2>
+<h3 id="11-v3-scope">1.1 V3 Scope<a class="headerlink" href="#11-v3-scope" title="Permanent link">&para;</a></h3>
 <p>V3 的目标是在当前主要 AI 客户端仍为 ChatGPT Plus 网页版、且不购买模型 API 的前提下，形成可长期使用、可审计、可复盘的投资决策闭环：</p>
 <p><code>全市场发现 → 深度分析 → 自选观察 → 等待买点 → 真实成交录入 → 持仓分析 → 卖点判断 → Review → Performance → 历史复盘</code></p>
 <p>V3 纳入：</p>
@@ -29,7 +138,7 @@
 provider   = OPENAI
 model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 </code></pre>
-<h3>1.2 V4 Deferred Scope</h3>
+<h3 id="12-v4-deferred-scope">1.2 V4 Deferred Scope<a class="headerlink" href="#12-v4-deferred-scope" title="Permanent link">&para;</a></h3>
 <p>以下能力推迟到 V4：</p>
 <ul>
 <li>浏览器 Bridge、Chrome Extension、ChatGPT DOM 监听；</li>
@@ -41,7 +150,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li>券商 API、自动成交同步和自动对账。</li>
 </ul>
 <p>原因是这些能力需要额外账号、权限、稳定 API、浏览器自动化或真实资金授权。V3 先把事实、上下文、结果契约、人工确认和审计链做稳，避免把尚不存在的能力伪装成可用能力。V3 的 Contract 和 Ingestion API 应允许 V4 复用，但 V3 核心业务不得依赖 V4 组件。</p>
-<h2 id="section-2">2. 更新后的总体架构<a class="anchor" href="#section-2" aria-label="链接到本节">#</a></h2>
+<h2 id="2">2. 更新后的总体架构<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
 <pre><code class="language-mermaid">flowchart TB
     U[用户 / ChatGPT Web / 定时任务] --&gt; G[V3 AI Gateway]
     G --&gt; R[READ JSON API]
@@ -92,7 +201,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li>系统特征与 Market Regime 是 AI 输入，不是固定买卖许可；</li>
 <li>Portfolio 事实与用户偏好是上下文，不是删除机会的硬筛选器。</li>
 </ul>
-<h2 id="section-3">3. ChatGPT Web 当前真实交互模式<a class="anchor" href="#section-3" aria-label="链接到本节">#</a></h2>
+<h2 id="3-chatgpt-web">3. ChatGPT Web 当前真实交互模式<a class="headerlink" href="#3-chatgpt-web" title="Permanent link">&para;</a></h2>
 <p>V3 当前采用“可靠读取 + 结构化导入”：</p>
 <ol>
 <li>ChatGPT Web 读取服务器 JSON；</li>
@@ -106,11 +215,11 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <p>真实成交走独立流程：</p>
 <p><code>手工输入/截图 → Trade Draft → 用户校对并确认 → Immutable Trade Ledger → Portfolio Projection</code></p>
 <p>当前不假设 ChatGPT Plus 网页版能够稳定携带 Bearer Token 直接写服务器，也不使用浏览器 Bridge。</p>
-<h3>3.1 系统、AI 与用户的职责边界</h3>
+<h3 id="31-ai">3.1 系统、AI 与用户的职责边界<a class="headerlink" href="#31-ai" title="Permanent link">&para;</a></h3>
 <p>服务器负责 Market Data、Universe、K 线、Full Market Features、Multi-Recall、Raw Opportunity、Evidence 整理、Market Regime 事实、Portfolio 事实、Trade Ledger、数据质量、明确风险事实和 Performance 统计。</p>
 <p>AI / ChatGPT 负责多候选横向比较、正反 Evidence 分析、Raw 到 Action 的升级判断、Entry Plan、持仓/加仓/减仓/卖点判断和 Review 结论。</p>
 <p>用户负责确认真实 BUY/SELL、期初持仓、对账修正和正式 Strategy Activation。系统不得重新引入 <code>action_total_score</code>、<code>final_total_score</code>、<code>final_rank_score</code> 等统一固定总分代替 AI 最终判断。<code>trend_freshness</code>、<code>ignition_quality</code>、<code>relative_strength</code>、<code>time_efficiency</code>、位置、波动、资金、流动性和基本面等只能作为结构化输入。</p>
-<h2 id="section-4">4. 未来模型扩展边界<a class="anchor" href="#section-4" aria-label="链接到本节">#</a></h2>
+<h2 id="4">4. 未来模型扩展边界<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
 <p>V3 业务层只认识 <code>AgentTask</code>、<code>ContextPack</code>、<code>ToolContract</code>、<code>AIResultEnvelope</code> 和结果 Schema，不允许直接导入任何模型厂商 SDK。</p>
 <p>V4 可在核心域之外增加：</p>
 <pre><code class="language-text">LLMGateway
@@ -123,8 +232,8 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 └── LocalModelAdapter
 </code></pre>
 <p>所有 Adapter 必须输出同一 Envelope，继续经过 V3 Ingestion、校验、确认与审计流程。模型调用失败不能影响行情、持仓和人工操作。</p>
-<h2 id="section-5">5. Agent Contract<a class="anchor" href="#section-5" aria-label="链接到本节">#</a></h2>
-<h3>5.1 AgentTask</h3>
+<h2 id="5-agent-contract">5. Agent Contract<a class="headerlink" href="#5-agent-contract" title="Permanent link">&para;</a></h2>
+<h3 id="51-agenttask">5.1 AgentTask<a class="headerlink" href="#51-agenttask" title="Permanent link">&para;</a></h3>
 <pre><code class="language-json">{
   &quot;task_id&quot;: &quot;uuid&quot;,
   &quot;task_type&quot;: &quot;FIRST_DECISION&quot;,
@@ -139,7 +248,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
   &quot;constraints&quot;: {}
 }
 </code></pre>
-<h3>5.2 AIResultEnvelope</h3>
+<h3 id="52-airesultenvelope">5.2 AIResultEnvelope<a class="headerlink" href="#52-airesultenvelope" title="Permanent link">&para;</a></h3>
 <p>至少包含：</p>
 <ul>
 <li><code>schema_version</code>、<code>result_type</code>；</li>
@@ -161,7 +270,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li><code>EntryPlanResult</code>；</li>
 <li><code>PositionReviewResult</code>。</li>
 </ul>
-<h3>5.3 AIResultBundle</h3>
+<h3 id="53-airesultbundle">5.3 AIResultBundle<a class="headerlink" href="#53-airesultbundle" title="Permanent link">&para;</a></h3>
 <p>一次盘后任务可同时产生一个 <code>MarketReview</code>、多个 Decision、Review、Watchlist、Entry Plan 和 Position Review。V3 正式支持 Bundle：</p>
 <pre><code class="language-json">{
   &quot;schema_version&quot;: &quot;v3.0&quot;,
@@ -192,8 +301,8 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 </code></pre>
 <p>Bundle 中每个 Result 仍拥有自己的 <code>result_id</code>、Task、Context Pack、Evidence 和依赖引用。一次 Bundle 可含多个逻辑 <code>atomic_group</code>：同一股票相互依赖的 Decision、Entry Plan、Watchlist、Review 必须位于同组；不同股票和 MarketReview 可以分组。一次导入、一次预览和一次确认后，服务器按组分别原子提交。</p>
 <p>未知模型必须保存为 <code>UNKNOWN</code>。Envelope 不得包含“已成交”“已持仓”等未经用户确认的资金事实。</p>
-<h2 id="section-6">6. Full Market Feature 设计<a class="anchor" href="#section-6" aria-label="链接到本节">#</a></h2>
-<h3>6.1 数据底座</h3>
+<h2 id="6-full-market-feature">6. Full Market Feature 设计<a class="headerlink" href="#6-full-market-feature" title="Permanent link">&para;</a></h2>
+<h3 id="61">6.1 数据底座<a class="headerlink" href="#61" title="Permanent link">&para;</a></h3>
 <ul>
 <li>覆盖全部 A 股，至少补齐 250 个交易日，初始化目标 300 日；</li>
 <li>日 K 优先保存 raw/unadjusted 原始口径和可取得的 Adjustment Factor；统一前复权 K 作为派生序列供特征计算，并保存 <code>adjust_type</code> 与 Revision 关联；</li>
@@ -203,7 +312,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li>Feature Run 必须记录版本、输入 Snapshot 和可重放信息；</li>
 <li>5m/15m/60m 不做全市场长期采集，仅用于 Action、Watchlist、Portfolio。</li>
 </ul>
-<h3>6.2 全市场每日轻量特征</h3>
+<h3 id="62">6.2 全市场每日轻量特征<a class="headerlink" href="#62" title="Permanent link">&para;</a></h3>
 <ul>
 <li>收益：<code>return_3d/5d/10d/20d/60d/120d/250d</code>；</li>
 <li>位置：<code>position_60d/120d/250d</code>；</li>
@@ -216,7 +325,7 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li>数据质量：覆盖率、缺失字段、陈旧状态、来源与错误。</li>
 </ul>
 <p>若行业基准不可用，<code>relative_industry_strength</code> 必须为 <code>null</code>，不得编造。</p>
-<h3>6.3 深度候选特征</h3>
+<h3 id="63">6.3 深度候选特征<a class="headerlink" href="#63" title="Permanent link">&para;</a></h3>
 <p>仅对 Action、AI Watchlist、真实持仓计算：</p>
 <ul>
 <li>5m/15m/60m 结构；</li>
@@ -225,10 +334,10 @@ model      = UNKNOWN（网页版无法可靠确认时禁止猜测）
 <li>详细基本面、行业横比和 Evidence；</li>
 <li>Portfolio 成本与真实交易上下文。</li>
 </ul>
-<h3>6.4 复权修订与回放</h3>
+<h3 id="64">6.4 复权修订与回放<a class="headerlink" href="#64" title="Permanent link">&para;</a></h3>
 <p>严格 Replay 的优先数据底座是不可变的 raw/unadjusted Bar，以及能够取得的 Corporate Action 和 Adjustment Factor。前复权、后复权 K 线作为派生序列，必须绑定 <code>series_revision_id</code>、Factor Revision、<code>content_hash</code> 和 <code>known_at</code>。Feature Snapshot 必须绑定实际输入修订，避免未来公司行动或复权因子变化污染旧回放。</p>
 <p>如果历史源只能提供前复权数据，则保存该不可变修订，并明确记录 <code>raw_bar_available=false</code>、<code>factor_available=false</code>、<code>point_in_time_precision=LIMITED</code> 和限制原因；此类 Replay 可用于近似分析，但不能宣称完全 Point-in-Time 精确。</p>
-<h3>6.5 MarketRegimeSnapshot</h3>
+<h3 id="65-marketregimesnapshot">6.5 MarketRegimeSnapshot<a class="headerlink" href="#65-marketregimesnapshot" title="Permanent link">&para;</a></h3>
 <p>Market Regime 正式属于 V3 的事实层。服务器记录可验证事实：主要指数趋势、市场宽度、上涨/下跌家数、全市场成交额、涨停/跌停数量与结构、大盘/小盘风格、成长/价值风格、行业轮动、强弱行业、风险偏好，以及已进入 Evidence 的重要国内、海外和地缘风险。</p>
 <pre><code class="language-text">regime_snapshot_id, as_of, known_at, feature_run_id,
 index_states, breadth, turnover, limit_structure,
@@ -237,7 +346,7 @@ risk_appetite_facts, domestic_risk_evidence_ids,
 global_risk_evidence_ids, coverage, confidence, stale
 </code></pre>
 <p>Regime 不输出固定“今日不准买”的总分或硬开关，只进入 AI Context。Performance 可按 Market Regime 对 Opportunity Type、Recall Channel、Strategy Version 和 AI Decision 模式分组评价。</p>
-<h2 id="section-7">7. Multi-Recall 与 Recall Miss<a class="anchor" href="#section-7" aria-label="链接到本节">#</a></h2>
+<h2 id="7-multi-recall-recall-miss">7. Multi-Recall 与 Recall Miss<a class="headerlink" href="#7-multi-recall-recall-miss" title="Permanent link">&para;</a></h2>
 <p>建议首批通道：</p>
 <ul>
 <li><code>LOW_POSITION_TURNING</code>；</li>
@@ -262,7 +371,7 @@ global_risk_evidence_ids, coverage, confidence, stale
 <li>漏失股票、行业、市场环境和漏失类型；</li>
 <li>多通道组合的增量覆盖和冗余度。</li>
 </ul>
-<h2 id="section-8">8. Full Universe Query<a class="anchor" href="#section-8" aria-label="链接到本节">#</a></h2>
+<h2 id="8-full-universe-query">8. Full Universe Query<a class="headerlink" href="#8-full-universe-query" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">GET /api/v3/universe/features
 GET /api/v3/universe/query
 </code></pre>
@@ -283,7 +392,7 @@ order=desc
 <li>支持某行业全部证券横向比较；</li>
 <li>支持查询未命中 Recall 的股票。</li>
 </ul>
-<h2 id="section-9">9. Evidence 模型<a class="anchor" href="#section-9" aria-label="链接到本节">#</a></h2>
+<h2 id="9-evidence">9. Evidence 模型<a class="headerlink" href="#9-evidence" title="Permanent link">&para;</a></h2>
 <p>Evidence 类型严格区分：</p>
 <ul>
 <li><code>FACT</code>；</li>
@@ -307,7 +416,7 @@ raw_reference, content_hash, conflict_state
 <li>多源冲突显式保存，不允许静默任选；</li>
 <li>外部文本进入 Context 前进行来源标记和提示注入隔离。</li>
 </ul>
-<h3>9.1 Evidence Ingestion Pipeline</h3>
+<h3 id="91-evidence-ingestion-pipeline">9.1 Evidence Ingestion Pipeline<a class="headerlink" href="#91-evidence-ingestion-pipeline" title="Permanent link">&para;</a></h3>
 <p>统一采集链路：</p>
 <pre><code class="language-text">Evidence Source / Provider
 → Fetch → Raw Document → Parse → Dedup → Normalize → 时间标准化
@@ -324,35 +433,37 @@ raw_reference, content_hash, conflict_state
 <p>Provider 能力和优先级按 Evidence 类型配置，不能使用一个全局优先级。官方披露优先于转述；聚合器必须保存真实 <code>upstream_source</code>。Fetch 先保存不可变 Raw Document、原始引用、响应 Hash、抓取时间和解析版本，解析失败也保留原件以便重放。</p>
 <p>Dedup 使用规范化 URL、公告标识、内容 Hash 和近似重复指纹；不得因标题相近误删内容不同的更新。Entity Linking 保存候选实体、匹配依据和置信度，低置信结果不自动绑定证券。时间标准化严格区分 <code>event_time</code>、<code>publish_time</code>、<code>fetch_time</code>、<code>known_at</code>，未知字段保持 <code>null/UNKNOWN</code>。</p>
 <p>Conflict Detection 按字段或命题记录冲突集合、来源优先级和置信度，不覆盖低优先级原记录。多个 Opinion 一致仍然只是 Opinion，不能升级为 Fact。所有网页、新闻和外部文本都是 Untrusted Data：仅作为带边界的数据片段进入 Context，禁止把其中的命令、提示或工具调用文本拼接为 Agent 指令。</p>
-<h3>9.2 Evidence 生命周期与质量</h3>
+<h3 id="92-evidence">9.2 Evidence 生命周期与质量<a class="headerlink" href="#92-evidence" title="Permanent link">&para;</a></h3>
 <p>每条 Evidence 保存解析状态、覆盖实体、可用性、衰减规则和失效时间。公告等历史事实通常不因时间失效，但其决策相关性可衰减；即时新闻和市场观点应有更短有效期。Context Retrieval 同时考虑来源权威性、时点、相关性、冲突、正反平衡和数据质量。</p>
-<h2 id="section-10">10. Context Pack 三级预算<a class="anchor" href="#section-10" aria-label="链接到本节">#</a></h2>
+<h2 id="10-context-pack">10. Context Pack 三级预算<a class="headerlink" href="#10-context-pack" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>级别</th>
-<th align="right">预算</th>
+<th style="text-align: right;">预算</th>
 <th>典型用途</th>
 </tr>
 </thead>
-<tbody><tr>
+<tbody>
+<tr>
 <td>FAST</td>
-<td align="right">2k–4k tokens</td>
+<td style="text-align: right;">2k–4k tokens</td>
 <td>盘中快速 Review、Watchlist 检查、持仓异常检查</td>
 </tr>
 <tr>
 <td>NORMAL</td>
-<td align="right">5k–8k tokens</td>
+<td style="text-align: right;">5k–8k tokens</td>
 <td>常规股票分析、盘前/盘后重点候选</td>
 </tr>
 <tr>
 <td>DEEP</td>
-<td align="right">10k–14k tokens</td>
+<td style="text-align: right;">10k–14k tokens</td>
 <td>首次 Decision、重大变化、准备交易、深度复盘</td>
 </tr>
-</tbody></table>
+</tbody>
+</table>
 <p>Task Profile 决定级别。裁剪按事实重要性、时点相关性、冲突和任务目标排序。无论预算多小，都不得裁掉：真实持仓、真实交易、止损/取消条件、关键反方 Evidence、数据质量和冲突警告。</p>
-<h3>10.1 Context Evidence 选择解释</h3>
+<h3 id="101-context-evidence">10.1 Context Evidence 选择解释<a class="headerlink" href="#101-context-evidence" title="Permanent link">&para;</a></h3>
 <p>每条进入最终 Context Pack 的 Evidence 额外记录：</p>
 <pre><code class="language-text">selection_reason
 side = SUPPORT | CONTRARY | NEUTRAL
@@ -361,7 +472,7 @@ relevance
 source_priority
 </code></pre>
 <p>同时保存候选集合版本和 Retrieval 配置，使 Replay 能回答“当时数据库有 100 条内容，为什么只有这 5 条进入 Context”。<code>retrieval_score</code> 仅用于检索排序，不改变 Evidence 的事实类型，也不能将 Opinion 转成 Fact。</p>
-<h3>10.2 CandidateComparisonPack</h3>
+<h3 id="102-candidatecomparisonpack">10.2 CandidateComparisonPack<a class="headerlink" href="#102-candidatecomparisonpack" title="Permanent link">&para;</a></h3>
 <p>AI 负责 Raw → Action 的最终横向判断，因此 V3 提供面向 20–100 只候选的紧凑 <code>CandidateComparisonPack</code>。它绑定 Universe/Feature/Recall/Market Regime Snapshot，用统一字段横向展示代码、名称、Recall 命中、趋势新鲜度、启动质量、相对强度、时间效率、位置、波动、量价、流动性、基本面摘要、关键风险、Evidence 摘要和数据质量。</p>
 <p>Candidate Comparison 不拼接每只股票的完整 NORMAL/DEEP Context，不输出统一 Final Score。标准流程是：</p>
 <pre><code class="language-text">Universe Query / Recall / Raw 候选 N（20–100）
@@ -371,7 +482,7 @@ source_priority
 → Decision / Entry Plan / Watchlist Bundle
 </code></pre>
 <p>Pack 保存 <code>comparison_pack_id</code>、<code>candidate_set_id</code>、候选顺序、字段版本、Snapshot/Run IDs、生成时间、<code>known_at</code>、Coverage、裁剪说明和 Content Hash，以支持 Replay。Task Profile 可声明 <code>comparison_first=true</code>、候选上限、TopK 上限和 TopK 后续 Context Level。</p>
-<h2 id="section-11">11. Task Profile 与 Task Run Registry<a class="anchor" href="#section-11" aria-label="链接到本节">#</a></h2>
+<h2 id="11-task-profile-task-run-registry">11. Task Profile 与 Task Run Registry<a class="headerlink" href="#11-task-profile-task-run-registry" title="Permanent link">&para;</a></h2>
 <p>首批 Profile：</p>
 <p><code>PRE_MARKET</code>、<code>OPEN_1000</code>、<code>MID_MORNING</code>、<code>AFTERNOON</code>、<code>CLOSE</code>、<code>POST_MARKET</code>、<code>WATCHLIST_REVIEW</code>、<code>POSITION_REVIEW</code>、<code>FIRST_DECISION</code>、<code>DEEP_REPLAY</code>。</p>
 <p>Profile 保存版本、Context Level、必需数据、输出 Schema、Review 规则、<code>schedule</code>、<code>timezone</code>、<code>trading_calendar</code>、执行窗口、宽限期、是否先执行 Candidate Comparison、候选/TopK 上限和 Strategy Version。A 股任务默认时区为 <code>Asia/Shanghai</code>；交易日历必须绑定来源和版本，尚未验证时保持 <code>UNKNOWN</code>。</p>
@@ -381,7 +492,7 @@ source_priority
          ↘ MISSED / CANCELLED
 </code></pre>
 <p>Expected Run 仅表示“按 Profile 预期 ChatGPT 分析任务应当发生”，不代表服务器已经执行了 AI，也不代表 ChatGPT 已经运行。只有 AI Result 成功导入才进入 <code>COMPLETED</code>。用户可以标记“ChatGPT 已执行、待导入”；超出宽限期仍无结果则保留 <code>MISSED</code>，不能静默形成历史空洞。正式 A 股交易日历目前若未有经验证来源，应标记为 <code>UNKNOWN</code>，实施时补充可靠 Provider。</p>
-<h2 id="section-12">12. AI Result Import<a class="anchor" href="#section-12" aria-label="链接到本节">#</a></h2>
+<h2 id="12-ai-result-import">12. AI Result Import<a class="headerlink" href="#12-ai-result-import" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">POST /api/v3/ai-results/import
 POST /api/v3/ai-results/{import_id}/confirm
 </code></pre>
@@ -399,12 +510,12 @@ POST /api/v3/ai-results/{import_id}/confirm
 <li>记录审计和原始 Envelope Hash。</li>
 </ol>
 <p>Position Review 的 <code>SELL</code> 建议不得产生真实交易。V4 Bridge、MCP 或模型 API 接入后仍复用此流程。</p>
-<h3>12.1 Bundle 校验与事务策略</h3>
+<h3 id="121-bundle">12.1 Bundle 校验与事务策略<a class="headerlink" href="#121-bundle" title="Permanent link">&para;</a></h3>
 <p>V3 采用<strong>一次导入、一次预览、一次确认、按逻辑 <code>atomic_group</code> 原子提交</strong>。同一股票的 Decision、Entry Plan、Watchlist、Review 及其 Evidence 关联存在业务依赖，必须位于同组并在一个数据库事务中全部成功或全部回滚。不同股票以及 MarketReview 可以属于不同组。</p>
 <p>解析阶段先校验 Bundle Schema 和组间规则，再对各组分别校验 Context Hash、Evidence、Task Run、临时引用、重复项和业务不变量。跨组禁止引用会破坏原子性的待创建对象；确有共享对象时必须先指向已经存在且不可变的 ID，或把相关结果并入同组。</p>
 <p>用户查看整个 Batch Preview 后只确认一次。确认阶段按组提交：单组失败不得导致其他合法组丢失，也不得留下本组半套数据。最终响应必须明确返回 <code>successful_groups</code>、<code>failed_groups</code>、每组 Result IDs、失败原因、是否可重试和 Task Run 状态。失败组可修正后以新 Bundle 或原 Bundle 的幂等重试重新提交。</p>
 <p>Bundle Preview 展示各组合法/错误 Result 数、每只证券将创建的对象、依赖关系、Context/Task 状态和所有警告。确认接口绑定 Bundle Hash、Preview Revision 和幂等键，防止预览后内容被替换或同组重复写入。Single Envelope 视为只包含一个 Atomic Group 的 Bundle。</p>
-<h2 id="section-13">13. Watchlist 状态机<a class="anchor" href="#section-13" aria-label="链接到本节">#</a></h2>
+<h2 id="13-watchlist">13. Watchlist 状态机<a class="headerlink" href="#13-watchlist" title="Permanent link">&para;</a></h2>
 <pre><code class="language-text">WATCHING → WAIT_ENTRY → ACTION_READY → TRIGGERED
    ↓           ↓             ↓           ↓
  SLOW      DOWNGRADED    INVALIDATED   等待真实成交
@@ -412,7 +523,7 @@ POST /api/v3/ai-results/{import_id}/confirm
                             用户确认 BUY → HOLDING
 </code></pre>
 <p><code>TARGET_HIT</code>、<code>STOPPED</code> 仅表示市场信号，不代表已经卖出。部分卖出后仍为 <code>HOLDING</code>，数量以 Trade Ledger 推导为准。只有 Ledger 数量归零，或无真实持仓时经人工关闭，才进入 <code>CLOSED</code>。</p>
-<h2 id="section-14">14. Immutable Decision<a class="anchor" href="#section-14" aria-label="链接到本节">#</a></h2>
+<h2 id="14-immutable-decision">14. Immutable Decision<a class="headerlink" href="#14-immutable-decision" title="Permanent link">&para;</a></h2>
 <p>Decision 至少保存：</p>
 <ul>
 <li><code>decision_id</code>、<code>assistant_model/model</code>；</li>
@@ -425,7 +536,7 @@ POST /api/v3/ai-results/{import_id}/confirm
 <li>原始 Envelope Hash 和 Decision Content Hash。</li>
 </ul>
 <p>Decision 创建后不可修改。纠错通过追加 <code>decision_corrections</code>，保留旧值、新值、原因、操作者和时间。</p>
-<h2 id="section-15">15. Append-only Review<a class="anchor" href="#section-15" aria-label="链接到本节">#</a></h2>
+<h2 id="15-append-only-review">15. Append-only Review<a class="headerlink" href="#15-append-only-review" title="Permanent link">&para;</a></h2>
 <p>Review 保存：</p>
 <ul>
 <li><code>review_id</code>、<code>decision_id</code>、<code>previous_review_id</code>；</li>
@@ -437,10 +548,10 @@ POST /api/v3/ai-results/{import_id}/confirm
 <p>Thesis 状态：</p>
 <p><code>STRENGTHENED</code>、<code>MAINTAINED</code>、<code>TIME_EFFICIENCY_DECLINING</code>、<code>WEAKENED</code>、<code>INVALIDATED</code>。</p>
 <p>Review 只能追加，不能改写原 Decision、创建真实成交、修改 Ledger 或激活策略。</p>
-<h3>15.1 Append-only MarketReview</h3>
+<h3 id="151-append-only-marketreview">15.1 Append-only MarketReview<a class="headerlink" href="#151-append-only-marketreview" title="Permanent link">&para;</a></h3>
 <p><code>MarketReview</code> 是独立 AI Result，并持久化到 <code>market_reviews</code>。至少保存 <code>market_review_id</code>、<code>task_run_id</code>、<code>market_regime_snapshot_id</code>、<code>context_pack_id/hash</code>、<code>evidence_ids</code>、完整 Agent Identity、<code>prompt_version</code>、<code>strategy_version</code>、<code>as_of</code>、<code>produced_at</code>、市场结论、支持/反方事实、主要风险、关注行业、后续观察点和 Content Hash。</p>
 <p>MarketReview 保持 Append-only，不覆盖历史判断；修订通过新 MarketReview 引用 <code>previous_market_review_id</code>。它可以作为独立 Atomic Group 导入，失败不得回滚其他股票的合法组，也不能直接生成交易或固定市场买卖禁令。</p>
-<h2 id="section-16">16. Portfolio 与 Immutable Trade Ledger<a class="anchor" href="#section-16" aria-label="链接到本节">#</a></h2>
+<h2 id="16-portfolio-immutable-trade-ledger">16. Portfolio 与 Immutable Trade Ledger<a class="headerlink" href="#16-portfolio-immutable-trade-ledger" title="Permanent link">&para;</a></h2>
 <p>三个概念必须分离：</p>
 <ul>
 <li><code>EntryPlan</code>：AI 建议的交易计划；</li>
@@ -462,10 +573,10 @@ entry_plan_matched, execution_type, execution_deviation_pct,
 execution_note, created_at
 </code></pre>
 <p>Ledger 不允许 UPDATE/DELETE。错误通过冲正或 Correction 追加。持仓必须由 Ledger 重建；Projection 只是可丢弃缓存。默认禁止超卖，除非账户明确允许相应业务。公司行动使用独立 Adjustment Ledger；当前可靠公司行动来源若未确认，标记 <code>UNKNOWN</code>。</p>
-<h3>16.1 Portfolio 只保存事实和软偏好</h3>
+<h3 id="161-portfolio">16.1 Portfolio 只保存事实和软偏好<a class="headerlink" href="#161-portfolio" title="Permanent link">&para;</a></h3>
 <p>Portfolio 事实包括真实持仓、数量、平均成本、实际成交历史、当前市值、已实现/未实现收益、可确认资金、行业/主题分布、持仓数量、当前 Action 候选和整体变化。这些内容进入 Portfolio Context，由 AI 判断集中度、候选重叠、是否开新仓、机会优先级、现金保留和整体风险。</p>
 <p>V3 不通过 <code>max_sector_exposure=30%</code>、<code>max_open_positions=5</code>、<code>max_single_position=20%</code> 等固定门槛直接删除机会。未来可增加 <code>PortfolioPreference</code> / <code>UserInvestmentPreference</code>，保存 <code>preferred_horizon</code>、<code>risk_tolerance</code>、<code>desired_cash_buffer</code>、<code>position_preference</code> 等软信息；默认仅作为 AI Context，不作为 Recall 或 Raw 的硬过滤条件。</p>
-<h3>16.2 Execution Deviation</h3>
+<h3 id="162-execution-deviation">16.2 Execution Deviation<a class="headerlink" href="#162-execution-deviation" title="Permanent link">&para;</a></h3>
 <p>真实成交必须与对应 Entry Plan 比较，并保存：</p>
 <pre><code class="language-text">entry_plan_matched
 execution_type = PLAN_MATCHED | PARTIAL_MATCH | USER_OVERRIDE |
@@ -478,7 +589,7 @@ cancel_condition_violated
 execution_note
 </code></pre>
 <p>价格偏差以计划价格区间为基准：区间内为匹配；区间外按与最近边界的差异计算，并保存当时计划版本。<code>time_deviation</code> 比较计划窗口与真实成交时间，<code>quantity_deviation</code> 比较计划数量/仓位与真实成交，<code>trigger_matched</code> 和 <code>cancel_condition_violated</code> 保留触发与取消条件执行事实。用户追高、延迟、减少数量、违反取消条件或自主交易不能污染 AI Entry Plan 本身的评价。</p>
-<h2 id="section-17">17. 截图持仓/成交导入流程<a class="anchor" href="#section-17" aria-label="链接到本节">#</a></h2>
+<h2 id="17">17. 截图持仓/成交导入流程<a class="headerlink" href="#17" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">POST /api/v3/trades/import-image
 POST /api/v3/trade-drafts/{draft_id}/confirm
 </code></pre>
@@ -493,17 +604,17 @@ POST /api/v3/trade-drafts/{draft_id}/confirm
 <li>成交 Draft 写入 Immutable Ledger，重新计算 Portfolio 并审计。</li>
 </ol>
 <p>成交截图可生成交易草稿；持仓截图不能反推出不存在的逐笔成交，只能用于对账、期初余额或 Position Snapshot Draft。OCR 结果绝不能直接改变持仓。</p>
-<h3>17.1 OPENING_POSITION 与 RECONCILIATION</h3>
+<h3 id="171-opening_position-reconciliation">17.1 OPENING_POSITION 与 RECONCILIATION<a class="headerlink" href="#171-opening_position-reconciliation" title="Permanent link">&para;</a></h3>
 <p>V3 上线时已存在但缺少逐笔历史的持仓，使用 <code>OPENING_POSITION</code> 表示“系统开始记录前已经存在的真实持仓基准”，保存证券、基准数量、平均成本、基准时间、来源、确认人和证据引用，不得伪造成一笔历史 BUY。</p>
 <p>后续真实 BUY/SELL 正常追加到 Immutable Trade Ledger。成本计算以 Opening Position 的数量和总成本为起点，再按账户配置的成本法处理新增成交；卖出优先减少可用数量，并据基准成本与后续成交计算已实现收益。所有计算必须可由 Opening Position 加后续 Ledger 重建。</p>
 <p><code>RECONCILIATION</code> 用于券商事实与系统 Projection 不一致时记录差异、原因和确认后的调整，不直接篡改旧记录。若差异原因未知，保留 <code>UNKNOWN</code> 和原始截图/对账引用。Opening Position 和 Reconciliation 都必须经用户预览确认并进入审计链。</p>
-<h2 id="section-18">18. Position Context<a class="anchor" href="#section-18" aria-label="链接到本节">#</a></h2>
+<h2 id="18-position-context">18. Position Context<a class="headerlink" href="#18-position-context" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">GET /api/v3/portfolio
 GET /api/v3/portfolio/{code}/context
 </code></pre>
 <p>返回：真实数量、成本计算方法、平均成本、已实现/未实现收益、最新价格、逐笔交易、首次买入时间、持有交易日、原始 Decision、Entry Plan、最新 Review、止损/目标、支撑/阻力、5m/15m/60m/日/周结构、行业、基本面、Evidence、风险、时间效率和数据质量。</p>
 <p><code>PositionReviewResult</code> 可建议 <code>HOLD</code>、<code>REDUCE</code>、<code>TAKE_PROFIT</code>、<code>MOVE_STOP</code>、<code>EXIT</code>、<code>STOP_LOSS</code>，但全部只是建议，不能自动生成成交。</p>
-<h2 id="section-19">19. Performance 模型<a class="anchor" href="#section-19" aria-label="链接到本节">#</a></h2>
+<h2 id="19-performance">19. Performance 模型<a class="headerlink" href="#19-performance" title="Permanent link">&para;</a></h2>
 <p>七类能力独立评价：</p>
 <ol>
 <li>Stock Selection Quality；</li>
@@ -517,7 +628,7 @@ GET /api/v3/portfolio/{code}/context
 <p>指标包括 T+1/3/5/10/20 收益、基准超额收益、MFE、MAE、达标时间、方向正确性、Entry 是否触发、是否真实成交、Target/Stop 是否命中、Exit Efficiency。</p>
 <p>股票上涨但用户未买，只计 Selection；Entry 触发但没有真实成交，记录 <code>entry_triggered=true</code>、<code>actual_trade=false</code>、<code>holding=false</code>，不得计算为交易盈亏。</p>
 <p>Performance 必须基于 Execution Deviation 区分“AI 计划错误”和“用户未按计划执行”。AI 选股与买点正确、但用户追高导致亏损时，Selection/Entry Plan 可保持正确，偏差归入 User Execution；AI 未建议买入而用户自主买入时记录 <code>MANUAL_TRADE_WITHOUT_AI_ENTRY</code>，不计入 AI Entry 绩效。</p>
-<h2 id="section-20">20. Machine Recall / Raw / Action / Entry 严格分层<a class="anchor" href="#section-20" aria-label="链接到本节">#</a></h2>
+<h2 id="20-machine-recall-raw-action-entry">20. Machine Recall / Raw / Action / Entry 严格分层<a class="headerlink" href="#20-machine-recall-raw-action-entry" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Machine Recall</strong>：值得进一步研究的候选集合；</li>
 <li><strong>Raw Opportunity</strong>：整体值得研究，但未必适合近期占用资金；</li>
@@ -527,7 +638,7 @@ GET /api/v3/portfolio/{code}/context
 </ul>
 <p>Action 重点看趋势新鲜度、启动质量、量价/资金确认、时间效率、相对强度、行业确认、基本面、催化和风险。机场、银行、港口等低波动慢股可保持较高 Raw，但仅因低位和盈亏比漂亮不能长期占据 Action 前列。</p>
 <p>上述字段是事实与可解释信号。系统可以提供分项和排序辅助，但禁止生成 <code>action_total_score</code>、<code>final_total_score</code>、<code>final_rank_score</code> 等固定统一总分替代 AI 的最终比较。任何未命中 Recall 的证券仍可被 Universe Query 访问。</p>
-<h2 id="section-21">21. expected_horizon 与 time_efficiency<a class="anchor" href="#section-21" aria-label="链接到本节">#</a></h2>
+<h2 id="21-expected_horizon-time_efficiency">21. expected_horizon 与 time_efficiency<a class="headerlink" href="#21-expected_horizon-time_efficiency" title="Permanent link">&para;</a></h2>
 <p>建议 Horizon 枚举：</p>
 <ul>
 <li><code>D1_5</code>；</li>
@@ -537,7 +648,7 @@ GET /api/v3/portfolio/{code}/context
 </ul>
 <p>保存 <code>expected_horizon</code>、触发窗口、已过交易日、<code>time_efficiency_state</code>、衰减原因。状态为 <code>HIGH</code>、<code>NORMAL</code>、<code>SLOW</code>、<code>EXPIRED</code>、<code>UNKNOWN</code>。</p>
 <p>时间效率应是可解释字段组合，不应压缩成无法解释的单一分数。慢机会可以保留在 Raw，但 Action 优先级应反映资金占用效率。</p>
-<h2 id="section-22">22. 601233 Regression 设计<a class="anchor" href="#section-22" aria-label="链接到本节">#</a></h2>
+<h2 id="22-601233-regression">22. 601233 Regression 设计<a class="headerlink" href="#22-601233-regression" title="Permanent link">&para;</a></h2>
 <p>当前已知案例约束：</p>
 <pre><code class="language-text">zone: 22.45–22.70
 stop: 21.65
@@ -549,31 +660,31 @@ target1: 24.90
 <pre><code class="language-text">BLOCKED_BY_MISSING_POINT_IN_TIME_DATA
 </code></pre>
 <p>不得利用后来上涨倒推“当时应该选中”。V3 上线后自动保留 Universe、Feature、Recall/Miss、Context Pack、Decision 和结果观察，持续形成新的严格时点 Regression Cases。</p>
-<h2 id="section-23">23. Model-Agnostic 扩展方案<a class="anchor" href="#section-23" aria-label="链接到本节">#</a></h2>
+<h2 id="23-model-agnostic">23. Model-Agnostic 扩展方案<a class="headerlink" href="#23-model-agnostic" title="Permanent link">&para;</a></h2>
 <p>核心域只保存标准 Contract 和完整 Agent Identity，不感知具体 SDK。当前 ChatGPT Web 记录 <code>provider=OPENAI</code>；模型无法确认时为 <code>UNKNOWN</code>。</p>
 <p>V4 Adapter 负责把厂商输入输出转换为统一 Envelope；Gateway 负责调用、限流、超时和路由；Orchestrator 负责多 Agent 任务。三者都位于业务域外，不能绕过 Ingestion、用户确认、审计或资金事实边界。</p>
-<h2 id="section-24">24. 数据库表变化<a class="anchor" href="#section-24" aria-label="链接到本节">#</a></h2>
-<h3>24.1 Universe、Bar 与 Feature</h3>
+<h2 id="24">24. 数据库表变化<a class="headerlink" href="#24" title="Permanent link">&para;</a></h2>
+<h3 id="241-universebar-feature">24.1 Universe、Bar 与 Feature<a class="headerlink" href="#241-universebar-feature" title="Permanent link">&para;</a></h3>
 <p><code>universe_sources</code>、<code>universe_snapshots</code>、<code>universe_members</code>、<code>universe_diffs</code>、<code>raw_bars</code>、<code>corporate_actions</code>、<code>adjustment_factor_revisions</code>、<code>bar_series_revisions</code>、<code>feature_runs</code>、<code>security_features</code>、<code>candidate_comparison_packs</code>、<code>candidate_comparison_members</code>。</p>
 <p>Universe Snapshot 保存 <code>source</code>、<code>known_at</code>、<code>fetch_time</code>、<code>coverage</code>、<code>stale</code>、前后差异、新股、退市、停牌和风险标记。</p>
 <p>Universe Provider 链：</p>
 <p><code>Primary → Secondary → Last-Known-Good</code></p>
 <p>Primary 当前可沿用 Eastmoney；Secondary 尚未经实施验证，必须标记 <code>UNKNOWN</code>，不能直接宣称 Tencent 已可用。</p>
-<h3>24.2 Evidence 与 Market Regime</h3>
+<h3 id="242-evidence-market-regime">24.2 Evidence 与 Market Regime<a class="headerlink" href="#242-evidence-market-regime" title="Permanent link">&para;</a></h3>
 <p><code>evidence_sources</code>、<code>evidence_fetch_runs</code>、<code>raw_documents</code>、<code>evidence_records</code>、<code>evidence_entity_links</code>、<code>evidence_conflicts</code>、<code>context_pack_evidence_selections</code>、<code>market_regime_snapshots</code>。</p>
 <p>Raw Document 与标准化 Evidence 分离；选择表保存 <code>selection_reason</code>、<code>side</code>、Retrieval Score 和 Source Priority。</p>
-<h3>24.3 Recall 与评估</h3>
+<h3 id="243-recall">24.3 Recall 与评估<a class="headerlink" href="#243-recall" title="Permanent link">&para;</a></h3>
 <p><code>recall_channels</code>、<code>recall_runs</code>、<code>recall_results</code>、<code>recall_miss_evaluations</code>。</p>
-<h3>24.4 Agent、任务与导入</h3>
+<h3 id="244-agent">24.4 Agent、任务与导入<a class="headerlink" href="#244-agent" title="Permanent link">&para;</a></h3>
 <p><code>agent_tasks</code>、<code>task_profiles</code>、<code>expected_runs</code>、<code>task_runs</code>、<code>ai_result_imports</code>、<code>ai_result_bundles</code>、<code>ai_result_atomic_groups</code>、<code>ai_result_envelopes</code>、<code>ai_result_dependencies</code>。</p>
-<h3>24.5 决策状态</h3>
+<h3 id="245">24.5 决策状态<a class="headerlink" href="#245" title="Permanent link">&para;</a></h3>
 <p><code>watchlists</code>、<code>watchlist_events</code>、<code>watchlist_proposals</code>、<code>decisions</code>、<code>decision_corrections</code>、<code>entry_plans</code>、<code>reviews</code>、<code>market_reviews</code>。</p>
-<h3>24.6 交易与持仓</h3>
+<h3 id="246">24.6 交易与持仓<a class="headerlink" href="#246" title="Permanent link">&para;</a></h3>
 <p><code>accounts</code>、<code>trade_ledger</code>、<code>trade_corrections</code>、<code>trade_import_batches</code>、<code>trade_drafts</code>、<code>image_imports</code>、<code>opening_positions</code>、<code>reconciliations</code>、<code>position_snapshot_drafts</code>、<code>position_projections</code>、<code>portfolio_snapshots</code>、<code>portfolio_preferences</code>、<code>corporate_action_adjustments</code>。Trade Ledger 应保存 Entry Plan 匹配状态和 Execution Deviation。</p>
-<h3>24.7 评价与策略</h3>
+<h3 id="247">24.7 评价与策略<a class="headerlink" href="#247" title="Permanent link">&para;</a></h3>
 <p><code>performance_observations</code>、<code>performance_summaries</code>、<code>regression_cases</code>、<code>replay_runs</code>、<code>strategy_versions</code>、<code>strategy_proposals</code>、<code>strategy_experiments</code>、<code>guardrail_versions</code>。</p>
 <p>所有正式状态表至少具备创建时间、操作者、来源、版本和审计关联；时点数据必须区分 <code>event_time</code>、<code>fetch_time</code> 和 <code>known_at</code>。</p>
-<h2 id="section-25">25. READ API<a class="anchor" href="#section-25" aria-label="链接到本节">#</a></h2>
+<h2 id="25-read-api">25. READ API<a class="headerlink" href="#25-read-api" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">GET /api/v3/market-overview
 GET /api/v3/market-regime
 GET /api/v3/universe/features
@@ -603,7 +714,7 @@ GET /api/v3/health/data-quality
 <p>机器接口全部返回 JSON。HTML 仅供人类查看，不作为 ChatGPT 的主要数据接口。</p>
 <p><code>GET /api/v3/candidates/comparison-pack</code> 接受 <code>candidate_set_id</code>，或绑定同一 Snapshot 的 20–100 个代码，并支持字段 Profile。返回紧凑横向数据和 Pack Hash；Task 先以该 Pack 完成 N→TopK，再对 TopK 调用单股 Context API。</p>
 <p>当前单用户阶段允许沿用现有可访问 HTTPS READ 方式；完整企业级 READ 鉴权和稳定域名属于第 34 章 Future Hardening，不阻塞核心闭环。Portfolio 与公开市场数据仍应在接口边界上保持可分离，为未来权限分级预留 Scope。</p>
-<h2 id="section-26">26. 当前可落地 WRITE / Import API<a class="anchor" href="#section-26" aria-label="链接到本节">#</a></h2>
+<h2 id="26-write-import-api">26. 当前可落地 WRITE / Import API<a class="headerlink" href="#26-write-import-api" title="Permanent link">&para;</a></h2>
 <pre><code class="language-http">POST /api/v3/ai-results/import
 POST /api/v3/ai-results/{import_id}/confirm
 POST /api/v3/task-runs/{run_id}/start
@@ -626,10 +737,10 @@ POST /api/v3/strategy/versions/{id}/rollback
 </code></pre>
 <p>当前 WRITE 仅供已认证的人类 UI 使用。AI 导入需要预览和一次人工确认；真实资金事实和策略激活使用更严格、相互独立的授权范围。</p>
 <p><code>POST /api/v3/ai-results/import</code> 根据顶层 Schema 自动识别 Single Envelope 或 Bundle；确认路径保持统一。Evidence Ingestion 主要由受控后台 Provider 任务执行，不开放任意网页内容的公共写入入口。</p>
-<h2 id="section-27">27. V4 WRITE / MCP / Bridge 扩展点<a class="anchor" href="#section-27" aria-label="链接到本节">#</a></h2>
+<h2 id="27-v4-write-mcp-bridge">27. V4 WRITE / MCP / Bridge 扩展点<a class="headerlink" href="#27-v4-write-mcp-bridge" title="Permanent link">&para;</a></h2>
 <p>V4 可增加 Browser Bridge、受限 MCP Write、OAuth Agent Scope、LLM Gateway、Adapter、Router、Orchestrator、回调和 Broker Adapter。</p>
 <p>扩展点必须复用：Agent Contract、Context Hash、AI Result Ingestion、Schema Validation、Task Registry、Audit、Trade Draft 和策略审批。任何外部 Agent 都不能直接写 Trade Ledger 或激活正式策略。</p>
-<h2 id="section-28">28. V2 → V3 迁移<a class="anchor" href="#section-28" aria-label="链接到本节">#</a></h2>
+<h2 id="28-v2-v3">28. V2 → V3 迁移<a class="headerlink" href="#28-v2-v3" title="Permanent link">&para;</a></h2>
 <p>迁移原则：</p>
 <ul>
 <li>保留 V1/V2 API、现有 MarketDataService、ProviderManager、Kline Cache、Phase2A 和扫描评分；</li>
@@ -639,32 +750,32 @@ POST /api/v3/strategy/versions/{id}/rollback
 <li>Phase2A 基本面结果可嵌入 Feature/Evidence，但不得伪造缺失报告期；</li>
 <li>无法迁移的内存快照、健康计数、遗失 Context、601233 原时点资料和旧模型版本必须明确标记缺失，不得重建成“精确历史”。</li>
 </ul>
-<h2 id="section-29">29. 新 Phase 实施顺序<a class="anchor" href="#section-29" aria-label="链接到本节">#</a></h2>
-<h3>Phase 0：冻结基线</h3>
+<h2 id="29-phase">29. 新 Phase 实施顺序<a class="headerlink" href="#29-phase" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0">Phase 0：冻结基线<a class="headerlink" href="#phase-0" title="Permanent link">&para;</a></h3>
 <p>已完成：提交 <code>556a335</code>，标签 <code>v2-phase2a-baseline-20260829</code>，保持 V1/V2 可运行。</p>
-<h3>Phase 1：正式状态与时点基础</h3>
+<h3 id="phase-1">Phase 1：正式状态与时点基础<a class="headerlink" href="#phase-1" title="Permanent link">&para;</a></h3>
 <p>PostgreSQL、迁移框架、Observation/Evidence Schema、<code>known_at</code>、Agent Contract、Audit、Task 基础。</p>
-<h3>Phase 2：Universe 冗余与全市场历史底座</h3>
+<h3 id="phase-2universe">Phase 2：Universe 冗余与全市场历史底座<a class="headerlink" href="#phase-2universe" title="Permanent link">&para;</a></h3>
 <p>Universe Snapshot/Fallback、全市场 raw/unadjusted 日 K、可取得的 Corporate Action/Adjustment Factor、派生复权序列及其修订、增量更新、周/月本地聚合。只能取得前复权历史时必须标记 Replay 精度限制。</p>
-<h3>Phase 3：Full Market Features 与 Universe Query</h3>
+<h3 id="phase-3full-market-features-universe-query">Phase 3：Full Market Features 与 Universe Query<a class="headerlink" href="#phase-3full-market-features-universe-query" title="Permanent link">&para;</a></h3>
 <p>版本化轻量特征、全市场查询、分页、质量摘要、MarketRegimeSnapshot 事实计算和性能优化。</p>
-<h3>Phase 4：Evidence Ingestion Pipeline</h3>
+<h3 id="phase-4evidence-ingestion-pipeline">Phase 4：Evidence Ingestion Pipeline<a class="headerlink" href="#phase-4evidence-ingestion-pipeline" title="Permanent link">&para;</a></h3>
 <p>先完成 Core：官方公告/交易所/巨潮、财务与业绩、已有 Vendor、基础新闻和重要国内政策的 Fetch、Raw、Parse、Dedup、Normalize、Entity Link、Conflict、Decay 和 Retrieval。Extended 的海外、地缘、商品、更多媒体和 Opinion 按迭代接入，不阻塞后续核心 Phase。所有外部内容按 Untrusted Data 处理。</p>
-<h3>Phase 5：Multi-Recall、Raw 与 Recall Miss 基础</h3>
+<h3 id="phase-5multi-recallraw-recall-miss">Phase 5：Multi-Recall、Raw 与 Recall Miss 基础<a class="headerlink" href="#phase-5multi-recallraw-recall-miss" title="Permanent link">&para;</a></h3>
 <p>多通道召回、可解释结果、Raw Opportunity、未来表现观察和漏召回结构；不建立统一 Final Score 或 Recall 权限墙。</p>
-<h3>Phase 6：Context、Task 与 READ JSON</h3>
+<h3 id="phase-6contexttask-read-json">Phase 6：Context、Task 与 READ JSON<a class="headerlink" href="#phase-6contexttask-read-json" title="Permanent link">&para;</a></h3>
 <p>三级单股 Context、20–100 只 CandidateComparisonPack、N→TopK 流程、Evidence 选择解释、带 Schedule/Timezone/Trading Calendar 的 Task Profiles/Runs、ChatGPT Web 所需全部 READ API。沿用现有可访问 HTTPS，不以企业级鉴权或稳定域名阻塞本阶段。</p>
-<h3>Phase 7：Single/Bundle AI Import 与决策状态</h3>
+<h3 id="phase-7singlebundle-ai-import">Phase 7：Single/Bundle AI Import 与决策状态<a class="headerlink" href="#phase-7singlebundle-ai-import" title="Permanent link">&para;</a></h3>
 <p>Single Envelope、AIResultBundle、整包预览、一次确认、按逻辑 Atomic Group 分组原子提交、Append-only MarketReview、Watchlist、Immutable Decision、Entry Plan、Append-only Review。</p>
-<h3>Phase 8：Trade Ledger、截图、Opening Position 与 Portfolio</h3>
+<h3 id="phase-8trade-ledgeropening-position-portfolio">Phase 8：Trade Ledger、截图、Opening Position 与 Portfolio<a class="headerlink" href="#phase-8trade-ledgeropening-position-portfolio" title="Permanent link">&para;</a></h3>
 <p>手工成交、图片 Draft、确认、Opening Position、Reconciliation、Immutable Ledger、Execution Deviation、Position Projection、Portfolio 事实与 Position Context。</p>
-<h3>Phase 9：Action、Entry、Position Review 与时间效率</h3>
+<h3 id="phase-9actionentryposition-review">Phase 9：Action、Entry、Position Review 与时间效率<a class="headerlink" href="#phase-9actionentryposition-review" title="Permanent link">&para;</a></h3>
 <p>Raw/Action/Entry 分层、expected horizon、持仓成本相关 Review；结构化事实供 AI 判断，禁止统一固定 Final Score。</p>
-<h3>Phase 10：Performance、Replay、Regression 与 Recall Miss</h3>
+<h3 id="phase-10performancereplayregression-recall-miss">Phase 10：Performance、Replay、Regression 与 Recall Miss<a class="headerlink" href="#phase-10performancereplayregression-recall-miss" title="Permanent link">&para;</a></h3>
 <p>Selection、Entry Plan、User Execution、Add、Reduce、Exit、Risk Control 分项评价，严格时点回放、Market Regime 分组、回归案例和成熟 Recall Miss 统计。</p>
-<h3>Phase 11：初始 Shadow/A-B 与稳定化</h3>
+<h3 id="phase-11-shadowa-b">Phase 11：初始 Shadow/A-B 与稳定化<a class="headerlink" href="#phase-11-shadowa-b" title="Permanent link">&para;</a></h3>
 <p>配置化 Guardrail、Shadow、A/B、监控、容量验证和 V3 稳定上线；不得自动激活正式策略。Named Tunnel、稳定域名和企业级 READ Auth 继续作为 Hardening 项单独排期。</p>
-<h2 id="section-30">30. 每个 Phase 验收标准<a class="anchor" href="#section-30" aria-label="链接到本节">#</a></h2>
+<h2 id="30-phase">30. 每个 Phase 验收标准<a class="headerlink" href="#30-phase" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -672,7 +783,8 @@ POST /api/v3/strategy/versions/{id}/rollback
 <th>验收要点</th>
 </tr>
 </thead>
-<tbody><tr>
+<tbody>
+<tr>
 <td>0</td>
 <td>测试通过；提交和标签可复现；V1/V2 基线可运行</td>
 </tr>
@@ -720,8 +832,9 @@ POST /api/v3/strategy/versions/{id}/rollback
 <td>11</td>
 <td>AI 不能激活策略；新旧策略可并行 Shadow；故障可快速回滚 V2</td>
 </tr>
-</tbody></table>
-<h2 id="section-31">31. 涉及当前项目的真实文件<a class="anchor" href="#section-31" aria-label="链接到本节">#</a></h2>
+</tbody>
+</table>
+<h2 id="31">31. 涉及当前项目的真实文件<a class="headerlink" href="#31" title="Permanent link">&para;</a></h2>
 <p>实施时预计修改现有基础文件：</p>
 <ul>
 <li><code>app/config.py</code>：V3 Feature Flag、数据库和任务配置；</li>
@@ -745,7 +858,7 @@ tests/v3/
 docs/v3/
 </code></pre>
 <p>初期明确不修改：现有 Scanner、Opportunity Score、MCP、V1/V2 路由、Provider 解析主逻辑和 <code>/live</code> 缓存机制。实际文件名在实施前应再以仓库现状核对，不能仅按设计稿假设。</p>
-<h2 id="section-32">32. 性能、存储与数据量估算<a class="anchor" href="#section-32" aria-label="链接到本节">#</a></h2>
+<h2 id="32">32. 性能、存储与数据量估算<a class="headerlink" href="#32" title="Permanent link">&para;</a></h2>
 <p>按约 5,905 只证券估算：</p>
 <ul>
 <li>300 日日 K：约 177 万条；</li>
@@ -766,7 +879,7 @@ docs/v3/
 <li>首次 300 日冷启动：约 15–60 分钟，但在真实 Provider 限流和服务器资源验证前保持 <code>UNKNOWN</code>。</li>
 </ul>
 <p>禁止每 2 秒重算全市场技术特征，禁止长期保存全市场分钟 K，禁止每天重复拉取全部历史。</p>
-<h2 id="section-33">33. 风险与回滚方案<a class="anchor" href="#section-33" aria-label="链接到本节">#</a></h2>
+<h2 id="33">33. 风险与回滚方案<a class="headerlink" href="#33" title="Permanent link">&para;</a></h2>
 <p>主要风险：</p>
 <ul>
 <li>Universe 单点和 Secondary Provider 尚为 <code>UNKNOWN</code>；</li>
@@ -800,7 +913,7 @@ docs/v3/
 <li>Strategy Version 可并行、暂停和回滚，AI 不具备激活权；</li>
 <li>出现故障时关闭 V3 Flag，继续使用冻结的 V2 基线。</li>
 </ul>
-<h2 id="section-34">34. Known Issues / Future Hardening<a class="anchor" href="#section-34" aria-label="链接到本节">#</a></h2>
+<h2 id="34-known-issues-future-hardening">34. Known Issues / Future Hardening<a class="headerlink" href="#34-known-issues-future-hardening" title="Permanent link">&para;</a></h2>
 <p>以下问题需要在架构上预留，但在当前单用户阶段不阻塞 V3 核心决策闭环：</p>
 <ol>
 <li>ChatGPT Web 无法稳定携带 Bearer Header；</li>
@@ -812,9 +925,9 @@ docs/v3/
 <p>当前 V3 可沿用现有可访问 HTTPS 方式完成 READ。短期措施包括：保持难猜测 Secret、只暴露必要 READ、敏感日志脱敏、Portfolio 路由与市场路由逻辑隔离。后续 Hardening 可引入 Named Tunnel/稳定域名、短期签名链接或会话令牌、市场/Portfolio 分 Scope、访问速率限制、密钥轮换和审计告警。</p>
 <p>这些措施应独立排期，不能为了立即构建完整企业级鉴权而拖慢 V3 的事实—判断—确认—复盘闭环；一旦系统扩大到多用户、公开互联网写入或接入券商，鉴权和权限隔离必须提升为上线阻塞项。</p>
 <hr>
-<h2 id="section-35">Review 结论<a class="anchor" href="#section-35" aria-label="链接到本节">#</a></h2>
+<h2 id="review">Review 结论<a class="headerlink" href="#review" title="Permanent link">&para;</a></h2>
 <p>本设计把 V3 收敛为“ChatGPT Web 可真实使用的投资决策闭环”，重点建设全市场事实底座、结构化读取、批量人工确认导入、不可变决策/交易记录和严格时点复盘。系统负责事实，AI 负责最终判断，用户确认真实资金行为。V4 才承担浏览器自动化、模型 API、多 Agent 和券商连接。下一步应先由用户与 ChatGPT 对本文逐项 Review，确认边界、Schema 和 Phase，再决定是否进入实施。</p>
-<h2 id="section-36">Baseline 1.0 Change Log<a class="anchor" href="#section-36" aria-label="链接到本节">#</a></h2>
+<h2 id="baseline-10-change-log">Baseline 1.0 Change Log<a class="headerlink" href="#baseline-10-change-log" title="Permanent link">&para;</a></h2>
 <ul>
 <li>将 ChatGPT Web READ 鉴权和稳定域名列为 Known Issues / Future Hardening，不阻塞单用户核心闭环；</li>
 <li><code>AIResultBundle</code> 支持一次导入、一次预览、一次确认，并按逻辑 <code>atomic_group</code> 分组原子提交；</li>
@@ -832,5 +945,4 @@ docs/v3/
 <li>Task Profile 增加 Schedule、Timezone、Trading Calendar，并澄清 Expected Run 不代表服务器执行 AI；</li>
 <li>Execution Deviation 增加时间、数量、触发和取消条件偏差字段；</li>
 <li>文档状态冻结为 <strong>V3 Architecture Baseline 1.0</strong>。</li>
-</ul>
-<div class="footer">gpt-market V3 AI 投资决策系统架构设计实施稿 — V3 Architecture Baseline 1.0 · 架构基线文档，不代表功能已经实施。</div></main></div><a class="backtop" href="#doc-title">返回顶部</a></body></html>
+</ul></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

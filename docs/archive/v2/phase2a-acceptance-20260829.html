@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="928b54fecb9fdb32f41be6f7ff82761046ce8a81b30038f7a167963a014760be"><title>Phase2A 真实扫描验收（2026-08-29）</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#_1">环境与口径</a></li>
+<li><a href="#_2">排名变化</a></li>
+<li><a href="#top5">Top5 完整分数组成</a></li>
+<li><a href="#_3">自动化验证</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/archive/v2/phase2a-acceptance-20260829.md · 内容哈希：928b54fecb9f</div><h1 id="phase2a-2026-08-29">Phase2A 真实扫描验收（2026-08-29）<a class="headerlink" href="#phase2a-2026-08-29" title="Permanent link">&para;</a></h1>
+<h2 id="_1">环境与口径<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>真实 A 股候选池：420 只。</li>
+<li>首轮扫描时间：75.537 秒；最终验收扫描命中既有 K 线缓存后为 16.129 秒。</li>
+<li>数据报告期：Top5 均为 <code>2026-06-30</code>。</li>
+<li>基本面主源：<code>eastmoney_datacenter</code>，真实上游标记为 <code>eastmoney</code>；字段不足或主源失败时由 <code>eastmoney_f10</code> fallback。</li>
+<li>排名对比使用同一次行情快照和同一候选池。修改前分数按 Phase1 原技术组件与原技术风险重建；修改后只增加基本面分和财务风险，避免跨时间点比较造成偏差。</li>
+</ul>
+<h2 id="_2">排名变化<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">新排名</th>
+<th>代码</th>
+<th>名称</th>
+<th style="text-align: right;">原排名</th>
+<th style="text-align: right;">Phase1 等价分</th>
+<th style="text-align: right;">Phase2A 总分</th>
+<th style="text-align: right;">基本面</th>
+<th style="text-align: right;">基本面风险</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td>000089</td>
+<td>深圳机场</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">65.00</td>
+<td style="text-align: right;">72.75</td>
+<td style="text-align: right;">10.75</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>600872</td>
+<td>中炬高新</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">60.50</td>
+<td style="text-align: right;">71.75</td>
+<td style="text-align: right;">11.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td>601678</td>
+<td>滨化股份</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">55.50</td>
+<td style="text-align: right;">66.00</td>
+<td style="text-align: right;">10.50</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>002439</td>
+<td>启明星辰</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">52.50</td>
+<td style="text-align: right;">64.17</td>
+<td style="text-align: right;">11.67</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>601326</td>
+<td>秦港股份</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">53.50</td>
+<td style="text-align: right;">63.00</td>
+<td style="text-align: right;">9.50</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td>002120</td>
+<td>韵达股份</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">51.50</td>
+<td style="text-align: right;">62.75</td>
+<td style="text-align: right;">11.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td>603629</td>
+<td>-</td>
+<td style="text-align: right;">17</td>
+<td style="text-align: right;">51.00</td>
+<td style="text-align: right;">62.00</td>
+<td style="text-align: right;">11.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td>002552</td>
+<td>-</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">53.00</td>
+<td style="text-align: right;">61.75</td>
+<td style="text-align: right;">8.75</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td>601000</td>
+<td>-</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">51.50</td>
+<td style="text-align: right;">61.50</td>
+<td style="text-align: right;">10.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">10</td>
+<td>001301</td>
+<td>-</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">54.50</td>
+<td style="text-align: right;">59.00</td>
+<td style="text-align: right;">7.50</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">11</td>
+<td>603195</td>
+<td>-</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">48.00</td>
+<td style="text-align: right;">59.00</td>
+<td style="text-align: right;">11.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">12</td>
+<td>603600</td>
+<td>-</td>
+<td style="text-align: right;">28</td>
+<td style="text-align: right;">48.50</td>
+<td style="text-align: right;">58.75</td>
+<td style="text-align: right;">10.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">13</td>
+<td>002860</td>
+<td>-</td>
+<td style="text-align: right;">18</td>
+<td style="text-align: right;">51.00</td>
+<td style="text-align: right;">58.50</td>
+<td style="text-align: right;">7.50</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">14</td>
+<td>600285</td>
+<td>-</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">49.50</td>
+<td style="text-align: right;">58.25</td>
+<td style="text-align: right;">8.75</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">15</td>
+<td>002516</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">46.50</td>
+<td style="text-align: right;">58.25</td>
+<td style="text-align: right;">11.75</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td>001277</td>
+<td>-</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;">50.50</td>
+<td style="text-align: right;">58.00</td>
+<td style="text-align: right;">10.50</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">17</td>
+<td>603379</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">47.50</td>
+<td style="text-align: right;">57.75</td>
+<td style="text-align: right;">10.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">18</td>
+<td>600936</td>
+<td>-</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">53.50</td>
+<td style="text-align: right;">57.72</td>
+<td style="text-align: right;">7.22</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">19</td>
+<td>600660</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">47.50</td>
+<td style="text-align: right;">57.00</td>
+<td style="text-align: right;">9.50</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">20</td>
+<td>601360</td>
+<td>-</td>
+<td style="text-align: right;">21</td>
+<td style="text-align: right;">50.50</td>
+<td style="text-align: right;">57.00</td>
+<td style="text-align: right;">9.50</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">21</td>
+<td>600189</td>
+<td>-</td>
+<td style="text-align: right;">29</td>
+<td style="text-align: right;">48.50</td>
+<td style="text-align: right;">56.75</td>
+<td style="text-align: right;">8.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">22</td>
+<td>600827</td>
+<td>-</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">52.50</td>
+<td style="text-align: right;">56.50</td>
+<td style="text-align: right;">7.00</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">23</td>
+<td>601229</td>
+<td>-</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">56.50</td>
+<td style="text-align: right;">56.50</td>
+<td style="text-align: right;">6.00</td>
+<td style="text-align: right;">-6.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">24</td>
+<td>601133</td>
+<td>-</td>
+<td style="text-align: right;">19</td>
+<td style="text-align: right;">51.00</td>
+<td style="text-align: right;">56.25</td>
+<td style="text-align: right;">8.25</td>
+<td style="text-align: right;">-3.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">25</td>
+<td>605117</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">43.50</td>
+<td style="text-align: right;">55.75</td>
+<td style="text-align: right;">12.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">26</td>
+<td>002674</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">45.50</td>
+<td style="text-align: right;">55.75</td>
+<td style="text-align: right;">10.25</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">27</td>
+<td>600727</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">45.50</td>
+<td style="text-align: right;">55.50</td>
+<td style="text-align: right;">10.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">28</td>
+<td>600153</td>
+<td>-</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">49.00</td>
+<td style="text-align: right;">55.06</td>
+<td style="text-align: right;">8.06</td>
+<td style="text-align: right;">-2.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">29</td>
+<td>003031</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">42.50</td>
+<td style="text-align: right;">55.00</td>
+<td style="text-align: right;">12.50</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+<tr>
+<td style="text-align: right;">30</td>
+<td>601058</td>
+<td>-</td>
+<td style="text-align: right;">&gt;30</td>
+<td style="text-align: right;">45.00</td>
+<td style="text-align: right;">55.00</td>
+<td style="text-align: right;">10.00</td>
+<td style="text-align: right;">0.00</td>
+</tr>
+</tbody>
+</table>
+<h2 id="top5">Top5 完整分数组成<a class="headerlink" href="#top5" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">排名</th>
+<th>股票</th>
+<th style="text-align: right;">位置</th>
+<th style="text-align: right;">基本面</th>
+<th style="text-align: right;">趋势</th>
+<th style="text-align: right;">量价</th>
+<th style="text-align: right;">催化</th>
+<th style="text-align: right;">盈亏比</th>
+<th style="text-align: right;">流动性</th>
+<th style="text-align: right;">总风险</th>
+<th style="text-align: right;">总分</th>
+<th style="text-align: right;">覆盖率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td>000089 深圳机场</td>
+<td style="text-align: right;">15.0</td>
+<td style="text-align: right;">10.75</td>
+<td style="text-align: right;">16.0</td>
+<td style="text-align: right;">9.0</td>
+<td style="text-align: right;">null</td>
+<td style="text-align: right;">20.0</td>
+<td style="text-align: right;">5.0</td>
+<td style="text-align: right;">-3.0</td>
+<td style="text-align: right;">72.75</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>600872 中炬高新</td>
+<td style="text-align: right;">15.0</td>
+<td style="text-align: right;">11.25</td>
+<td style="text-align: right;">11.5</td>
+<td style="text-align: right;">9.0</td>
+<td style="text-align: right;">null</td>
+<td style="text-align: right;">20.0</td>
+<td style="text-align: right;">5.0</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">71.75</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td>601678 滨化股份</td>
+<td style="text-align: right;">8.0</td>
+<td style="text-align: right;">10.50</td>
+<td style="text-align: right;">18.5</td>
+<td style="text-align: right;">10.0</td>
+<td style="text-align: right;">null</td>
+<td style="text-align: right;">14.0</td>
+<td style="text-align: right;">5.0</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">66.00</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>002439 启明星辰</td>
+<td style="text-align: right;">15.0</td>
+<td style="text-align: right;">11.67</td>
+<td style="text-align: right;">11.5</td>
+<td style="text-align: right;">7.0</td>
+<td style="text-align: right;">null</td>
+<td style="text-align: right;">14.0</td>
+<td style="text-align: right;">5.0</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">64.17</td>
+<td style="text-align: right;">100%</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>601326 秦港股份</td>
+<td style="text-align: right;">15.0</td>
+<td style="text-align: right;">9.50</td>
+<td style="text-align: right;">16.0</td>
+<td style="text-align: right;">6.0</td>
+<td style="text-align: right;">null</td>
+<td style="text-align: right;">14.0</td>
+<td style="text-align: right;">2.5</td>
+<td style="text-align: right;">0.0</td>
+<td style="text-align: right;">63.00</td>
+<td style="text-align: right;">100%</td>
+</tr>
+</tbody>
+</table>
+<p>深圳机场的财务风险为 <code>-3</code>，原因是扣非利润显著低于归母利润，系统将其标记为需关注一次性收益。其余 Top5 本轮未触发财务风险。催化仍为 <code>null</code>，符合不提前进入 Phase3 的边界。</p>
+<h2 id="_3">自动化验证<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">72 passed, 5 skipped
+</code></pre>
+<p>跳过项均为明确标记的公网 live 测试。原 V1、MCP/Web 一致性、行情 Provider、K 线、覆盖率和 Phase1 评分测试均通过。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

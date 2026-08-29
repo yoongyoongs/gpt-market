@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="f85498b0b1d3ecd809cdf31b992d5245f3fe66b7b23dce88e8c1df265db4c548"><title>服务器部署记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#_2">当前实例</a></li>
+<li><a href="#_3">日常检查</a></li>
+<li><a href="#_4">更新部署</a></li>
+<li><a href="#https">HTTPS</a></li>
+<li><a href="#gpt-web-json-adapter">GPT Web JSON Adapter</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/deployment.md · 内容哈希：f85498b0b1d3</div><h1 id="_1">服务器部署记录<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<h2 id="_2">当前实例<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>服务器：<code>106.13.171.166</code></li>
+<li>项目目录：<code>/opt/gpt-market</code></li>
+<li>健康检查：<code>http://106.13.171.166/health</code></li>
+<li>MCP 端点：<code>http://106.13.171.166/mcp/</code></li>
+<li>应用容器：<code>market-mcp</code></li>
+<li>对外入口：Nginx 80 端口</li>
+<li>应用端口：仅绑定服务器回环地址 <code>127.0.0.1:8000</code></li>
+</ul>
+<p>MCP Token 只保存在服务器的 <code>/opt/gpt-market/.env</code> 中，不进入 Git 仓库。</p>
+<h2 id="_3">日常检查<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">cd /opt/gpt-market
+docker-compose ps
+docker-compose logs --tail=100 market-mcp
+curl http://127.0.0.1:8000/health
+nginx -t
+</code></pre>
+<h2 id="_4">更新部署<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<p>服务器位于中国大陆网络环境。构建镜像时可显式使用国内 PyPI 镜像：</p>
+<pre><code class="language-bash">cd /opt/gpt-market
+docker-compose build \
+  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+  market-mcp
+docker-compose up -d --no-build
+</code></pre>
+<p>首次启用持久化 K 线缓存前创建可写目录；容器仍以 UID 10001 非 root 运行：</p>
+<pre><code class="language-bash">install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data
+curl http://127.0.0.1:8000/health/providers
+</code></pre>
+<p>缓存数据库位于 <code>/opt/gpt-market/data/kline_cache.sqlite3</code>。网络失败时保留上一份正式日 K，不要在故障处理时删除该目录。</p>
+<h2 id="https">HTTPS<a class="headerlink" href="#https" title="Permanent link">&para;</a></h2>
+<p>服务器已安装 Cloudflare Quick Tunnel，提供无需自有域名的开发测试 HTTPS 入口。
+当前地址通过下列命令查询：</p>
+<pre><code class="language-bash">/opt/gpt-market/show-tunnel-url.sh
+</code></pre>
+<p>服务状态与日志：</p>
+<pre><code class="language-bash">systemctl status gpt-market-tunnel.service
+journalctl -u gpt-market-tunnel.service -f
+</code></pre>
+<p>ChatGPT 开发者模式连接时，把查询结果加上 <code>/mcp/</code> 作为 MCP 地址。服务仍要求：</p>
+<pre><code class="language-text">Authorization: Bearer &lt;MCP_TOKEN&gt;
+</code></pre>
+<p>Quick Tunnel 仅适合开发和验收，没有可用性承诺；<code>cloudflared</code> 每次重启都可能获得
+新的随机 <code>trycloudflare.com</code> 地址。Cloudflare 官方还声明 Quick Tunnel 不支持持续
+SSE。当前 MCP 的 initialize、tools/list 和 tools/call 已通过有限 SSE 响应实测，但
+长期 SSE GET 不应视为稳定能力。</p>
+<p>正式使用时，准备一个解析到 <code>106.13.171.166</code> 的域名或 Cloudflare Named Tunnel，
+并使用稳定 HTTPS 地址，例如：</p>
+<pre><code class="language-text">https://你的域名/mcp/
+</code></pre>
+<p>生产级 ChatGPT 插件还应实现 MCP 标准授权发现/OAuth。不要把 MCP Token 写入
+Nginx 配置、README、日志或 Git 提交，也不要为了连接测试永久关闭鉴权。</p>
+<h2 id="gpt-web-json-adapter">GPT Web JSON Adapter<a class="headerlink" href="#gpt-web-json-adapter" title="Permanent link">&para;</a></h2>
+<p>在 <code>/opt/gpt-market/.env</code> 中设置独立的长随机 <code>GPT_WEB_SECRET</code>；如果省略，应用会复用 <code>MCP_TOKEN</code>。重新构建容器后可使用：</p>
+<pre><code class="language-text">https://当前隧道地址/gpt/{secret}/stock/002284
+https://当前隧道地址/gpt/{secret}/stock/002284/detail
+https://当前隧道地址/gpt/{secret}/market
+https://当前隧道地址/gpt/{secret}/sectors?sector_type=industry&amp;limit=10
+https://当前隧道地址/gpt/{secret}/scan?top_n=10
+https://当前隧道地址/gpt/{secret}/live
+</code></pre>
+<p>Web 与 MCP 只在最外层包装不同，业务 <code>data</code> 来自相同 Pydantic 模型、Service、缓存和序列化函数。路径 secret 属于敏感信息，不得写入公开文档、截图或 Git；长期使用时还应关闭或脱敏 Nginx 对 <code>/gpt/</code> 的 access log。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

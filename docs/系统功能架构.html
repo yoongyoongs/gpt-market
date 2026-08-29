@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="73cb1761972ff93d8e2417cfbfd4f2f568fb6b5bf07067dae79fe6ca76ba1058"><title>gpt-market V3 系统功能架构</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 功能架构总览</a></li>
+<li><a href="#2">2. 功能域清单</a></li>
+<li><a href="#3">3. 访问与任务协作域</a><ul>
+<li><a href="#31">3.1 当前入口</a></li>
+<li><a href="#32-v3">3.2 V3 目标入口</a></li>
+<li><a href="#33">3.3 任务功能</a></li>
+</ul>
+</li>
+<li><a href="#4">4. 市场事实中心</a><ul>
+<li><a href="#41-universe">4.1 Universe</a></li>
+<li><a href="#42-quote-market">4.2 Quote 与 Market</a></li>
+<li><a href="#43-kline-feature">4.3 Kline 与 Feature</a></li>
+<li><a href="#44-fundamental-market-regime">4.4 Fundamental 与 Market Regime</a></li>
+</ul>
+</li>
+<li><a href="#5">5. 机会发现中心</a><ul>
+<li><a href="#51-full-universe-query">5.1 Full Universe Query</a></li>
+<li><a href="#52-multi-recall">5.2 Multi-Recall</a></li>
+<li><a href="#53-rawcomparison-action">5.3 Raw、Comparison 与 Action</a></li>
+<li><a href="#54-recall-miss">5.4 Recall Miss</a></li>
+</ul>
+</li>
+<li><a href="#6-evidence-context">6. Evidence 与 Context 中心</a><ul>
+<li><a href="#61-evidence-ingestion">6.1 Evidence Ingestion</a></li>
+<li><a href="#62-evidence">6.2 Evidence 分类</a></li>
+<li><a href="#63-context-pack">6.3 Context Pack</a></li>
+</ul>
+</li>
+<li><a href="#7-ai">7. AI 决策状态中心</a><ul>
+<li><a href="#71">7.1 结果类型</a></li>
+<li><a href="#72-batch-bundle">7.2 Batch / Bundle</a></li>
+<li><a href="#73">7.3 状态边界</a></li>
+</ul>
+</li>
+<li><a href="#8-portfolio">8. 交易与 Portfolio 中心</a><ul>
+<li><a href="#81">8.1 真实资金事实</a></li>
+<li><a href="#82">8.2 输入方式</a></li>
+<li><a href="#83-position-projection">8.3 Position Projection</a></li>
+<li><a href="#84-execution-deviation">8.4 Execution Deviation</a></li>
+</ul>
+</li>
+<li><a href="#9-performancereplay-strategy">9. Performance、Replay 与 Strategy</a><ul>
+<li><a href="#91-performance">9.1 Performance</a></li>
+<li><a href="#92-replay">9.2 Replay</a></li>
+<li><a href="#93-strategy">9.3 Strategy</a></li>
+</ul>
+</li>
+<li><a href="#10">10. 横向业务流程</a><ul>
+<li><a href="#101">10.1 盘后发现与导入</a></li>
+<li><a href="#102-review">10.2 真实交易与持仓 Review</a></li>
+<li><a href="#103">10.3 复盘</a></li>
+</ul>
+</li>
+<li><a href="#11">11. 功能边界</a></li>
+<li><a href="#12">12. 与实现文档的关系</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/系统功能架构.md · 内容哈希：73cb1761972f</div><h1 id="gpt-market-v3">gpt-market V3 系统功能架构<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>基线：V3 Architecture Baseline 1.0<br>
+目的：描述系统由哪些业务功能域组成、域之间怎样协作，以及当前与目标能力边界。</p>
+</blockquote>
+<h2 id="1">1. 功能架构总览<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<pre><code class="language-mermaid">flowchart TB
+    A[用户 / ChatGPT Web] --&gt; ACCESS[访问与任务协作]
+    ACCESS --&gt; FACT[市场事实中心]
+    ACCESS --&gt; DISCOVERY[机会发现中心]
+    ACCESS --&gt; DECISION[AI 决策状态中心]
+    ACCESS --&gt; PORTFOLIO[交易与 Portfolio 中心]
+
+    FACT --&gt; DISCOVERY
+    FACT --&gt; EVIDENCE[Evidence 与 Context 中心]
+    DISCOVERY --&gt; EVIDENCE
+    EVIDENCE --&gt; ACCESS
+    ACCESS --&gt; DECISION
+    DECISION --&gt; PORTFOLIO
+    DECISION --&gt; PERFORMANCE[Performance / Replay 中心]
+    PORTFOLIO --&gt; PERFORMANCE
+    PERFORMANCE --&gt; STRATEGY[Strategy Shadow 与版本中心]
+    OPS[数据质量 / 调度 / 审计 / 运维] --- FACT
+    OPS --- ACCESS
+    OPS --- PORTFOLIO
+</code></pre>
+<h2 id="2">2. 功能域清单<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>功能域</th>
+<th>核心职责</th>
+<th>当前状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>访问与任务协作</td>
+<td>MCP/REST/GPT Web、Task Profile/Run、AI Result Import</td>
+<td>读取部分已实现，V3 协作待实现</td>
+</tr>
+<tr>
+<td>市场事实中心</td>
+<td>Universe、Quote、Kline、Sector、Fundamental、Regime</td>
+<td>V1/V2 部分已实现，V3 全市场化待实现</td>
+</tr>
+<tr>
+<td>机会发现中心</td>
+<td>Full Features、Query、Multi-Recall、Raw、Comparison</td>
+<td>V2 有扫描，V3 待实现</td>
+</tr>
+<tr>
+<td>Evidence 与 Context</td>
+<td>采集、去重、冲突、检索、三级 Context</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>AI 决策状态中心</td>
+<td>MarketReview、Watchlist、Decision、EntryPlan、Review</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>交易与 Portfolio</td>
+<td>Trade Draft/Ledger、Opening、Reconciliation、Position</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>Performance / Replay</td>
+<td>分项评价、时点回放、Regression、Recall Miss</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>Strategy</td>
+<td>Proposal、Replay、Shadow、A/B、人工激活</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>数据质量与运维</td>
+<td>Coverage、Freshness、Fallback、Audit、Feature Flag</td>
+<td>当前部分已实现，V3 待扩展</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3">3. 访问与任务协作域<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<h3 id="31">3.1 当前入口<a class="headerlink" href="#31" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Remote MCP：面向 ChatGPT 或 MCP 客户端的只读工具；</li>
+<li>REST：健康检查、调试和 JSON 读取；</li>
+<li>GPT Web Adapter：Secret 路由、Live HTML、Coverage 和 V2 看板；</li>
+<li>HTML：只供人类查看；机器读取以 JSON 为准。</li>
+</ul>
+<h3 id="32-v3">3.2 V3 目标入口<a class="headerlink" href="#32-v3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>全市场、Recall、Evidence、Context、Watchlist、Portfolio、Performance READ API；</li>
+<li>Task Profile 与 Expected Run 查询；</li>
+<li>AI Result Single/Bundle 导入、预览和一次确认；</li>
+<li>手工成交、截图 Draft、Opening Position 和 Reconciliation；</li>
+<li>Strategy Proposal/Replay/人工审批。</li>
+</ul>
+<h3 id="33">3.3 任务功能<a class="headerlink" href="#33" title="Permanent link">&para;</a></h3>
+<p>Task Profile 定义 Schedule、Timezone、Trading Calendar、Context Level、候选数量、TopK、输出 Schema 和宽限期。Expected Run 只表示“预期 ChatGPT 任务应发生”，不表示服务器已经调用 AI。</p>
+<h2 id="4">4. 市场事实中心<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<h3 id="41-universe">4.1 Universe<a class="headerlink" href="#41-universe" title="Permanent link">&para;</a></h3>
+<p>负责完整证券集合、上市/退市/停牌/风险状态、来源覆盖和历史 Snapshot。目标链路：</p>
+<pre><code class="language-text">Primary Universe → Secondary Universe → Last-Known-Good
+</code></pre>
+<p>所有降级必须带 <code>source</code>、<code>stale</code>、<code>known_at</code> 和 Coverage。</p>
+<h3 id="42-quote-market">4.2 Quote 与 Market<a class="headerlink" href="#42-quote-market" title="Permanent link">&para;</a></h3>
+<p>负责标准化单股/批量实时行情、指数、市场宽度、成交额和质量。当前由 <code>MarketDataService</code>、Provider Manager 和 DataQualityService 承担。</p>
+<h3 id="43-kline-feature">4.3 Kline 与 Feature<a class="headerlink" href="#43-kline-feature" title="Permanent link">&para;</a></h3>
+<p>负责 raw/unadjusted Bar、Adjustment Factor、派生复权序列、日 K 增量、周/月聚合和版本化 Feature Run。全市场每天计算轻量特征，分钟周期只服务 Action、Watchlist 和 Portfolio。</p>
+<h3 id="44-fundamental-market-regime">4.4 Fundamental 与 Market Regime<a class="headerlink" href="#44-fundamental-market-regime" title="Permanent link">&para;</a></h3>
+<p>Phase2A 已有基本面读取与评分，但 V3 要把财务事实转为带报告期、来源、覆盖和冲突的标准数据。MarketRegimeSnapshot 只记录指数、宽度、风格、轮动和风险事实，不形成买卖禁令。</p>
+<h2 id="5">5. 机会发现中心<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<h3 id="51-full-universe-query">5.1 Full Universe Query<a class="headerlink" href="#51-full-universe-query" title="Permanent link">&para;</a></h3>
+<p>支持全市场任意白名单特征的过滤、排序、分页和行业横比。它是完整访问通道，不能受 Recall 限制。</p>
+<h3 id="52-multi-recall">5.2 Multi-Recall<a class="headerlink" href="#52-multi-recall" title="Permanent link">&para;</a></h3>
+<p>通过低位转强、趋势启动、首次突破、首次回踩、相对强度、量能扩张、基本面改善等多个通道提高发现效率。每个结果保存通道、原因、排名、版本和覆盖。</p>
+<h3 id="53-rawcomparison-action">5.3 Raw、Comparison 与 Action<a class="headerlink" href="#53-rawcomparison-action" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Full Universe / Recall
+→ Raw Opportunity N
+→ CandidateComparisonPack（20–100）
+→ ChatGPT 横向 N→TopK
+→ TopK NORMAL/DEEP Context
+→ AI 判断 Action Candidate
+→ Entry Plan
+</code></pre>
+<p>系统只提供事实和可解释信号，不输出 <code>final_total_score</code> 等固定最终分。Action 是 AI 结论，不是机器硬筛选。</p>
+<h3 id="54-recall-miss">5.4 Recall Miss<a class="headerlink" href="#54-recall-miss" title="Permanent link">&para;</a></h3>
+<p>评价窗口成熟后，识别后续明显优秀但未命中任何通道的股票，按通道、行业和市场环境分析漏失原因。</p>
+<h2 id="6-evidence-context">6. Evidence 与 Context 中心<a class="headerlink" href="#6-evidence-context" title="Permanent link">&para;</a></h2>
+<h3 id="61-evidence-ingestion">6.1 Evidence Ingestion<a class="headerlink" href="#61-evidence-ingestion" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Provider → Fetch → Raw Document → Parse → Dedup → Normalize
+→ 时间标准化 → Entity Link → 类型/置信度/相关性
+→ Conflict → Decay/Expire → Evidence DB
+</code></pre>
+<p>Core 优先官方公告、财务/业绩、已有 Vendor、基础新闻和重要国内政策；Extended 后续扩展海外、地缘、商品、媒体和 Opinion。</p>
+<h3 id="62-evidence">6.2 Evidence 分类<a class="headerlink" href="#62-evidence" title="Permanent link">&para;</a></h3>
+<ul>
+<li>FACT；</li>
+<li>OFFICIAL_DISCLOSURE；</li>
+<li>VENDOR_DATA；</li>
+<li>NEWS；</li>
+<li>OPINION。</li>
+</ul>
+<p>Opinion 永远不能因数量多自动变为 Fact。外部文本始终是 Untrusted Data。</p>
+<h3 id="63-context-pack">6.3 Context Pack<a class="headerlink" href="#63-context-pack" title="Permanent link">&para;</a></h3>
+<ul>
+<li>FAST：2k–4k；</li>
+<li>NORMAL：5k–8k；</li>
+<li>DEEP：10k–14k；</li>
+<li>Candidate Comparison：20–100 只的紧凑横向上下文。</li>
+</ul>
+<p>每个 Pack 绑定时点、Snapshot、Feature、Evidence Selection、Hash 和裁剪说明。</p>
+<h2 id="7-ai">7. AI 决策状态中心<a class="headerlink" href="#7-ai" title="Permanent link">&para;</a></h2>
+<h3 id="71">7.1 结果类型<a class="headerlink" href="#71" title="Permanent link">&para;</a></h3>
+<p><code>MarketReview</code>、<code>CandidateComparisonResult</code>、<code>DecisionResult</code>、<code>WatchlistProposal</code>、<code>EntryPlanResult</code>、<code>ReviewResult</code>、<code>PositionReviewResult</code>。</p>
+<h3 id="72-batch-bundle">7.2 Batch / Bundle<a class="headerlink" href="#72-batch-bundle" title="Permanent link">&para;</a></h3>
+<p>一次 ChatGPT 输出可含多个 Atomic Group。相同股票相互依赖的 Decision/Entry/Watchlist/Review 同组原子提交；不同股票和 MarketReview 分组提交。用户一次确认，结果返回成功组和失败组。</p>
+<h3 id="73">7.3 状态边界<a class="headerlink" href="#73" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Decision 不可修改，纠错追加；</li>
+<li>Review 和 MarketReview 只追加；</li>
+<li>Watchlist 是分析状态，不是持仓；</li>
+<li>Entry Trigger 不是 BUY；</li>
+<li>AI 的 SELL 建议不是实际 SELL。</li>
+</ul>
+<h2 id="8-portfolio">8. 交易与 Portfolio 中心<a class="headerlink" href="#8-portfolio" title="Permanent link">&para;</a></h2>
+<h3 id="81">8.1 真实资金事实<a class="headerlink" href="#81" title="Permanent link">&para;</a></h3>
+<p>只有用户确认的 ActualTrade、Opening Position、Reconciliation 和 Corporate Action Adjustment 可以改变 Portfolio 事实。</p>
+<h3 id="82">8.2 输入方式<a class="headerlink" href="#82" title="Permanent link">&para;</a></h3>
+<ul>
+<li>网站快速录入 BUY/SELL；</li>
+<li>成交截图 → Trade Draft → 用户确认；</li>
+<li>持仓截图 → Position/Opening Draft → 用户确认；</li>
+<li>V4 才考虑券商 API。</li>
+</ul>
+<h3 id="83-position-projection">8.3 Position Projection<a class="headerlink" href="#83-position-projection" title="Permanent link">&para;</a></h3>
+<p>Portfolio 由不可变 Ledger 和 Opening 基准重建。Projection 是性能缓存，可删除重算。Portfolio Context 提供真实数量、成本、收益、交易历史、Decision、Entry、Review、市场和 Evidence 给 AI。</p>
+<h3 id="84-execution-deviation">8.4 Execution Deviation<a class="headerlink" href="#84-execution-deviation" title="Permanent link">&para;</a></h3>
+<p>区分计划与执行的价格、时间、数量、Trigger 和取消条件偏差，以免用户追高或自主交易污染 AI Entry 评价。</p>
+<h2 id="9-performancereplay-strategy">9. Performance、Replay 与 Strategy<a class="headerlink" href="#9-performancereplay-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="91-performance">9.1 Performance<a class="headerlink" href="#91-performance" title="Permanent link">&para;</a></h3>
+<p>分别评价 Selection、Initial Entry、User Execution、Add、Reduce、Final Exit、Risk Control。未成交股票只评价 Selection；自主成交不计为 AI Entry。</p>
+<h3 id="92-replay">9.2 Replay<a class="headerlink" href="#92-replay" title="Permanent link">&para;</a></h3>
+<p>严格限制 <code>known_at &lt;= replay_as_of</code>，绑定 Bar/Factor/Feature/Evidence/Context Revision。只有前复权历史时标记 <code>LIMITED</code>，不能宣称完全时点精确。</p>
+<h3 id="93-strategy">9.3 Strategy<a class="headerlink" href="#93-strategy" title="Permanent link">&para;</a></h3>
+<p>AI 可生成 Strategy Proposal，但 Replay、Shadow、A/B、Guardrail 和用户审批完成前不能激活。V3 禁止 AI 自动修改正式策略。</p>
+<h2 id="10">10. 横向业务流程<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<h3 id="101">10.1 盘后发现与导入<a class="headerlink" href="#101" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">后台更新事实 → Full Feature/Recall → Comparison Pack
+→ ChatGPT N→TopK → TopK 深度 Context
+→ AIResultBundle → Preview → 用户一次确认
+→ MarketReview/Decision/Watchlist/Entry/Review 分组入库
+</code></pre>
+<h3 id="102-review">10.2 真实交易与持仓 Review<a class="headerlink" href="#102-review" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Entry Plan → 用户真实成交/截图 → Draft → 用户确认
+→ Trade Ledger → Position Projection
+→ Position Context → ChatGPT Review
+→ 建议动作 → 用户决定 → 新的真实成交
+</code></pre>
+<h3 id="103">10.3 复盘<a class="headerlink" href="#103" title="Permanent link">&para;</a></h3>
+<pre><code class="language-text">Decision/Review/Trade + 成熟未来行情
+→ Performance Observation
+→ 分项归因 + Recall Miss + Regime 分组
+→ Regression / Strategy Proposal
+→ Shadow / 人工审批
+</code></pre>
+<h2 id="11">11. 功能边界<a class="headerlink" href="#11" title="Permanent link">&para;</a></h2>
+<ul>
+<li>行情事实不得由 AI 生成；</li>
+<li>AI 结论不得直接改真实持仓；</li>
+<li>Portfolio 偏好不得成为全市场硬过滤；</li>
+<li>Market Regime 不得成为固定买卖开关；</li>
+<li>HTML 不作为机器数据契约；</li>
+<li>V4 能力不得成为 V3 运行依赖。</li>
+</ul>
+<h2 id="12">12. 与实现文档的关系<a class="headerlink" href="#12" title="Permanent link">&para;</a></h2>
+<ul>
+<li>“为什么和要什么”：本功能架构与《需求规格说明》；</li>
+<li>“用什么技术”： 《技术架构设计》；</li>
+<li>“数据如何保存”： 《数据库设计》；</li>
+<li>“模块/API/流程如何落地”： 《详细设计》；</li>
+<li>“下一步按什么顺序改”： 《架构设计实施稿》；</li>
+<li>“现在做到了哪里”： 《功能清单与开发状态》和《工作状态》。</li>
+</ul></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

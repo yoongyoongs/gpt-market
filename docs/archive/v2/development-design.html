@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="f6d7ae279fb4aa2c7793d85fb16264ef042a029da0234565db50ebd6520b9f8f"><title>开发设计文档</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 项目目标</a></li>
+<li><a href="#2">2. 核心设计原则</a><ul>
+<li><a href="#21">2.1 单一事实源</a></li>
+<li><a href="#22">2.2 准确性优先</a></li>
+</ul>
+</li>
+<li><a href="#3">3. 模块结构</a></li>
+<li><a href="#4">4. 运行时对象关系</a></li>
+<li><a href="#5-provider">5. Provider 设计</a><ul>
+<li><a href="#51">5.1 证券代码映射</a></li>
+<li><a href="#52-quote">5.2 Quote 标准化</a></li>
+<li><a href="#53-k">5.3 K 线标准化</a></li>
+<li><a href="#54-http">5.4 HTTP 策略</a></li>
+</ul>
+</li>
+<li><a href="#6">6. 时间、质量与快照</a><ul>
+<li><a href="#61">6.1 时间语义</a></li>
+<li><a href="#62">6.2 质量规则</a></li>
+<li><a href="#63-snapshot_id-scan_id">6.3 snapshot_id 和 scan_id</a></li>
+</ul>
+</li>
+<li><a href="#7">7. 缓存与并发</a></li>
+<li><a href="#8-service">8. Service 设计</a><ul>
+<li><a href="#81-quoteservice">8.1 QuoteService</a></li>
+<li><a href="#82-klineservice">8.2 KlineService</a></li>
+<li><a href="#83-marketservice">8.3 MarketService</a></li>
+<li><a href="#84-sectorservice">8.4 SectorService</a></li>
+<li><a href="#85-scannerservice">8.5 ScannerService</a></li>
+<li><a href="#86-v2-opportunity-scanner">8.6 V2 Opportunity Scanner</a></li>
+</ul>
+</li>
+<li><a href="#9">9. 传输适配器</a><ul>
+<li><a href="#91-mcp-adapter">9.1 MCP Adapter</a></li>
+<li><a href="#92-web-adapter">9.2 Web Adapter</a></li>
+</ul>
+</li>
+<li><a href="#10">10. 异常契约</a></li>
+<li><a href="#11">11. 扩展设计</a></li>
+<li><a href="#12">12. 已知限制</a></li>
+<li><a href="#13">13. 变更检查清单</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/archive/v2/development-design.md · 内容哈希：f6d7ae279fb4</div><h1 id="_1">开发设计文档<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<p>文档版本：1.0<br>
+对应服务版本：1.0.0<br>
+最后更新：2026-08-28</p>
+<h2 id="1">1. 项目目标<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>本项目是只读的 A 股事实行情服务，为 ChatGPT 和其他客户端提供两种访问方式：</p>
+<ul>
+<li>Streamable HTTP MCP：适合模型工具调用。</li>
+<li>HTTP JSON Web API：适合无法直接使用 MCP 的 GPT 或普通 HTTP 客户端。</li>
+</ul>
+<p>两种入口只是传输适配器，不是两套行情系统。它们必须读取完全相同的标准模型、缓存快照、技术指标和扫描结果。</p>
+<p>非目标包括账户、资金、下单、券商 API、投资组合、数据库、机器学习、新闻和 Level-2 行情。</p>
+<h2 id="2">2. 核心设计原则<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21">2.1 单一事实源<a class="headerlink" href="#21" title="Permanent link">&para;</a></h3>
+<p>系统的数据路径固定为：</p>
+<pre><code class="language-mermaid">flowchart LR
+    EM[东方财富 Primary] --&gt; PM[ProviderManager]
+    TX[腾讯 Secondary] --&gt; PM
+    PM --&gt; MD[MarketDataService]
+    KC[L1 + SQLite 日K缓存] --&gt; MD
+    MD --&gt; N[Pydantic 标准模型]
+    N --&gt; S[统一 Service 层]
+    S --&gt; M[MCP Adapter]
+    S --&gt; W[Web Adapter]
+</code></pre>
+<p>必须保持以下约束：</p>
+<ol>
+<li><code>f43</code>、<code>f170</code> 或腾讯 <code>~</code> 字段只能在对应 Provider 中解析。</li>
+<li>价格、百分比和成交量缩放只能在 Provider 中执行一次。</li>
+<li>MCP 和 Web 不得直接请求东方财富。</li>
+<li>MCP 和 Web 不得自行计算质量、指标或评分。</li>
+<li>两种入口必须使用 <code>app.container.container</code> 中的同一组单例服务。</li>
+<li>成功业务对象统一由 <code>serialize_business()</code> 序列化。</li>
+</ol>
+<h3 id="22">2.2 准确性优先<a class="headerlink" href="#22" title="Permanent link">&para;</a></h3>
+<p>以下情况返回显式错误或不可用状态，禁止猜测和静默兜底：</p>
+<ul>
+<li>行情源超时、断连或返回空数据。</li>
+<li>价格单位或字段含义无法确认。</li>
+<li>源时间异常或行情超过新鲜度阈值。</li>
+<li>K 线不足以计算某项指标。</li>
+</ul>
+<p>实时价不得由昨收、历史网页数据或旧缓存替代；缺失的量比、换手率和涨跌停数量保持 <code>null</code>。</p>
+<h2 id="3">3. 模块结构<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>责任</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app/providers/</code></td>
+<td>Provider 抽象、双源请求、健康切换、代码转换与标准化</td>
+</tr>
+<tr>
+<td><code>app/kline_cache.py</code></td>
+<td>日 K 的 L1 内存与 L2 SQLite 持久化缓存</td>
+</tr>
+<tr>
+<td><code>app/models.py</code></td>
+<td>统一业务模型和响应契约</td>
+</tr>
+<tr>
+<td><code>app/cache.py</code></td>
+<td>进程内 TTL 缓存与同键并发合并</td>
+</tr>
+<tr>
+<td><code>app/services/data_quality.py</code></td>
+<td>唯一的数据质量、置信度和快照 ID 计算入口</td>
+</tr>
+<tr>
+<td><code>app/services/technical_indicator_service.py</code></td>
+<td>技术指标统一调用入口</td>
+</tr>
+<tr>
+<td><code>app/services/quote_service.py</code></td>
+<td>单股和批量行情编排</td>
+</tr>
+<tr>
+<td><code>app/services/kline_service.py</code></td>
+<td>K 线与单股详情编排</td>
+</tr>
+<tr>
+<td><code>app/services/market_data_service.py</code></td>
+<td>业务层唯一数据依赖、日 K 缓存与网络刷新策略</td>
+</tr>
+<tr>
+<td><code>app/services/market_service.py</code></td>
+<td>指数、涨跌家数和市场成交额</td>
+</tr>
+<tr>
+<td><code>app/services/sector_service.py</code></td>
+<td>行业/概念排名</td>
+</tr>
+<tr>
+<td><code>app/services/scanner.py</code></td>
+<td>主板过滤、指标丰富、评分和覆盖率</td>
+</tr>
+<tr>
+<td><code>app/mcp/server.py</code></td>
+<td>8 个只读 MCP tools</td>
+</tr>
+<tr>
+<td><code>app/api/routes.py</code></td>
+<td>REST 调试接口和受保护的 GPT Web Adapter</td>
+</tr>
+<tr>
+<td><code>app/serialization.py</code></td>
+<td>MCP/Web 共用序列化</td>
+</tr>
+<tr>
+<td><code>app/main.py</code></td>
+<td>生命周期、异常处理、MCP 挂载和 Bearer 边界</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4">4. 运行时对象关系<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p><code>Container</code> 在进程内只创建一次，持有：</p>
+<ul>
+<li>一个 <code>AsyncTTLCache</code>；</li>
+<li>一个 <code>DataQualityService</code>；</li>
+<li>一个 <code>TechnicalIndicatorService</code>；</li>
+<li><code>EastmoneyProvider</code>、<code>TencentProvider</code> 和 <code>ProviderManager</code>；</li>
+<li>一个 <code>KlineCache</code> 与一个 <code>MarketDataService</code>；</li>
+<li>Quote、Kline、Market、Sector、Scanner 五类服务。</li>
+</ul>
+<p>当前部署必须保持 Uvicorn 单 worker。SQLite 日 K 可跨进程重启保留，但 L1、Quote、扫描和 Live 快照不跨 worker、容器或主机共享；如果未来需要多副本，应先迁移共享缓存和快照协调，否则无法保证跨实例 snapshot parity。</p>
+<h2 id="5-provider">5. Provider 设计<a class="headerlink" href="#5-provider" title="Permanent link">&para;</a></h2>
+<h3 id="51">5.1 证券代码映射<a class="headerlink" href="#51" title="Permanent link">&para;</a></h3>
+<p><code>to_eastmoney_secid()</code> 根据市场规则生成东方财富 <code>secid</code>：</p>
+<ul>
+<li>上海：<code>600519 → 1.600519</code></li>
+<li>深圳：<code>002284 → 0.002284</code></li>
+<li>北交所代码被识别为 BJ，但主板扫描会排除。</li>
+</ul>
+<p>输入必须是六位数字，未知前缀直接拒绝。</p>
+<p>腾讯的转换独立位于 <code>TencentProvider</code>：上海 <code>603019 → sh603019</code>，深圳 <code>002284 → sz002284</code>。业务层始终只使用六位代码。</p>
+<h3 id="52-quote">5.2 Quote 标准化<a class="headerlink" href="#52-quote" title="Permanent link">&para;</a></h3>
+<p>Provider 请求 <code>fltt=2</code> 时使用已缩放值；探针使用 <code>fltt=1</code> 验证原始缩放。统一业务单位：</p>
+<ul>
+<li>价格：元。</li>
+<li>涨跌幅、换手率、振幅：百分比数值。</li>
+<li>成交量：股，源端“手”乘以 100。</li>
+<li>成交额：元。</li>
+<li>时间：带 <code>Asia/Shanghai</code> 时区的 ISO 8601。</li>
+</ul>
+<p>详细字段映射见 <a href="../../eastmoney_fields.html">东方财富字段实测记录</a>。</p>
+<h3 id="53-k">5.3 K 线标准化<a class="headerlink" href="#53-k" title="Permanent link">&para;</a></h3>
+<p>支持 <code>1m/5m/15m/30m/60m/day/week/month</code>，统一输出时间、OHLC、成交量和成交额。周/月可由前复权日 K 聚合，15/30/60 分钟可由 5 分钟 K 按上午、下午交易时段分别聚合。Provider 同时兼容已实际观察到的两种 <code>klines</code> 编码：</p>
+<ul>
+<li>JSON 字符串数组；</li>
+<li>以空格分隔的字符串。</li>
+</ul>
+<p>无法得到有效行时抛出 <code>ProviderEmptyDataError</code>，不会返回空对象伪装成功。扫描日 K 在两个源都统一为 <code>qfq</code>：Eastmoney <code>fqt=1</code>，Tencent <code>qfqday</code>。腾讯跨交易日分钟 K 使用 raw/qfq 日 K 的逐日因子归一，未结束 bar 统一标记 <code>provisional=true</code>。</p>
+<h3 id="54-http">5.4 HTTP 策略<a class="headerlink" href="#54-http" title="Permanent link">&para;</a></h3>
+<ul>
+<li>共享 <code>httpx.AsyncClient</code> 和 Keep-Alive 连接池。</li>
+<li>默认单次超时 5 秒；ProviderManager 对每个源最多尝试 2 次。</li>
+<li>第一次失败后随机退避 0.2–0.5 秒，源内重试耗尽后切备用源。</li>
+<li>主机异常时按既定顺序尝试 <code>push2</code>、<code>push2delay</code>、<code>push2his</code> 节点。</li>
+<li>所有重试均失败后返回明确 provider error。</li>
+</ul>
+<h2 id="6">6. 时间、质量与快照<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="61">6.1 时间语义<a class="headerlink" href="#61" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source_timestamp</code></td>
+<td>兼容字段；f86/f124 仅按 Provider 更新时间解释，不得称为最后成交时间</td>
+</tr>
+<tr>
+<td><code>data_timestamp</code></td>
+<td>兼容字段，当前始终等于 <code>source_timestamp</code></td>
+</tr>
+<tr>
+<td><code>server_timestamp</code></td>
+<td>本次标准行情对象创建时间</td>
+</tr>
+<tr>
+<td><code>age_seconds</code></td>
+<td><code>server_timestamp - source_timestamp</code>，最小为 0</td>
+</tr>
+<tr>
+<td><code>timestamp_source</code></td>
+<td><code>eastmoney</code> 或 <code>fetch_time</code></td>
+</tr>
+</tbody>
+</table>
+<p>仅当源端确实没有时间字段时才使用抓取时间，并明确标记 <code>timestamp_source=fetch_time</code>。</p>
+<h3 id="62">6.2 质量规则<a class="headerlink" href="#62" title="Permanent link">&para;</a></h3>
+<p>质量只由 <code>DataQualityService</code> 计算：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">数据年龄</th>
+<th>quality</th>
+<th>stale</th>
+<th>confidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">≤ 30 秒</td>
+<td><code>LIVE</code></td>
+<td>false</td>
+<td>字段完整且源时间可靠时 <code>HIGH</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">30–60 秒</td>
+<td><code>STALE</code></td>
+<td>true</td>
+<td>通常 <code>HIGH</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">60–300 秒</td>
+<td><code>OLD</code></td>
+<td>true</td>
+<td><code>LOW</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">&gt; 300 秒</td>
+<td><code>UNAVAILABLE</code></td>
+<td>true</td>
+<td><code>LOW</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">数据源冲突</td>
+<td><code>CONFLICT</code></td>
+<td>true</td>
+<td><code>LOW</code></td>
+</tr>
+</tbody>
+</table>
+<p>字段不完整或只能使用抓取时间时，置信度最多为 <code>MEDIUM</code>。<code>CONFLICT</code> 已在 schema 中预留，当前版本尚未接入第二行情源。</p>
+<h3 id="63-snapshot_id-scan_id">6.3 snapshot_id 和 scan_id<a class="headerlink" href="#63-snapshot_id-scan_id" title="Permanent link">&para;</a></h3>
+<p><code>snapshot_id</code> 根据标准化源时间确定性生成：</p>
+<pre><code class="language-text">snapshot-YYYYMMDDTHHMMSS.mmm
+</code></pre>
+<p>同一缓存对象通过 MCP 与 Web 返回时，ID 和全部业务字段相同。扫描结果另带：</p>
+<pre><code class="language-text">scan-YYYYMMDDTHHMMSS.mmm
+</code></pre>
+<p>每个扫描候选还保留其行情 <code>snapshot_id</code>，便于判断候选和单股详情是否来自同一行情批次。</p>
+<h2 id="7">7. 缓存与并发<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p><code>AsyncTTLCache</code> 使用单键 <code>asyncio.Lock</code> 合并并发加载，避免缓存失效瞬间重复请求同一数据。规范缓存键与 TTL：</p>
+<table>
+<thead>
+<tr>
+<th>数据</th>
+<th>缓存键</th>
+<th style="text-align: right;">TTL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单股行情</td>
+<td><code>quote:{code}</code></td>
+<td style="text-align: right;">3 秒</td>
+</tr>
+<tr>
+<td>指数行情</td>
+<td><code>index:{market}:{code}</code></td>
+<td style="text-align: right;">3 秒</td>
+</tr>
+<tr>
+<td>日 K</td>
+<td>L1 + <code>data/kline_cache.sqlite3</code></td>
+<td style="text-align: right;">交易时 300 秒；非交易时 1800 秒</td>
+</tr>
+<tr>
+<td>全部 K 线周期</td>
+<td>L1 + <code>data/kline_cache.sqlite3</code></td>
+<td style="text-align: right;">交易时 300 秒；非交易时 1800 秒</td>
+</tr>
+<tr>
+<td>单股详情</td>
+<td><code>detail:{code}</code></td>
+<td style="text-align: right;">3 秒</td>
+</tr>
+<tr>
+<td>全市场列表</td>
+<td><code>market:all-a-shares</code></td>
+<td style="text-align: right;">3 秒</td>
+</tr>
+<tr>
+<td>市场概况</td>
+<td><code>market:latest</code></td>
+<td style="text-align: right;">5 秒</td>
+</tr>
+<tr>
+<td>板块排名</td>
+<td><code>sector:{type}:{limit}</code></td>
+<td style="text-align: right;">10 秒</td>
+</tr>
+<tr>
+<td>主板扫描</td>
+<td><code>scan:mainboard:{canonical-params}</code></td>
+<td style="text-align: right;">15 秒</td>
+</tr>
+</tbody>
+</table>
+<p>全市场列表完成标准化后会批量填充 <code>quote:{code}</code>，使紧邻的市场、扫描和单股查询尽量复用同一 Quote 快照。</p>
+<p>扫描缓存键会先规范化数值类型，确保 MCP 的整数默认值与 FastAPI 的浮点默认值不会生成两个键。这一不变量由单元测试覆盖。</p>
+<h2 id="8-service">8. Service 设计<a class="headerlink" href="#8-service" title="Permanent link">&para;</a></h2>
+<h3 id="81-quoteservice">8.1 QuoteService<a class="headerlink" href="#81-quoteservice" title="Permanent link">&para;</a></h3>
+<p>只做输入编排。批量请求去重、限制最多 100 个代码，并通过 <code>asyncio.gather</code> 并发获取，不串行逐股请求。</p>
+<h3 id="82-klineservice">8.2 KlineService<a class="headerlink" href="#82-klineservice" title="Permanent link">&para;</a></h3>
+<p>单股详情并发获取：</p>
+<ul>
+<li>当前 Quote；</li>
+<li>120 根日 K；</li>
+<li>48 根 5 分钟 K。</li>
+</ul>
+<p>随后调用共享 <code>TechnicalIndicatorService</code>，生成 MA5/10/20/60、ATR14、RSI14、20/60 日高低点、位置距离和阶段收益。详情继承 Quote 的质量字段和 <code>snapshot_id</code>。</p>
+<h3 id="83-marketservice">8.3 MarketService<a class="headerlink" href="#83-marketservice" title="Permanent link">&para;</a></h3>
+<p>并发读取全市场列表与上证、深证、创业板指数。涨跌家数和总成交额只由同一份标准化全市场列表聚合。未可靠验证的涨跌停家数返回 <code>{value: null, available: false}</code>。</p>
+<h3 id="84-sectorservice">8.4 SectorService<a class="headerlink" href="#84-sectorservice" title="Permanent link">&para;</a></h3>
+<p>返回行业或概念板块排名。源端没有可靠数据的涨停数量和历史名次字段保持 <code>null</code>。</p>
+<h3 id="85-scannerservice">8.5 ScannerService<a class="headerlink" href="#85-scannerservice" title="Permanent link">&para;</a></h3>
+<p>主板扫描流程：</p>
+<pre><code class="language-mermaid">flowchart TD
+    A[全市场 Quote 快照] --&gt; B[主板代码过滤]
+    B --&gt; C[ST/停牌/一字板/涨跌停过滤]
+    C --&gt; D[涨幅与成交额过滤]
+    D --&gt; E[轻量预排序，最多 120 只]
+    E --&gt; F[L1/SQLite 获取 80 日 K，必要时限流增量刷新]
+    F --&gt; G[统一技术指标]
+    G --&gt; H[五维评分与排序]
+    H --&gt; I[Top N + coverage + scan_id]
+</code></pre>
+<p>主板前缀：<code>000/001/002/003/600/601/603/605</code>。创业板、科创板、北交所、ST/退市、停牌、一字板、低成交额和涨跌停不可交易标的被排除。</p>
+<p>评分上限 100：</p>
+<ul>
+<li>趋势 25：价格高于 MA20、MA5 高于 MA20、MA20 高于 MA60。</li>
+<li>量能 20：量比和成交额的有界评分。</li>
+<li>相对强度 20：个股涨幅相对所属市场指数。</li>
+<li>位置 20：奖励当日 0%–3%、靠近 MA20 且未贴近 20 日高点；连续大涨扣分。</li>
+<li>流动性 15：成交额、换手率和非一字板状态。</li>
+</ul>
+<p>K 线丰富失败时先由腾讯接管；双源失败时使用足量旧缓存。只有双源失败且无足量缓存才不计算技术指标，并在候选中附加“K线不可用，趋势指标未计分”。每次实际扫描以聚合 <code>SCAN SUMMARY</code> 输出来源、缓存命中、异常分类和 MA 可用数量，不逐股刷日志。</p>
+<h3 id="86-v2-opportunity-scanner">8.6 V2 Opportunity Scanner<a class="headerlink" href="#86-v2-opportunity-scanner" title="Permanent link">&para;</a></h3>
+<p>V2 通过 <code>ScannerService.scan_mainboard_v2()</code> 并行存在，不覆盖 V1 的 <code>scan_mainboard()</code>。V1 返回 <code>ScanResult.candidates[]</code> 和 <code>total_score</code>；V2 返回 <code>OpportunityScanResult.raw_top30/action_top30/top100</code> 和 <code>opportunity_score</code>。入口层分别暴露 <code>/scan/v2</code>、<code>/gpt/{secret}/scan/v2</code>、MCP <code>scan_mainboard_v2</code>，以及用于 A/B 的 <code>/gpt/{secret}/scan/ab</code> 和 MCP <code>scan_mainboard_ab</code>。</p>
+<p>Phase 1 使用现有真实数据能力：全市场 Quote、260 日 K、80 周 K、指数涨跌幅、Provider 健康状态，以及既有 K 线 L1/SQLite 缓存和 ProviderManager fallback。</p>
+<p>当前不具备真实来源的数据明确不评分：基本面、扣非、现金流、ROE、资产负债率、估值和行业相对估值；公告、新闻、政策、产业催化；主力/大单资金；申万二级行业分类和 action list 行业集中度控制。这些缺口会进入 <code>missing_data_sources</code>、候选的 <code>data_quality.missing_fields</code> 和子分的 <code>coverage=false</code>。缺数据不写成 0，不生成 A 级结论。</p>
+<p>候选池从硬过滤后的主板股票中通过 quote-only 多通道并集生成，默认 420 只，范围 300–500。通道包括趋势改善代理、低位代理、资金活跃、相对强度和流动性底线。<code>pct_change &gt; 5%</code> 在 V2 不再作为绝对过滤条件；涨停、一字板、停牌和无法正常交易仍按硬过滤处理。</p>
+<p>评分公式：</p>
+<pre><code class="language-text">opportunity_score = clamp(
+  position_score(15)
+  + fundamental_score(15, Phase1 missing)
+  + trend_score(20)
+  + flow_score(15)
+  + catalyst_score(10, Phase1 missing)
+  + risk_reward_score(20)
+  + liquidity_score(5)
+  + risk_penalty(0..-20),
+  0,
+  100
+)
+</code></pre>
+<p><code>trend_score</code> 分为周 K 8 分和日 K 12 分。周 K 明确下降时，日 K 上涨默认视为下降趋势中的反弹，并限制趋势分。<code>risk_reward_score</code> 使用日 K 的 20/60/120/250 日高低点、MA20/MA60 和 ATR14 推出 <code>support/resistance/stop_loss/target_1/target_2/downside_pct/upside_pct/risk_reward_ratio</code>；分档为 <code>RR&lt;1=0</code>、<code>1~1.5=4</code>、<code>1.5~2=8</code>、<code>2~3=14</code>、<code>&gt;=3=20</code>。</p>
+<h2 id="9">9. 传输适配器<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<h3 id="91-mcp-adapter">9.1 MCP Adapter<a class="headerlink" href="#91-mcp-adapter" title="Permanent link">&para;</a></h3>
+<p>FastMCP 挂载在 <code>/mcp/</code>，由独立 ASGI 中间件校验 <code>Authorization: Bearer &lt;MCP_TOKEN&gt;</code>。工具异常转换为 <code>ErrorResponse</code>，不会让 MCP 会话崩溃。</p>
+<h3 id="92-web-adapter">9.2 Web Adapter<a class="headerlink" href="#92-web-adapter" title="Permanent link">&para;</a></h3>
+<p>受保护端点位于 <code>/gpt/{secret}/...</code>。<code>secret</code> 使用 <code>GPT_WEB_SECRET</code>，未设置时回退到 <code>MCP_TOKEN</code>。正确结果外层为：</p>
+<pre><code class="language-json">{&quot;ok&quot;: true, &quot;data&quot;: {}}
+</code></pre>
+<p>其中 <code>data</code> 与 MCP 工具业务结果使用同一 Pydantic 模型和序列化函数。密钥错误返回 404，避免泄漏端点存在性；未配置任何密钥返回 503。</p>
+<p>路径密钥会出现在 URL 中，因此生产容器关闭 Uvicorn access log，Nginx <code>/gpt/</code> location 也关闭 access log。</p>
+<p>Live Refresh Adapter 位于同一 Web 传输层：入口、快照、个股详情都返回 HTML，并以 <code>secrets.token_urlsafe(24)</code> 为每个后续链接生成唯一 URL。后台唯一任务调用现有单例 <code>MarketService</code>、<code>ScannerService</code> 与 <code>QuoteService</code>，完成后以一次引用赋值原子替换内存快照；交易时段完成一次刷新后等待 2 秒，非交易时段等待 30 秒。现有 Service 缓存 TTL 继续控制 Provider 的真实采集频率。</p>
+<p>HTTP 请求只读取当前引用并渲染，绝不 await Service 或 Provider。刷新失败只更新错误状态，不清空成功快照；进程启动后首份快照未完成时立即返回 <code>INITIALIZING</code>。该缓存属于只读 Web 展示物化视图，不拥有 Provider、行情计算或扫描计算。页面使用 <code>provider_timestamp</code>、<code>fetch_timestamp</code>、<code>market_timestamp</code> 与 <code>timestamp_semantics</code> 明示时间语义；既有 MCP/JSON 合约保持不变。</p>
+<p>成功刷新还会在线程中预生成市场 HTML 模板及每只候选股的详情模板，然后把行情对象、模板和错误状态作为一个不可变状态用单次引用赋值发布。模板仅保留 <code>server_time</code>、<code>age_ms</code>、状态、warning、secret 和 nonce 占位符。HTTP handler 没有 <code>await</code>、Future、Event、业务缓存或锁，只读取一次状态引用并替换这些小型动态占位符。响应头 <code>X-Live-Cache: HIT|MISS</code> 可直接确认是否命中成功快照。</p>
+<h2 id="10">10. 异常契约<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>REST/Web</th>
+<th>MCP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>输入值错误</td>
+<td>HTTP 400/422 JSON</td>
+<td>结构化 <code>ok=false</code></td>
+</tr>
+<tr>
+<td>行情源失败</td>
+<td>HTTP 503 JSON</td>
+<td>结构化 <code>ok=false</code></td>
+</tr>
+<tr>
+<td>未知内部错误</td>
+<td>HTTP 500，仅暴露异常类型</td>
+<td>结构化错误</td>
+</tr>
+<tr>
+<td>MCP Token 错误</td>
+<td>HTTP 401 + <code>WWW-Authenticate: Bearer</code></td>
+<td>无法建立工具会话</td>
+</tr>
+<tr>
+<td>Web secret 错误</td>
+<td>HTTP 404</td>
+<td>不适用</td>
+</tr>
+</tbody>
+</table>
+<p>日志、文档和 Git 历史不得包含真实 token、Web secret 或服务器密码。</p>
+<h2 id="11">11. 扩展设计<a class="headerlink" href="#11" title="Permanent link">&para;</a></h2>
+<p>未来增加新浪等更多数据源时，应实现 <code>MarketDataProvider</code>，在 Provider 内完成该源的独立字段验证和标准化，并注册到现有 <code>ProviderManager</code>。后续可继续完成：</p>
+<ol>
+<li>主源健康检查与熔断；</li>
+<li>同时间窗口价格交叉核验；</li>
+<li>差异阈值和 <code>CONFLICT</code> 判定；</li>
+<li><code>confidence</code> 调整；</li>
+<li>禁止把不同时间点、不同来源字段无提示拼成一个 Quote。</li>
+</ol>
+<p>增加多 worker 或多实例前，必须先解决共享缓存、分布式锁、快照 ID 和扫描任务协调。</p>
+<h2 id="12">12. 已知限制<a class="headerlink" href="#12" title="Permanent link">&para;</a></h2>
+<ul>
+<li>东方财富公开页面接口没有服务可用性和字段稳定性承诺。</li>
+<li>部分网络出口会被 <code>push2his</code> 断开，或得到空 K 线；此时腾讯自动接管。双源都失败时日 K 可显式返回旧缓存并标记 <code>stale/OLD</code>，不会冒充实时数据。</li>
+<li>Quick Tunnel 地址在服务重启后可能变化，不适合作为正式固定入口。</li>
+<li>Quick Tunnel 对持续 SSE 没有生产保证；正式环境应使用 Named Tunnel 或自有域名。</li>
+<li>当前静态 Bearer 适合受控客户端；正式 ChatGPT 连接建议升级标准 OAuth discovery。</li>
+<li>内存缓存只在单进程内共享。</li>
+<li>扫描是事实筛选和启发式排序，不构成投资建议。</li>
+</ul>
+<h2 id="13">13. 变更检查清单<a class="headerlink" href="#13" title="Permanent link">&para;</a></h2>
+<p>涉及行情字段、缩放、时间、缓存键、技术指标或扫描评分的变更，合并前必须：</p>
+<ol>
+<li>先运行探针并保存可审计的原始样本；</li>
+<li>更新字段文档和 Provider fixture；</li>
+<li>运行全部单元测试；</li>
+<li>运行 <code>tests/test_mcp_web_parity.py</code>；</li>
+<li>对 002284、600722、600519、000001 做价格缩放核验；</li>
+<li>通过真实 MCP initialize、tools/list、tools/call；</li>
+<li>在同一进程中比较 MCP/Web 的 snapshot_id、指标、候选顺序、评分和 scan_id；</li>
+<li>确认任何失败都没有旧值或猜测数据兜底。</li>
+</ol></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
