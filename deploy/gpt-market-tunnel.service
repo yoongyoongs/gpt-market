@@ -6,7 +6,7 @@ After=network-online.target nginx.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:80
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:80
 Restart=always
 RestartSec=5
 
