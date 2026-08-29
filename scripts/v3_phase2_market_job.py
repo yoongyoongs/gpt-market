@@ -21,7 +21,11 @@ from app.v3.application.publish_bar_bundle import PublishBarBundleService
 from app.v3.application.refresh_universe import RefreshUniverseService
 from app.v3.infrastructure.db.session import V3Database
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
-from app.v3.infrastructure.providers.bars import LegacyHistoricalBarProvider, SinaHistoricalBarProvider
+from app.v3.infrastructure.providers.bars import (
+    CircuitBreakingHistoricalBarProvider,
+    LegacyHistoricalBarProvider,
+    SinaHistoricalBarProvider,
+)
 from app.v3.infrastructure.providers.exchange_calendar import ExchangeCalendarsAShareCalendar
 from app.v3.infrastructure.providers.universe import ExchangeUniverseProvider, LegacyUniverseProvider
 from app.v3.jobs.market_data import latest_completed_session
@@ -124,7 +128,9 @@ async def execute(args: argparse.Namespace) -> dict:
                 uow_factory,
                 BuildDailyBarRevisionsService(
                     (
-                        LegacyHistoricalBarProvider("eastmoney", eastmoney),
+                        CircuitBreakingHistoricalBarProvider(
+                            LegacyHistoricalBarProvider("eastmoney", eastmoney)
+                        ),
                         LegacyHistoricalBarProvider("tencent", tencent),
                         sina,
                     )

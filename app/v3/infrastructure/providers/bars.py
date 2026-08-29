@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime
 import json
+import time
 from typing import Any
 
 import httpx
@@ -58,6 +60,49 @@ class LegacyHistoricalBarProvider:
 
     async def close(self) -> None:
         return None
+
+
+class HistoricalBarProviderCircuitOpen(RuntimeError):
+    pass
+
+
+class CircuitBreakingHistoricalBarProvider:
+    def __init__(
+        self,
+        provider,
+        *,
+        failure_threshold: int = 3,
+        cooldown_seconds: float = 300,
+        monotonic: Callable[[], float] | None = None,
+    ) -> None:
+        if failure_threshold < 1 or cooldown_seconds <= 0:
+            raise ValueError("circuit breaker thresholds must be positive")
+        self.code = provider.code
+        self._provider = provider
+        self._failure_threshold = failure_threshold
+        self._cooldown_seconds = cooldown_seconds
+        self._monotonic = monotonic or time.monotonic
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+
+    async def fetch(
+        self, code: str, period: BarPeriod, adjust_type: AdjustType, limit: int
+    ) -> HistoricalBarFetchResult:
+        now = self._monotonic()
+        if now < self._open_until:
+            raise HistoricalBarProviderCircuitOpen(
+                f"{self.code} circuit is open for {self._open_until - now:.3f} more seconds"
+            )
+        try:
+            result = await self._provider.fetch(code, period, adjust_type, limit)
+        except Exception:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self._failure_threshold:
+                self._open_until = self._monotonic() + self._cooldown_seconds
+            raise
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+        return result
 
 
 class SinaHistoricalBarProvider:
