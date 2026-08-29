@@ -14,6 +14,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised by local setu
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ROOT_DOCUMENTS = (ROOT / "README.md", ROOT / "CONTRIBUTING.md")
 DOCS_DIR = ROOT / "docs"
 H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 MD_LINK_RE = re.compile(r'href="([^"#?]+)\.md(#[^"]*)?"')
@@ -26,7 +27,9 @@ STYLE = """
 
 
 def markdown_files() -> list[Path]:
-    return sorted(DOCS_DIR.rglob("*.md"), key=lambda path: str(path).lower())
+    files = [path for path in ROOT_DOCUMENTS if path.exists()]
+    files.extend(DOCS_DIR.rglob("*.md"))
+    return sorted(files, key=lambda path: str(path).lower())
 
 
 def source_hash(text: str) -> str:
@@ -84,7 +87,7 @@ def check() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="为 docs 下所有 Markdown 生成同名离线 HTML")
+    parser = argparse.ArgumentParser(description="为项目正式 Markdown 文档生成同名离线 HTML")
     parser.add_argument("--check", action="store_true", help="只检查 HTML 是否存在且与 Markdown 同步")
     args = parser.parse_args()
     return check() if args.check else build()

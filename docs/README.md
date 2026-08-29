@@ -31,7 +31,7 @@
 
 ## 双格式规则
 
-每份 Markdown 都必须有同目录、同名 HTML：Markdown 供大模型和版本审查，HTML 供人阅读。执行：
+根 README、CONTRIBUTING 和 `docs` 下每份 Markdown 都必须有同目录、同名 HTML：Markdown 供大模型和版本审查，HTML 供人阅读。执行：
 
 ```bash
 python scripts/build_docs_html.py

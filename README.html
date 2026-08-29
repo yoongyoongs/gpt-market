@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="85e94bc4f38d9457c7508e9f156673e61fc0a7998a5e5d1eb23047bf1256b278"><title>极简 A 股实时行情 Remote MCP</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#_1">接手开发必读</a></li>
+<li><a href="#_2">文档导航</a></li>
+<li><a href="#_3">能力与端点</a></li>
+<li><a href="#_4">单一事实源与一致性</a></li>
+<li><a href="#_5">本地启动</a></li>
+<li><a href="#_6">配置</a></li>
+<li><a href="#docker-linux">Docker / Linux 部署</a></li>
+<li><a href="#bearer-oauth">Bearer 与 OAuth</a></li>
+<li><a href="#mcp-chatgpt">MCP 测试与连接 ChatGPT</a></li>
+<li><a href="#_7">数据源、缩放与延迟</a></li>
+<li><a href="#_8">扫描逻辑</a><ul>
+<li><a href="#v2-phase-1">V2 Phase 1 扫描</a></li>
+</ul>
+</li>
+<li><a href="#_9">测试</a></li>
+<li><a href="#_10">接口失效排查</a></li>
+<li><a href="#_11">已知限制</a></li>
+<li><a href="#_12">项目结构</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：README.md · 内容哈希：85e94bc4f38d</div><h1 id="a-remote-mcp">极简 A 股实时行情 Remote MCP<a class="headerlink" href="#a-remote-mcp" title="Permanent link">&para;</a></h1>
+<p>只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。</p>
+<h2 id="_1">接手开发必读<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。必须按顺序阅读：</p>
+<ol>
+<li>本 README；</li>
+<li><a href="docs/工作状态.html">当前工作状态</a>；</li>
+<li><a href="docs/需求规格说明.html">V3 需求规格说明</a>与<a href="docs/系统功能架构.html">系统功能架构</a>；</li>
+<li><a href="docs/技术架构设计.html">技术架构</a>、<a href="docs/数据库设计.html">数据库设计</a>和<a href="docs/详细设计.html">详细设计</a>；</li>
+<li><a href="docs/架构设计实施稿.html">V3 架构设计实施稿</a>与<a href="docs/功能清单与开发状态.html">功能清单</a>；</li>
+<li><a href="docs/开发规范.html">开发工作规范</a>；</li>
+<li>当前任务相关代码和测试。</li>
+</ol>
+<p>然后检查 <code>git status --short --branch</code>、最近提交和远端同步状态。默认无需阅读 V1/V2 历史过程文档；需要追溯时再通过 <a href="docs/README.html">文档索引</a> 定向查看。</p>
+<p>开发必须遵循“小步可验证”：每完成一个独立步骤，就更新工作状态、运行测试、使用中文提交说明提交并立即推送 GitHub。若 Token、时间或外部条件即将中断，必须在任务分支创建可恢复检查点并写清下一步，禁止只把进度留在对话中。</p>
+<h2 id="_2">文档导航<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="docs/README.html">完整文档索引</a>：必读、当前参考和历史归档分类。</li>
+<li><a href="docs/api-reference.html">API 与 MCP 工具参考</a>：现有工具、Web 路由、请求参数和响应模型。</li>
+<li><a href="docs/testing-acceptance.html">测试与验收规范</a>：parity、联网测试、发布门禁和排障流程。</li>
+<li><a href="docs/eastmoney_fields.html">东方财富字段实测记录</a>：原始字段、缩放、时间和 K 线格式。</li>
+<li><a href="docs/deployment.html">服务器部署记录</a>：Docker、Nginx、Quick Tunnel 与运维命令。</li>
+<li><a href="CONTRIBUTING.html">开发与贡献指南</a>：本地环境、修改边界和提交前检查。</li>
+</ul>
+<h2 id="_3">能力与端点<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<p>Streamable HTTP MCP endpoint：<code>https://YOUR_DOMAIN/mcp/</code>（建议保留结尾 <code>/</code>）。8 个工具：</p>
+<ol>
+<li><code>get_quote</code></li>
+<li><code>get_quotes</code></li>
+<li><code>get_kline</code></li>
+<li><code>get_stock_detail</code></li>
+<li><code>get_market_overview</code></li>
+<li><code>get_sector_ranking</code></li>
+<li><code>scan_mainboard</code></li>
+<li><code>get_scan_coverage</code></li>
+</ol>
+<p>V2 选股作为并行能力保留 V1，不覆盖旧工具：</p>
+<ul>
+<li>MCP：<code>scan_mainboard_v2</code>、<code>scan_mainboard_ab</code></li>
+<li>REST/GPT：<code>GET /scan/v2</code>、<code>GET /gpt/{secret}/scan/v2</code>、<code>GET /gpt/{secret}/scan/v2/html</code>、<code>GET /gpt/{secret}/scan/ab</code></li>
+</ul>
+<p>V1 仍按 <code>total_score</code> 排名；V2 按 <code>opportunity_score</code> 排名，并返回 <code>raw_top30</code>、<code>action_top30</code>、<code>top100</code>、<code>score_version=v2</code>、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 <code>coverage=false</code>、<code>score=null</code> 和 <code>missing_fields</code> 暴露。</p>
+<p>REST 调试接口：<code>GET /health</code>、<code>/quote/{code}</code>、<code>/quotes?codes=...</code>、<code>/kline/{code}</code>、<code>/detail/{code}</code>、<code>/market</code>、<code>/sectors</code>、<code>/scan</code>、<code>/scan/coverage</code>。REST 与 MCP 使用完全相同的 service/provider 层。</p>
+<p>供 GPT 直接读取 JSON 的受保护 Web Adapter 使用 <code>GET /gpt/{secret}/...</code>：<code>stock/{code}</code>、<code>stocks</code>、<code>stock/{code}/kline</code>、<code>stock/{code}/detail</code>、<code>market</code>、<code>sectors</code>、<code>scan</code>、<code>scan/coverage</code>、<code>coverage</code>。<code>secret</code> 来自 <code>GPT_WEB_SECRET</code>；未单独设置时复用 <code>MCP_TOKEN</code>。</p>
+<p>为规避 ChatGPT Web 对固定 URL 的结果缓存，另提供 <code>GET /gpt/{secret}/live</code> HTML 快照。后台任务通过上述共享 Service 刷新一个内存快照，live 请求只读取该快照，绝不等待 Provider。页面中的“获取最新行情快照”和个股链接每次都使用 <code>secrets.token_urlsafe(24)</code> 生成新的 nonce；不建立独立 Provider 或行情算法。所有 live 响应同时设置 <code>no-store</code> 等防缓存 Header。页面同时展示本轮证券/行情/过滤覆盖、数据新鲜度分布、失败源与缺失字段摘要，以及行业和概念 Top20。<code>GET /gpt/{secret}/coverage</code> 从同一份已发布快照读取完整 <code>CoverageReport</code>，不会重新请求全市场行情。</p>
+<p>后台在交易时段每次刷新完成后等待 2 秒，非交易时段等待 30 秒；现有 Service TTL 仍决定真实上游采集频率。刷新失败会保留上一份成功数据。进程刚启动且首份快照尚未完成时，live 页面立即返回 <code>INITIALIZING</code>，不会阻塞请求。</p>
+<p>所有成功行情对象带 <code>source</code>、兼容字段 <code>source_timestamp</code> / <code>data_timestamp</code>、<code>server_timestamp</code>、<code>age_seconds</code>、<code>timestamp_source</code>、<code>snapshot_id</code>、<code>confidence</code>、<code>stale</code> 和 <code>quality</code>。f86/f124 只能证明为 Provider 更新时间，不能称为最后成交时间；Live HTML 会用更明确的拆分字段展示。质量只由 <code>DataQualityService</code> 计算：30 秒内 <code>LIVE</code>、30–60 秒 <code>STALE</code>、60–300 秒 <code>OLD</code>、超过 300 秒 <code>UNAVAILABLE</code>。如果东方财富没有时间字段，明确使用 <code>timestamp_source=fetch_time</code>。失败不会返回旧行情：REST 返回 4xx/503 JSON，MCP 返回 <code>ok=false</code> 结构。</p>
+<h2 id="_4">单一事实源与一致性<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<p><code>Market/Scanner Service → MarketDataService → ProviderManager → EastmoneyProvider/TencentProvider</code> 是唯一业务数据路径。东方财富 <code>secid</code>、腾讯 <code>sh/sz</code> 等代码转换和字段缩放只存在于各自 Provider。日 K 线由 <code>MarketDataService</code> 统一读取 L1 内存与 L2 SQLite；MCP 与 Web 使用同一个 singleton Container、同一个缓存、同一个技术指标服务、同一个扫描器以及同一个 <code>serialize_business()</code>。</p>
+<p>V2 Phase2A 另有独立只读链路：<code>ScannerService → FundamentalProviderManager → FundamentalProvider</code>。它只为 V2 增加基本面分与财务风险，不改变上述行情链路、MCP 或 V1。历史设计见 <a href="docs/archive/v2/phase2a-fundamentals.html">Phase2A 基本面设计</a>。</p>
+<p>同一底层行情生成确定性的 <code>snapshot_id</code>，扫描另带 <code>scan_id</code>。全市场快照会填充规范的 <code>quote:{code}</code> 缓存，因此紧邻的市场、扫描和单股调用会尽量复用同一标准化 Quote。<code>tests/test_mcp_web_parity.py</code> 自动比较三个验收股票、单股详情、市场概况、行业 Top10 和扫描结果。</p>
+<h2 id="_5">本地启动<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<p>Linux/macOS：</p>
+<pre><code class="language-bash">python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env
+# 本地无认证调试：把 .env 中 MCP_TOKEN 留空
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+</code></pre>
+<p>Windows PowerShell：</p>
+<pre><code class="language-powershell">py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+</code></pre>
+<p>验证：</p>
+<pre><code class="language-bash">curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/quote/002284
+curl &quot;http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/stock/002284&quot;
+curl &quot;http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/live&quot;
+curl &quot;http://127.0.0.1:8000/gpt/$GPT_WEB_SECRET/coverage&quot;
+curl 'http://127.0.0.1:8000/kline/002284?period=day&amp;limit=5'
+curl 'http://127.0.0.1:8000/sectors?sector_type=industry&amp;limit=10'
+curl 'http://127.0.0.1:8000/scan?top_n=30'
+curl 'http://127.0.0.1:8000/scan/v2?top_n=30&amp;pool_size=420'
+</code></pre>
+<h2 id="_6">配置<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th style="text-align: right;">默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MCP_TOKEN</code></td>
+<td style="text-align: right;">空</td>
+<td>非空时仅保护 <code>/mcp</code>，REST 保持便于健康检查/调试；生产必须设置</td>
+</tr>
+<tr>
+<td><code>GPT_WEB_SECRET</code></td>
+<td style="text-align: right;">空</td>
+<td>保护 <code>/gpt/{secret}/...</code>；空时复用 <code>MCP_TOKEN</code></td>
+</tr>
+<tr>
+<td><code>EASTMONEY_TIMEOUT</code></td>
+<td style="text-align: right;">5</td>
+<td>单次请求超时秒数</td>
+</tr>
+<tr>
+<td><code>EASTMONEY_RETRIES</code></td>
+<td style="text-align: right;">3</td>
+<td>最大尝试次数</td>
+</tr>
+<tr>
+<td><code>SCAN_CONCURRENCY</code></td>
+<td style="text-align: right;">12</td>
+<td>K 线丰富阶段并发数</td>
+</tr>
+<tr>
+<td><code>EASTMONEY_PROXY</code></td>
+<td style="text-align: right;">空</td>
+<td>出站网络需要代理时设置；通常 Linux 留空</td>
+</tr>
+<tr>
+<td><code>TENCENT_TIMEOUT</code></td>
+<td style="text-align: right;">5</td>
+<td>腾讯备用源单次请求超时秒数</td>
+</tr>
+<tr>
+<td><code>TENCENT_PROXY</code></td>
+<td style="text-align: right;">空</td>
+<td>腾讯备用源代理；通常 Linux 留空</td>
+</tr>
+<tr>
+<td><code>MAX_KLINE_CONCURRENCY</code></td>
+<td style="text-align: right;">8</td>
+<td>所有 Provider 合计的 K 线网络并发上限</td>
+</tr>
+<tr>
+<td><code>KLINE_CACHE_PATH</code></td>
+<td style="text-align: right;"><code>data/kline_cache.sqlite3</code></td>
+<td>日 K 线 SQLite 持久化路径</td>
+</tr>
+<tr>
+<td><code>SCAN_HISTORY_PATH</code></td>
+<td style="text-align: right;"><code>data/scan_history</code></td>
+<td>V1/V2 扫描 JSONL 历史快照目录，Docker 默认为 <code>/data/scan_history</code></td>
+</tr>
+<tr>
+<td><code>KLINE_REFRESH_TRADING_SECONDS</code></td>
+<td style="text-align: right;">300</td>
+<td>交易时段正式历史 K 刷新间隔</td>
+</tr>
+<tr>
+<td><code>KLINE_REFRESH_CLOSED_SECONDS</code></td>
+<td style="text-align: right;">1800</td>
+<td>非交易时段正式历史 K 刷新间隔</td>
+</tr>
+</tbody>
+</table>
+<p>不要提交 <code>.env</code>。生成随机 token 示例：<code>openssl rand -hex 32</code>。</p>
+<h2 id="docker-linux">Docker / Linux 部署<a class="headerlink" href="#docker-linux" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">cp .env.example .env
+sed -i 's/change_me_to_a_long_random_secret/替换为随机长字符串/' .env
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:8000/health
+</code></pre>
+<p>Compose 默认把服务绑定到公网 <code>0.0.0.0:8000</code>，可通过 <code>http://服务器IP:8000</code> 访问。请在云安全组中只向可信来源开放 8000，或继续使用 Nginx/HTTPS 作为公网入口。容器使用非 root 用户、只读根文件系统和 <code>no-new-privileges</code>。</p>
+<p>域名与 HTTPS：</p>
+<ol>
+<li>将域名 A/AAAA 记录指向服务器。</li>
+<li>安装 Nginx 与 Certbot，签发证书：<code>sudo certbot certonly --nginx -d market.example.com</code>。</li>
+<li>复制 <code>nginx.conf.example</code> 到 <code>/etc/nginx/sites-available/market-mcp</code>，替换域名和证书路径。</li>
+<li>建立 sites-enabled 链接，执行 <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>。</li>
+<li><code>curl https://market.example.com/health</code>，MCP 地址为 <code>https://market.example.com/mcp/</code>。</li>
+</ol>
+<p>示例已关闭 proxy buffering/cache、保留 HTTP/1.1 keepalive、提高 streaming 读取超时，并透传 <code>Authorization</code>，适合 Streamable HTTP/SSE 响应。</p>
+<h2 id="bearer-oauth">Bearer 与 OAuth<a class="headerlink" href="#bearer-oauth" title="Permanent link">&para;</a></h2>
+<p>设置 <code>MCP_TOKEN</code> 后：</p>
+<pre><code class="language-bash">curl -i https://market.example.com/mcp/ \
+  -H 'Authorization: Bearer YOUR_TOKEN'
+</code></pre>
+<p>这是独立 ASGI 认证边界，REST <code>/health</code> 不需要 token。FastMCP 的工具层不依赖认证实现，因此可先空 token 完成连接测试，再开启 token。</p>
+<p>部分 ChatGPT 连接入口不允许手工设置固定 Bearer header，而要求标准 OAuth discovery/DCR。此时应把当前中间件替换为 FastMCP <code>RemoteAuthProvider</code> + <code>JWTVerifier</code>（身份提供商支持 DCR），或用 <code>OAuthProxy</code> 对接不支持 DCR 的现有提供商。需要发布 <code>/.well-known/oauth-protected-resource</code>、授权服务器 metadata，并配置 HTTPS issuer/audience。参考 <a href="https://gofastmcp.com/servers/auth/authentication">FastMCP Authentication</a> 与 <a href="https://gofastmcp.com/servers/auth/remote-oauth">Remote OAuth</a>。</p>
+<h2 id="mcp-chatgpt">MCP 测试与连接 ChatGPT<a class="headerlink" href="#mcp-chatgpt" title="Permanent link">&para;</a></h2>
+<p>先启动服务，然后：</p>
+<pre><code class="language-bash">python scripts/test_mcp_client.py
+MCP_URL=https://market.example.com/mcp/ MCP_TOKEN=YOUR_TOKEN python scripts/test_mcp_client.py
+</code></pre>
+<p>脚本会真实执行 MCP initialize、tools/list 和 <code>get_quote(002284)</code>。在 ChatGPT 创建自定义连接器/远程 MCP 时填写公网 HTTPS endpoint；若界面支持自定义 Bearer token，填入 <code>MCP_TOKEN</code>。若只支持 OAuth，按上一节升级。服务器必须能从公网访问，不能填写 localhost 或内网 IP。</p>
+<h2 id="_7">数据源、缩放与延迟<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<ul>
+<li>行情：<code>push2.eastmoney.com/api/qt/stock/get</code></li>
+<li>全市场/板块：<code>push2.eastmoney.com/api/qt/clist/get</code></li>
+<li>K 线：<code>push2his.eastmoney.com/api/qt/stock/kline/get</code></li>
+<li>腾讯备用 Quote：<code>qt.gtimg.cn/q=...</code></li>
+<li>腾讯备用前复权日 K：<code>web.ifzq.gtimg.cn/appstock/app/fqkline/get</code></li>
+<li>同域节点主动断连时，在最多 3 次总尝试内轮换 <code>push2delay</code>/<code>push2his</code> 节点。</li>
+<li>少量批量代码用 <code>asyncio.gather</code> 并发；实测 <code>ulist.np/get</code> 返回疑似混淆字段，未采用。全市场扫描通过分页 <code>clist/get</code> 批量抓取，不逐股获取 quote。</li>
+<li>Quote TTL 3 秒、市场 5 秒、板块 10 秒、扫描 15 秒、分钟 K 5 秒。日 K 使用 L1 + SQLite，交易时段 300 秒、非交易时段 1800 秒才增量刷新；网络失败立即使用已有旧缓存。</li>
+</ul>
+<p>字段、请求参数、原始 JSON、缩放和时间含义见 <code>docs/eastmoney_fields.md</code> 与 <code>docs/eastmoney_probe.json</code>。东方财富不是本项目控制的数据服务，正常延迟通常为秒级，但可能限流或变更字段。</p>
+<h2 id="_8">扫描逻辑<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<p>只保留 <code>000/001/002/003/600/601/603/605</code>，排除创业板、科创板、北交所、ST/退市、停牌、一字板、低成交额及按昨收计算的涨跌停证券。先对一次全市场列表做位置/量比/流动性预筛，再对最多 120 个候选并发抓取 80 日 K 线，计算 MA 与最终五维评分。这样能报告全市场 quote coverage，同时避免数千个 K 线请求。</p>
+<p>评分用于事实筛选和排序，不构成投资建议；默认重点奖励当日 <code>0%~3%</code>、相对指数较强、靠近 MA20 但未贴近 20 日高点的标的。</p>
+<h3 id="v2-phase-1">V2 Phase 1 扫描<a class="headerlink" href="#v2-phase-1" title="Permanent link">&para;</a></h3>
+<p>V2 保留同样的主板、ST、停牌、涨跌停、一字板和流动性硬过滤，但不再把 <code>pct_change &gt; 5%</code> 作为绝对剔除条件，改由 <code>risk_penalty</code> 处理过热。候选池从硬过滤后的主板股票中通过五个 quote-only 通道取并集，默认形成 420 只宽候选：趋势改善代理、低位/安全边际代理、资金活跃代理、相对强度、流动性底线。随后对候选并发读取 260 日 K 和 80 周 K，计算：</p>
+<pre><code class="language-text">opportunity_score = clamp(
+  position_score(15)
+  + fundamental_score(15, Phase1缺真实源)
+  + trend_score(20)
+  + flow_score(15)
+  + catalyst_score(10, Phase1缺真实源)
+  + risk_reward_score(20)
+  + liquidity_score(5)
+  + risk_penalty(0..-20),
+  0,
+  100
+)
+</code></pre>
+<p><code>trend_score</code> 拆分为周 K 8 分和日 K 12 分；周 K 明确下降时会把日 K 上涨视为下降趋势中的反弹并限制趋势分。<code>risk_reward_score</code> 使用支撑、压力、ATR 缓冲止损和目标位计算，基础分档为 <code>RR&lt;1=0</code>、<code>1~1.5=4</code>、<code>1.5~2=8</code>、<code>2~3=14</code>、<code>&gt;=3=20</code>。A级不会强行分配；Phase 1 因基本面和催化缺真实源，默认无法轻易给 A。</p>
+<h2 id="_9">测试<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">pytest -q
+pytest tests/test_mcp_web_parity.py -q
+RUN_LIVE_TESTS=1 pytest tests/test_live_eastmoney.py -q -vv
+python scripts/probe_eastmoney.py
+python scripts/acceptance.py
+</code></pre>
+<p><code>RUN_LIVE_TESTS</code> 不设置时跳过联网用例，避免 CI 被第三方限流影响。验收输出写到 <code>docs/acceptance_results.json</code>；该文件只是带时间戳的当次样例，不能当作当前行情。</p>
+<h2 id="_10">接口失效排查<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<ol>
+<li>先运行探针，查看是 TLS/超时、<code>rc != 0</code>、<code>data=null</code> 还是字段为空。</li>
+<li>用浏览器网络面板核对东方财富页面当前请求的 host、query 与字段；不要凭旧映射修改。</li>
+<li>检查服务器 DNS、出口 IP、代理与时间同步；高频调用会触发对方限流。</li>
+<li>保留 <code>docs/eastmoney_probe.json</code> 后再更新解析器与 fixtures，运行全部单测。</li>
+<li>不要提高重试风暴；接口不可用时保持 <code>ok=false/UNAVAILABLE</code>。</li>
+</ol>
+<p>新增数据源时，实现 <code>MarketDataProvider</code>，统一转换成 Pydantic 语义模型，并注册到 <code>ProviderManager</code>；每个源必须分别验证价格单位、成交量单位与时间戳。不要把多个源的不同时间点无提示拼成一条 quote。</p>
+<h2 id="_11">已知限制<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h2>
+<ul>
+<li>东方财富接口非官方承诺 API，可能限流、断连、返回空数组或调整字段。</li>
+<li>板块涨停数与 10/30 分钟历史排名未找到稳定、可验证字段，明确返回 <code>null</code>。</li>
+<li>涨跌停判断按名称与昨收/主板规则计算，除权、上市首日和特殊交易状态可能需要交易日规则表；一字板另行直接排除。</li>
+<li>扫描对预筛 shortlist 计算 K 线指标，不是对全市场数千只逐一计算 MA；coverage 指 quote 列表覆盖率。</li>
+<li>Quote/扫描的内存 TTL 缓存在重启与多 worker 之间不共享；日 K 的 SQLite 可跨重启保留。第一版仍建议 Uvicorn 单 worker。</li>
+<li>本项目不提供交易建议、自动交易、账户或资金接口。</li>
+</ul>
+<h2 id="_12">项目结构<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">app/{api,indicators,mcp,providers,services,utils}
+tests/
+scripts/{probe_eastmoney.py,test_mcp_client.py,acceptance.py}
+docs/{架构设计实施稿.md,开发规范.md,工作状态.md,README.md}
+docs/archive/{v2,v3-design-inputs}
+Dockerfile
+docker-compose.yml
+nginx.conf.example
+requirements.txt
+.env.example
+</code></pre>
+<p>下一阶段建议：标准 OAuth、Prometheus 指标、交易日/证券状态规则表，以及用分钟快照实现板块历史排名；仍应保持交易能力与账户数据完全不在本服务范围内。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
