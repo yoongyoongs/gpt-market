@@ -49,6 +49,8 @@ REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kl
 
 `Market/Scanner Service → MarketDataService → ProviderManager → EastmoneyProvider/TencentProvider` 是唯一业务数据路径。东方财富 `secid`、腾讯 `sh/sz` 等代码转换和字段缩放只存在于各自 Provider。日 K 线由 `MarketDataService` 统一读取 L1 内存与 L2 SQLite；MCP 与 Web 使用同一个 singleton Container、同一个缓存、同一个技术指标服务、同一个扫描器以及同一个 `serialize_business()`。
 
+V2 Phase2A 另有独立只读链路：`ScannerService → FundamentalProviderManager → FundamentalProvider`。它只为 V2 增加基本面分与财务风险，不改变上述行情链路、MCP 或 V1。详见 [Phase2A 基本面设计](docs/phase2a-fundamentals.md)。
+
 同一底层行情生成确定性的 `snapshot_id`，扫描另带 `scan_id`。全市场快照会填充规范的 `quote:{code}` 缓存，因此紧邻的市场、扫描和单股调用会尽量复用同一标准化 Quote。`tests/test_mcp_web_parity.py` 自动比较三个验收股票、单股详情、市场概况、行业 Top10 和扫描结果。
 
 ## 本地启动

@@ -12,6 +12,7 @@ from app.cache import AsyncTTLCache
 from app.history import save_scan_snapshot
 from app.models import CoverageReport, OpportunityScanResult, Quote, ScanCandidate, ScanCoverage, ScanResult, TechnicalIndicators
 from app.providers.base import MarketDataProvider
+from app.fundamentals.manager import FundamentalProviderManager
 from app.services.data_quality import DataQualityService
 from app.services.opportunity_scoring import Benchmarks, OPPORTUNITY_FORMULA, build_candidate_pool, build_opportunity_candidate
 from app.services.technical_indicator_service import TechnicalIndicatorService
@@ -142,12 +143,14 @@ class ScannerService:
         concurrency: int = 12,
         indicators: TechnicalIndicatorService | None = None,
         quality: DataQualityService | None = None,
+        fundamentals: FundamentalProviderManager | None = None,
     ) -> None:
         self.provider = provider
         self.cache = cache
         self.concurrency = concurrency
         self.indicators = indicators or TechnicalIndicatorService()
         self.quality = quality or DataQualityService()
+        self.fundamentals = fundamentals
         self.last_result: ScanResult | None = None
         self.last_coverage: CoverageReport | None = None
         self._coverage_by_scan_id: dict[str, CoverageReport] = {}
@@ -449,6 +452,11 @@ class ScannerService:
                 eligible.append(quote)
 
             pool, channel_counts = build_candidate_pool(eligible, target_size=pool_size)
+            fundamental_task = (
+                asyncio.create_task(self.fundamentals.get_many([item.code for item in pool]))
+                if self.fundamentals is not None
+                else None
+            )
             semaphore = asyncio.Semaphore(self.concurrency)
             kline_errors: Counter[str] = Counter()
             kline_sources: Counter[str] = Counter()
@@ -472,12 +480,14 @@ class ScannerService:
                         kline_errors[f"week:{type(week).__name__}:{str(week)[:160]}"] += 1
                     else:
                         kline_sources[week.source] += 1
+                    fundamental_values = {} if fundamental_task is None else await fundamental_task
                     return build_opportunity_candidate(
                         quote,
                         day_klines,
                         week_klines,
                         benchmarks.pct_for_market(quote.market),
                         provider_status,
+                        fundamental_values.get(quote.code),
                     )
                 except Exception as exc:
                     kline_errors[f"candidate:{type(exc).__name__}:{str(exc)[:160]}"] += 1
@@ -507,8 +517,6 @@ class ScannerService:
                 scan_id=self.quality.scan_id(data_ts),
                 score_formula=OPPORTUNITY_FORMULA,
                 missing_data_sources=[
-                    "fundamental_financials",
-                    "valuation_industry_relative",
                     "announcements_news_policy_catalysts",
                     "main_or_big_order_flow",
                     "industry_classification_for_action_top30_concentration",
@@ -520,6 +528,7 @@ class ScannerService:
             metrics_after = self.provider.metrics_snapshot() if hasattr(self.provider, "metrics_snapshot") else {}
             metrics = metric_delta(metrics_after, metrics_before) if metrics_after else {}
             health_after = self.provider.health() if hasattr(self.provider, "health") else {}
+            fundamental_health = self.fundamentals.health() if self.fundamentals is not None else {}
 
             def provider_delta(name: str, field: str) -> int:
                 before = ((health_before.get("providers") or {}).get(name) or {}).get(field, 0)
@@ -550,6 +559,14 @@ class ScannerService:
                 "tencent_failure": provider_delta("tencent", "failure_count"),
                 "kline_errors": dict(kline_errors.most_common(10)),
                 "kline_sources": dict(kline_sources.most_common()),
+                "fundamental_requested": len(pool),
+                "fundamental_success": sum(item.data_coverage.fundamental for item in scored),
+                "fundamental_failed": sum(not item.data_coverage.fundamental for item in scored),
+                "fundamental_average_coverage": round(
+                    sum(float((item.raw_inputs.get("fundamental") or {}).get("coverage") or 0) for item in scored) / len(scored),
+                    4,
+                ) if scored else 0.0,
+                "fundamental_providers": fundamental_health,
                 "scan_duration_seconds": result.duration_seconds,
             }
             logger.info("SCAN SUMMARY %s", json.dumps(self.last_summary, ensure_ascii=False, separators=(",", ":")))

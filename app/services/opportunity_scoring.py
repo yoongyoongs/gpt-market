@@ -8,16 +8,18 @@ from datetime import datetime
 from app.models import (
     DataCoverage,
     DataQualityReport,
+    FundamentalSnapshot,
     Kline,
     OpportunityCandidate,
     ScoreComponent,
     SupportResistance,
     TechnicalIndicators,
 )
+from app.services.fundamental_scoring import score_fundamental
 
 
 OPPORTUNITY_FORMULA = (
-    "opportunity_score = clamp(position_score(15) + fundamental_score(15, missing in phase1) "
+    "opportunity_score = clamp(position_score(15) + fundamental_score(15) "
     "+ trend_score(20) + flow_score(15) + catalyst_score(10, missing in phase1) "
     "+ risk_reward_score(20) + liquidity_score(5) + risk_penalty(0..-20), 0, 100)"
 )
@@ -523,7 +525,14 @@ def grade_for(score: float, breakdown: dict[str, ScoreComponent], week_trend: st
     return "C"
 
 
-def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benchmark_pct: float, provider_status: dict[str, object]) -> OpportunityCandidate:
+def build_opportunity_candidate(
+    quote,
+    day: list[Kline],
+    week: list[Kline],
+    benchmark_pct: float,
+    provider_status: dict[str, object],
+    fundamental_snapshot: FundamentalSnapshot | None = None,
+) -> OpportunityCandidate:
     technical = TechnicalIndicators()
     if day:
         from app.indicators.technical import calculate_indicators
@@ -535,9 +544,26 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
     levels = support_resistance(quote.price, day, technical)
     rr = score_risk_reward(levels, day)
     liquidity = score_liquidity(quote)
-    fundamental = score_missing_phase1("基本面", 15, [])
+    fundamental, fundamental_risk = score_fundamental(fundamental_snapshot)
     catalyst = score_missing_phase1("催化", 10, [])
-    penalty = risk_penalty(quote, day, week_label, levels)
+    technical_penalty = risk_penalty(quote, day, week_label, levels)
+    combined_penalty_value = clamp((technical_penalty.score or 0) + (fundamental_risk.score or 0), -20, 0)
+    penalty = component(
+        raw_value={
+            "technical": technical_penalty.raw_value,
+            "fundamental": fundamental_risk.raw_value,
+        },
+        normalized_value=combined_penalty_value,
+        score=combined_penalty_value,
+        max_score=20,
+        reason=[*technical_penalty.reason, *fundamental_risk.reason],
+        data_source=list(dict.fromkeys([*technical_penalty.data_source, *fundamental_risk.data_source])),
+        data_timestamp=max(
+            (value for value in (technical_penalty.data_timestamp, fundamental_risk.data_timestamp) if value is not None),
+            default=None,
+        ),
+        coverage=technical_penalty.coverage or fundamental_risk.coverage,
+    )
     breakdown = {
         "position": position,
         "fundamental": fundamental,
@@ -546,9 +572,14 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
         "catalyst": catalyst,
         "risk_reward": rr,
         "liquidity": liquidity,
+        "fundamental_risk": fundamental_risk,
         "risk_penalty": penalty,
     }
-    positive = sum(item.score or 0 for key, item in breakdown.items() if key != "risk_penalty")
+    positive = sum(
+        item.score or 0
+        for key, item in breakdown.items()
+        if key not in {"risk_penalty", "fundamental_risk"}
+    )
     total = clamp(positive + (penalty.score or 0), 0, 100)
     missing = [key for key, item in breakdown.items() if not item.coverage]
     stale = []
@@ -564,7 +595,7 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
         flow=flow.coverage,
         risk_reward=rr.coverage,
         liquidity=liquidity.coverage,
-        fundamental=False,
+        fundamental=fundamental.coverage,
         catalyst=False,
     )
     quality = DataQualityReport(
@@ -572,11 +603,11 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
         coverage=coverage,
         stale_fields=stale,
         missing_fields=missing,
-        conflict_fields=[],
+        conflict_fields=[] if fundamental_snapshot is None else [item.field for item in fundamental_snapshot.conflicts],
         provider_status=provider_status,
     )
     formula = (
-        f"{OPPORTUNITY_FORMULA}; {round(total, 2)} = {position.score or 0} position + 0 fundamental_missing + "
+        f"{OPPORTUNITY_FORMULA}; {round(total, 2)} = {position.score or 0} position + {fundamental.score or 0} fundamental + "
         f"{trend.score or 0} trend + {flow.score or 0} flow + 0 catalyst_missing + "
         f"{rr.score or 0} risk_reward + {liquidity.score or 0} liquidity + {penalty.score or 0} risk_penalty"
     )
@@ -595,6 +626,7 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
         risk_reward_score=rr.score or 0,
         liquidity_score=liquidity.score or 0,
         risk_penalty=penalty.score or 0,
+        fundamental_risk_penalty=fundamental_risk.score or 0,
         grade=grade_for(total, breakdown, week_label, levels, hard_reject),
         support=levels.support,
         resistance=levels.resistance,
@@ -621,11 +653,13 @@ def build_opportunity_candidate(quote, day: list[Kline], week: list[Kline], benc
             },
             "day_kline_count": len(day),
             "week_kline_count": len(week),
+            "fundamental": None if fundamental_snapshot is None else fundamental_snapshot.model_dump(mode="json"),
         },
         reason=[
             *(position.reason[:2]),
             *(trend.reason[:3]),
             *(flow.reason[:2]),
+            *(fundamental.reason[:2]),
             *(rr.reason[:1]),
             *(penalty.reason[:2]),
         ],

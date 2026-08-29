@@ -169,6 +169,81 @@ class ScoreComponent(MarketModel):
     coverage: bool
 
 
+class FundamentalConflict(MarketModel):
+    field: str
+    selected_source: str
+    selected_value: object | None = None
+    conflicting_source: str
+    conflicting_value: object | None = None
+
+
+class FundamentalField(MarketModel):
+    value: object | None = None
+    source: str
+    upstream_source: str
+    source_type: Literal["official", "vendor", "aggregator"]
+    report_period: str | None = None
+    fetch_time: datetime
+    coverage: bool
+    stale: bool
+    confidence: Confidence
+    error: str | None = None
+    conflicts: list[FundamentalConflict] = Field(default_factory=list)
+
+
+class FundamentalQuarter(MarketModel):
+    report_period: str | None = None
+    notice_date: datetime | None = None
+    revenue: float | None = None
+    revenue_yoy: float | None = None
+    revenue_qoq: float | None = None
+    net_profit: float | None = None
+    net_profit_yoy: float | None = None
+    net_profit_qoq: float | None = None
+    deducted_net_profit: float | None = None
+    deducted_net_profit_yoy: float | None = None
+    operating_cash_flow: float | None = None
+    roe: float | None = None
+    gross_margin: float | None = None
+    debt_ratio: float | None = None
+    source: str = "eastmoney_datacenter"
+    upstream_source: str = "eastmoney"
+    fetch_time: datetime | None = None
+    coverage: float = Field(default=0.0, ge=0, le=1)
+    stale: bool = False
+    confidence: Confidence = "MEDIUM"
+    error: str | None = None
+
+
+class FundamentalSnapshot(MarketModel):
+    code: str
+    fields: dict[str, FundamentalField] = Field(default_factory=dict)
+    quarterly_trend: list[FundamentalQuarter] = Field(default_factory=list)
+    performance_forecast: FundamentalField | None = None
+    performance_express: FundamentalField | None = None
+    audit_opinion: FundamentalField | None = None
+    report_period: str | None = None
+    fetch_time: datetime
+    source: str
+    upstream_sources: list[str] = Field(default_factory=list)
+    coverage: float = Field(default=0.0, ge=0, le=1)
+    conflicts: list[FundamentalConflict] = Field(default_factory=list)
+    stale: bool = False
+    confidence: Confidence = "LOW"
+    error: str | None = None
+
+    def with_coverage(self) -> "FundamentalSnapshot":
+        required = (
+            "revenue", "revenue_yoy", "revenue_qoq", "net_profit", "deducted_net_profit",
+            "net_profit_yoy", "net_profit_qoq", "roe", "operating_cash_flow", "gross_margin",
+            "debt_ratio", "pe", "pb",
+        )
+        covered = sum(bool(self.fields.get(name) and self.fields[name].coverage) for name in required)
+        rate = covered / len(required)
+        confidence: Confidence = "HIGH" if rate >= 0.85 and not self.conflicts else ("MEDIUM" if rate >= 0.5 else "LOW")
+        return self.model_copy(update={"coverage": round(rate, 4), "confidence": confidence})
+
+
 class DataCoverage(MarketModel):
     quote: bool = False
     day_kline: bool = False
@@ -217,6 +292,7 @@ class OpportunityCandidate(MarketModel):
     risk_reward_score: float
     liquidity_score: float
     risk_penalty: float
+    fundamental_risk_penalty: float = 0.0
     grade: Literal["A", "B", "C"]
     support: float | None = None
     resistance: float | None = None

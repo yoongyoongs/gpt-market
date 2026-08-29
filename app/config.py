@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     eastmoney_proxy: str | None = Field(default_factory=lambda: os.getenv("EASTMONEY_PROXY") or os.getenv("HTTPS_PROXY") or None)
     tencent_timeout: float = Field(default_factory=lambda: float(os.getenv("TENCENT_TIMEOUT", "5")))
     tencent_proxy: str | None = Field(default_factory=lambda: os.getenv("TENCENT_PROXY") or os.getenv("HTTPS_PROXY") or None)
+    fundamental_timeout: float = Field(default_factory=lambda: float(os.getenv("FUNDAMENTAL_TIMEOUT", "8")))
+    fundamental_cache_seconds: int = Field(default_factory=lambda: int(os.getenv("FUNDAMENTAL_CACHE_SECONDS", "21600")))
     scan_concurrency: int = Field(default_factory=lambda: int(os.getenv("SCAN_CONCURRENCY", "12")))
     max_kline_concurrency: int = Field(default_factory=lambda: int(os.getenv("MAX_KLINE_CONCURRENCY", "8")))
     kline_cache_path: str = Field(default_factory=lambda: os.getenv("KLINE_CACHE_PATH", "data/kline_cache.sqlite3"))

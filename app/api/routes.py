@@ -111,7 +111,7 @@ def _html(value: Any) -> str:
 def _coverage_label(component_name: str, covered: bool) -> str:
     if covered:
         return "可用"
-    if component_name in {"fundamental", "catalyst"}:
+    if component_name == "catalyst":
         return "后续接入"
     if component_name == "trend":
         return "周K暂不可用"
@@ -149,6 +149,24 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
             for name, part in item.score_breakdown.items()
         )
         coverage = item.data_coverage
+        fundamental = item.raw_inputs.get("fundamental") or {}
+        fundamental_fields = fundamental.get("fields") or {}
+        fundamental_sources = "、".join(fundamental.get("upstream_sources") or []) or "-"
+        fundamental_period = fundamental.get("report_period") or "-"
+        fundamental_coverage = round(float(fundamental.get("coverage") or 0) * 100, 2)
+        fundamental_rows = "".join(
+            "<tr>"
+            f"<th>{_html(name)}</th>"
+            f"<td>{_html(field.get('value'))}</td>"
+            f"<td>{_html(field.get('source'))}</td>"
+            f"<td>{_html(field.get('upstream_source'))}</td>"
+            f"<td>{_html(field.get('report_period'))}</td>"
+            f"<td>{_html('可用' if field.get('coverage') else '缺失')}</td>"
+            f"<td>{_html(field.get('confidence'))}</td>"
+            f"<td>{_html(field.get('error'))}</td>"
+            "</tr>"
+            for name, field in fundamental_fields.items()
+        )
         planned_missing = _planned_source_labels(item.data_quality.missing_fields)
         rows.append(
             f"""
@@ -159,11 +177,12 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
   <td class="number-col"><span class="score {'score-high' if item.opportunity_score >= 55 else 'score-mid'}">{_html(item.opportunity_score)}</span></td>
   <td>{'<span class="badge badge-high">B</span>' if item.grade == 'B' else '<span class="badge badge-neutral">C</span>'}</td>
   <td class="number-col">{_html(item.position_score)}</td>
+  <td class="number-col">{_html(item.fundamental_score)}</td>
   <td class="number-col">{_html(item.trend_score)}</td>
   <td class="number-col">{_html(item.flow_score)}</td>
   <td class="number-col">{_html(item.risk_reward_score)}</td>
   <td class="number-col">{_html(item.liquidity_score)}</td>
-  <td class="number-col">{_html(item.risk_penalty)}</td>
+  <td class="number-col" title="基本面风险 {_html(item.fundamental_risk_penalty)}">{_html(item.risk_penalty)}</td>
   <td class="number-col">{_html(item.support)}</td>
   <td class="number-col">{_html(item.resistance)}</td>
   <td class="number-col">{_html(item.stop_loss)}</td>
@@ -174,7 +193,7 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
 </tr>
 <tr class="detail-row">
   <td></td>
-  <td colspan="17">
+  <td colspan="18">
     <details>
       <summary>查看完整评分拆解和数据覆盖</summary>
       <div class="detail-grid">
@@ -190,12 +209,23 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
           </dl>
         </div>
         <div class="mini-panel">
+          <h3>基本面</h3>
+          <dl class="mini-list">
+            <dt>得分</dt><dd>{_html(item.fundamental_score)} / 15</dd>
+            <dt>风险扣分</dt><dd>{_html(item.fundamental_risk_penalty)}</dd>
+            <dt>报告期</dt><dd>{_html(fundamental_period)}</dd>
+            <dt>覆盖率</dt><dd>{_html(fundamental_coverage)}%</dd>
+            <dt>上游来源</dt><dd>{_html(fundamental_sources)}</dd>
+            <dt>冲突数</dt><dd>{_html(len(fundamental.get('conflicts') or []))}</dd>
+          </dl>
+        </div>
+        <div class="mini-panel">
           <h3>数据覆盖</h3>
           <dl class="mini-list">
             <dt>Quote</dt><dd>{_html(_data_status(coverage.quote))}</dd>
             <dt>日K</dt><dd>{_html(_data_status(coverage.day_kline))}</dd>
             <dt>周K</dt><dd>{_html(_data_status(coverage.week_kline, '上游暂不可用'))}</dd>
-            <dt>基本面</dt><dd>Phase 2 待接入</dd>
+            <dt>基本面</dt><dd>{_html(_data_status(coverage.fundamental, '覆盖不足'))}</dd>
             <dt>催化</dt><dd>Phase 3 待接入</dd>
             <dt>其他源</dt><dd>{_html(planned_missing)}</dd>
           </dl>
@@ -209,6 +239,12 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         <table>
           <thead><tr><th>模块</th><th>得分</th><th>上限</th><th>覆盖</th><th>原因</th><th>原始值</th></tr></thead>
           <tbody>{score_parts}</tbody>
+        </table>
+      </div>
+      <div class="table-shell nested-table">
+        <table>
+          <thead><tr><th>基本面字段</th><th>值</th><th>数据源</th><th>真实上游</th><th>报告期</th><th>覆盖</th><th>置信度</th><th>错误</th></tr></thead>
+          <tbody>{fundamental_rows or '<tr><td colspan="8">基本面核心字段覆盖不足</td></tr>'}</tbody>
         </table>
       </div>
     </details>
@@ -232,10 +268,10 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         "@media(max-width:900px){.dashboard{padding:12px}.status-bar,.footer-card{flex-direction:column}.stat-grid,.detail-grid{grid-template-columns:1fr}.status-actions{justify-content:flex-start}}"
         "</style></head><body><main class=\"dashboard\">"
         "<header class=\"card\"><div class=\"status-bar\"><div>"
-        "<div class=\"eyebrow\">机会发现 · Phase 1</div><h1>scan_mainboard V2 Top30</h1>"
-        "<p class=\"snapshot-note\">按机会分排序，未接入真实源的模块不会伪造加分。</p></div>"
+        "<div class=\"eyebrow\">机会发现 · Phase 2A</div><h1>scan_mainboard V2 Top30</h1>"
+        "<p class=\"snapshot-note\">技术评分保持 Phase1 原样，新增真实基本面评分与财务风险。</p></div>"
         f"<div class=\"status-actions\"><span class=\"badge badge-neutral\">{_html(result.score_version)}</span><a class=\"btn\" href=\"/gpt/{_html(secret)}/scan/v2\">JSON</a><a class=\"btn btn-primary\" href=\"/gpt/{_html(secret)}/scan/ab\">V1 vs V2</a></div></div>"
-        "<div class=\"notice\">当前页面是 Phase 1 技术面/风险收益版。基本面、催化、主力资金和行业分类属于后续阶段待接入；周 K 如果源接口失败，会显示为上游暂不可用。</div></header>"
+        "<div class=\"notice\">Phase2A 已接入财务、估值和业绩预告/快报。催化、新闻、政策和主力资金仍留待 Phase3；字段缺失不会按 0 分处理。</div></header>"
         "<section class=\"section grid stat-grid\">"
         f"<article class=\"card\"><div class=\"metric-label\">候选池</div><div class=\"metric-value\">{_html(result.candidate_pool_size)}</div></article>"
         f"<article class=\"card\"><div class=\"metric-label\">行情覆盖</div><div class=\"metric-value\">{coverage_pct}%</div></article>"
@@ -247,7 +283,7 @@ def v2_scan_page(result, secret: str) -> HTMLResponse:
         f"<p class=\"muted\">{_html(result.score_formula)}</p><p class=\"muted\">后续阶段待接入：{_html(_planned_source_labels(result.missing_data_sources))}</p>"
         "<p class=\"muted\">当前上游：周 K 接口若失败，系统会降级使用日 K 趋势并标记周 K 暂不可用。</p></details></div>"
         "<div class=\"table-shell\"><table><thead><tr><th class=\"rank-col\">#</th><th>代码</th><th>名称</th><th>机会分</th><th>等级</th>"
-        "<th>位置</th><th>趋势</th><th>资金量价</th><th>RR分</th><th>流动性</th><th>风险扣分</th>"
+        "<th>位置</th><th>基本面</th><th>趋势</th><th>资金量价</th><th>RR分</th><th>流动性</th><th>风险扣分</th>"
         "<th>支撑</th><th>压力</th><th>止损</th><th>目标1</th><th>RR</th><th>周/日趋势</th><th>理由</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div></section>"
         "<footer class=\"section card footer-card\"><span class=\"muted\">V2 仍是观察清单，不是交易建议。</span>"
@@ -267,6 +303,7 @@ async def provider_health():
     return {
         "status": "ok",
         **container.market_data.health(),
+        "fundamentals": container.fundamentals.health(),
         "last_scan": container.scanner.last_summary,
     }
 
@@ -289,6 +326,11 @@ async def kline(code: str, period: str = "day", limit: int = 120):
 @router.get("/detail/{code}")
 async def detail(code: str):
     return await container.klines.get_stock_detail(code)
+
+
+@router.get("/fundamental/{code}")
+async def fundamental(code: str):
+    return await container.fundamentals.get(code)
 
 
 @router.get("/market")
@@ -354,6 +396,11 @@ async def gpt_kline(secret: str, code: str, period: str = "day", limit: int = 12
 @router.get("/gpt/{secret}/stock/{code}/detail", dependencies=[Depends(require_web_secret)])
 async def gpt_detail(secret: str, code: str):
     return web_response(await container.klines.get_stock_detail(code))
+
+
+@router.get("/gpt/{secret}/stock/{code}/fundamental", dependencies=[Depends(require_web_secret)])
+async def gpt_fundamental(secret: str, code: str):
+    return web_response(await container.fundamentals.get(code))
 
 
 @router.get("/gpt/{secret}/market", dependencies=[Depends(require_web_secret)])

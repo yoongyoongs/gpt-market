@@ -44,5 +44,9 @@ class AsyncTTLCache:
         expires_at = time.monotonic() + ttl
         self._items.update({key: CacheEntry(value=value, expires_at=expires_at) for key, value in values.items()})
 
+    def peek(self, key: str) -> Any | None:
+        entry = self._items.get(key)
+        return entry.value if entry and entry.expires_at > time.monotonic() else None
+
     def clear(self) -> None:
         self._items.clear()

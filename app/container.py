@@ -14,6 +14,8 @@ from app.services.sector_service import SectorService
 from app.services.data_quality import DataQualityService
 from app.services.technical_indicator_service import TechnicalIndicatorService
 from app.services.market_data_service import MarketDataService
+from app.fundamentals.eastmoney import EastmoneyDatacenterFundamentalProvider, EastmoneyF10FundamentalProvider
+from app.fundamentals.manager import FundamentalProviderManager
 
 
 class Container:
@@ -35,18 +37,36 @@ class Container:
         )
         # Compatibility alias for internal scripts; it no longer points at a raw provider.
         self.provider = self.market_data
+        self.fundamental_primary = EastmoneyDatacenterFundamentalProvider(
+            settings.fundamental_timeout, settings.eastmoney_proxy
+        )
+        self.fundamental_fallback = EastmoneyF10FundamentalProvider(
+            settings.fundamental_timeout, settings.eastmoney_proxy
+        )
+        self.fundamentals = FundamentalProviderManager(
+            self.fundamental_primary,
+            [self.fundamental_fallback],
+            cache=self.cache,
+            ttl_seconds=settings.fundamental_cache_seconds,
+        )
         self.quotes = QuoteService(self.market_data)
         self.klines = KlineService(self.market_data, self.cache, self.technical_indicators)
         self.market = MarketService(self.market_data, self.cache, self.data_quality)
         self.sectors = SectorService(self.market_data)
         self.scanner = ScannerService(
-            self.market_data, self.cache, settings.scan_concurrency, self.technical_indicators, self.data_quality
+            self.market_data,
+            self.cache,
+            settings.scan_concurrency,
+            self.technical_indicators,
+            self.data_quality,
+            self.fundamentals,
         )
 
     async def start(self) -> None:
         await self.market_data.start()
 
     async def close(self) -> None:
+        await self.fundamentals.close()
         await self.market_data.close()
 
 
