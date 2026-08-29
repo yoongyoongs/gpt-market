@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -204,3 +204,95 @@ async def test_agent_task_audit_commit_idempotency_rollback_and_concurrency() ->
     assert task_count == 2
     assert audit_count == 1
     assert concurrent_audit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_phase2_schema_constraints_and_immutable_market_bars(connection) -> None:
+    table_names = {
+        row[0]
+        for row in (
+            await connection.execute(
+                text("SELECT table_name FROM information_schema.tables WHERE table_schema='v3'")
+            )
+        )
+    }
+    assert {
+        "securities",
+        "universe_sources",
+        "universe_snapshots",
+        "universe_members",
+        "universe_diffs",
+        "market_data_ingestion_runs",
+        "adjustment_factor_revisions",
+        "adjustment_factors",
+        "bar_series_revisions",
+        "market_bars",
+        "corporate_actions",
+    } <= table_names
+
+    source_id = uuid4()
+    security_id = uuid4()
+    revision_id = uuid4()
+    now = datetime.now(timezone.utc)
+    await connection.execute(
+        text(
+            "INSERT INTO v3.universe_sources "
+            "(source_id, code, source_type, priority, capability_version) "
+            "VALUES (:id, :code, 'VENDOR', 1, 'v1')"
+        ),
+        {"id": source_id, "code": f"phase2-{source_id}"},
+    )
+    await connection.commit()
+
+    with pytest.raises(IntegrityError, match="lkg_requires_stale"):
+        snapshot_id = uuid4()
+        await connection.execute(
+            text(
+                "INSERT INTO v3.universe_snapshots "
+                "(snapshot_id, source_id, as_of, fetch_time, known_at, coverage, stale, content_hash, status) "
+                "VALUES (:id, :source_id, :now, :now, :now, 1, false, :hash, 'LKG')"
+            ),
+            {"id": snapshot_id, "source_id": source_id, "now": now, "hash": snapshot_id.hex * 2},
+        )
+    await connection.rollback()
+
+    await connection.execute(
+        text("INSERT INTO v3.securities (security_id, code, market, name) VALUES (:id, :code, 'SH', 'fixture')"),
+        {"id": security_id, "code": f"{security_id.int % 1_000_000:06d}"},
+    )
+    await connection.execute(
+        text(
+            "INSERT INTO v3.bar_series_revisions "
+            "(revision_id, security_id, period, adjust_type, source, upstream_source, raw_bar_available, "
+            "point_in_time_precision, known_at, content_hash) "
+            "VALUES (:id, :security_id, 'DAY', 'RAW', 'fixture', 'eastmoney', true, 'FULL', :now, :hash)"
+        ),
+        {"id": revision_id, "security_id": security_id, "now": now, "hash": revision_id.hex * 2},
+    )
+    await connection.execute(
+        text(
+            "INSERT INTO v3.market_bars "
+            "(revision_id, bar_time, open, high, low, close, volume, amount, provisional, event_time, fetch_time) "
+            "VALUES (:revision_id, :now, 10, 11, 9, 10.5, 100, 1000, false, :now, :now)"
+        ),
+        {"revision_id": revision_id, "now": now},
+    )
+    await connection.commit()
+
+    with pytest.raises(DBAPIError, match="immutable V3 record"):
+        await connection.execute(
+            text("UPDATE v3.market_bars SET close=10.6 WHERE revision_id=:revision_id"),
+            {"revision_id": revision_id},
+        )
+    await connection.rollback()
+
+    with pytest.raises(IntegrityError, match="valid_high"):
+        await connection.execute(
+            text(
+                "INSERT INTO v3.market_bars "
+                "(revision_id, bar_time, open, high, low, close, volume, amount, provisional, event_time, fetch_time) "
+                "VALUES (:revision_id, :bar_time, 10, 9, 8, 10, 100, 1000, false, :bar_time, :now)"
+            ),
+            {"revision_id": revision_id, "bar_time": now - timedelta(days=1), "now": now},
+        )
+    await connection.rollback()
