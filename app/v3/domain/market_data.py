@@ -40,6 +40,62 @@ class PointInTimePrecision(StrEnum):
     LIMITED = "LIMITED"
 
 
+class AdjustmentFactorPoint(V3Contract):
+    trading_time: datetime
+    factor: float = Field(gt=0)
+
+    @field_validator("trading_time")
+    @classmethod
+    def validate_trading_time(cls, value: datetime) -> datetime:
+        return require_aware(value, "trading_time")
+
+
+class AdjustmentFactorRevisionContent(V3Contract):
+    factor_revision_id: UUID
+    security_id: UUID
+    source: str = Field(min_length=1, max_length=128)
+    upstream_source: str = Field(min_length=1, max_length=128)
+    derivation_method: str = Field(min_length=1, max_length=64)
+    fetch_time: datetime
+    known_at: datetime
+    supersedes_revision_id: UUID | None = None
+    factors: tuple[AdjustmentFactorPoint, ...]
+
+    @field_validator("fetch_time", "known_at")
+    @classmethod
+    def validate_datetimes(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_revision(self) -> "AdjustmentFactorRevisionContent":
+        if self.known_at < self.fetch_time:
+            raise ValueError("known_at cannot be earlier than fetch_time")
+        times = [item.trading_time for item in self.factors]
+        if not times or times != sorted(times) or len(times) != len(set(times)):
+            raise ValueError("factor times must be nonempty, increasing and unique")
+        return self
+
+    def computed_content_hash(self) -> str:
+        return canonical_hash(self)
+
+
+class AdjustmentFactorRevision(AdjustmentFactorRevisionContent):
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, content: AdjustmentFactorRevisionContent) -> "AdjustmentFactorRevision":
+        return cls(**content.model_dump(), content_hash=content.computed_content_hash())
+
+    @model_validator(mode="after")
+    def validate_hash(self) -> "AdjustmentFactorRevision":
+        content = AdjustmentFactorRevisionContent.model_validate(
+            self.model_dump(exclude={"content_hash"})
+        )
+        if content.computed_content_hash() != self.content_hash:
+            raise ValueError("content_hash does not match factor revision")
+        return self
+
+
 class SecurityMember(V3Contract):
     code: str = Field(pattern=r"^\d{6}$")
     market: Market
@@ -130,7 +186,7 @@ class MarketBar(V3Contract):
     low: float = Field(gt=0)
     close: float = Field(gt=0)
     volume: int = Field(ge=0)
-    amount: float = Field(ge=0)
+    amount: float | None = Field(default=None, ge=0)
     provisional: bool = False
     fetch_time: datetime
 
@@ -145,6 +201,28 @@ class MarketBar(V3Contract):
             raise ValueError("high must be the greatest OHLC value")
         if self.low > min(self.open, self.close, self.high):
             raise ValueError("low must be the smallest OHLC value")
+        return self
+
+
+class HistoricalBarFetchResult(V3Contract):
+    source_code: str = Field(min_length=1, max_length=128)
+    upstream_source: str = Field(min_length=1, max_length=128)
+    code: str = Field(pattern=r"^\d{6}$")
+    period: BarPeriod
+    adjust_type: AdjustType
+    fetch_time: datetime
+    bars: tuple[MarketBar, ...]
+
+    @field_validator("fetch_time")
+    @classmethod
+    def validate_fetch_time(cls, value: datetime) -> datetime:
+        return require_aware(value, "fetch_time")
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "HistoricalBarFetchResult":
+        times = [bar.bar_time for bar in self.bars]
+        if not times or times != sorted(times) or len(times) != len(set(times)):
+            raise ValueError("fetched bar times must be nonempty, increasing and unique")
         return self
 
 

@@ -216,7 +216,7 @@ def upgrade() -> None:
         sa.Column("low", sa.Numeric(20, 6), nullable=False),
         sa.Column("close", sa.Numeric(20, 6), nullable=False),
         sa.Column("volume", sa.BigInteger(), nullable=False),
-        sa.Column("amount", sa.Numeric(24, 4), nullable=False),
+        sa.Column("amount", sa.Numeric(24, 4), nullable=True),
         sa.Column("provisional", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("event_time", sa.DateTime(timezone=True), nullable=False),
         sa.Column("fetch_time", sa.DateTime(timezone=True), nullable=False),

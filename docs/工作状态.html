@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="818fd3f472ed6a78fc545267f67e1e1e8a2f1bbac0f771cfb4f8ce1e7f21794a"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="d15e83d5c9fad9a3a4f9616142c5e1e2bcd44e3c5bc9060d639bb362614e65fb"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：818fd3f472ed</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：d15e83d5c9fa</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-29（Asia/Shanghai）
 当前分支：<code>codex/phase2-market-data-foundation</code>
@@ -56,11 +56,13 @@
 <li>Phase 2 已建立证券、Universe、Ingestion Run、Bar/Factor Revision、Market Bar 和 Corporate Action 的 Domain/ORM/<code>0002</code> 基础；真实 PostgreSQL 17 Upgrade、约束、不可变触发器和降回 Phase 1 已通过。</li>
 <li>Phase 2 Universe 数据层已实现：Legacy 东方财富主源、上交所分页 + 深交所分页组合的独立官方备用源、覆盖骤降拒绝、显式 Secondary 接管、双源失败 LKG stale 和无 LKG 明确报错。</li>
 <li>Universe Repository 已在单事务内发布 Source/Snapshot/Security/Member/Diff，并可读取最新不可变快照；网络请求不占用数据库事务。</li>
+<li>Phase 2 日 K 单股链路已实现 RAW/QFQ 成对获取、Factor Revision、QFQ-only LIMITED、陈旧门禁、partial 隔离、交易日历驱动的周/月聚合及同事务发布；实现记录见 <code>docs/Phase2行情底座实施记录.md</code>。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
 <li>将 Universe Refresh 接入 Phase 2 Job/Container，并补全运行观测；</li>
 <li>实现全市场 Raw Bar/Factor Revision、增量更新和本地周/月聚合持久化。</li>
+<li>实现全市场批次、断点续跑、失败重试和覆盖率汇总。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
@@ -102,13 +104,15 @@
 <li>官方备用 Universe 在服务器实际抓取 5,212 只：上交所 2,315、深交所 2,897，解析数等于上游声明数，覆盖率 100%，耗时 13.913 秒；深交所 XLSX 虽返回 HTTP 200 但只有表头，已拒绝该伪成功并采用受控 JSON 分页。</li>
 <li>Universe fallback 单测覆盖主源失败后 Secondary 接管、覆盖骤降后 LKG、无 LKG 显式失败和主源正常发布；真实 PostgreSQL 17 验证两版快照、最新读取及 <code>ADDED/CHANGED/REMOVED</code> 差异各 1 条。</li>
 <li>Universe 单元完成后的全套本地回归：<code>98 passed, 10 skipped</code>；其中 5 项 PostgreSQL 集成测试未配置本地数据库而明确跳过，新增 Repository 集成项已在服务器隔离 PostgreSQL 17 通过。</li>
+<li>日 K 真实探针 20/20 成功：东方财富 0、腾讯接管 14、新浪接管 6；全部取得 300 日 RAW/Factor/FULL Revision，最后 Bar 均为 2026-08-28，平均 1.057 秒，4 并发墙钟 5.872 秒。</li>
+<li>Bar Bundle 在隔离 PostgreSQL 17 通过 nullable 成交额、Factor 外键、首次发布、重复零新增和不可变约束；全套本地回归 <code>114 passed, 11 skipped</code>。</li>
 <li>生产 <code>market-mcp</code> 在 Phase 1/2 隔离验收期间持续为 <code>healthy</code>；Phase 1 已合并，生产 V3 仍未启用。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
 <li>将已验收 Universe 数据层接入可重试、可观测的 Refresh Job；</li>
-<li>实现 Raw Bar、Corporate Action、Factor Revision、派生序列和断点续跑；</li>
-<li>实现稳定日 K 到周/月 K 的一致复权本地聚合；</li>
+<li>将已通过单股验收的 Raw/Factor/派生序列接入全市场批次与断点续跑；</li>
+<li>接入严格交易日历和 Corporate Action 原始事实；</li>
 <li>用真实全市场任务验证覆盖率、修订、聚合和恢复能力。</li>
 </ol>
 <p>当前 V3 回滚点为标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 未验收前不合并 <code>main</code>、不启用生产 V3。</p>

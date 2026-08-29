@@ -12,6 +12,8 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.application.register_agent_task import RegisterAgentTaskService
+from app.v3.application.ingest_daily_bars import BuildDailyBarRevisionsService
+from app.v3.application.publish_bar_bundle import PublishBarBundleService
 from app.v3.contracts.agent import AgentTask, Subject, SubjectType
 from app.v3.domain.market_data import (
     Market,
@@ -21,6 +23,7 @@ from app.v3.domain.market_data import (
     UniverseSnapshotStatus,
 )
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
+from tests.v3.test_ingest_daily_bars import FakeProvider, NOW
 
 
 DATABASE_URL = os.getenv("V3_TEST_DATABASE_URL")
@@ -284,6 +287,14 @@ async def test_phase2_schema_constraints_and_immutable_market_bars(connection) -
         ),
         {"revision_id": revision_id, "now": now},
     )
+    await connection.execute(
+        text(
+            "INSERT INTO v3.market_bars "
+            "(revision_id, bar_time, open, high, low, close, volume, amount, provisional, event_time, fetch_time) "
+            "VALUES (:revision_id, :bar_time, 10, 11, 9, 10.5, 100, NULL, false, :bar_time, :now)"
+        ),
+        {"revision_id": revision_id, "bar_time": now - timedelta(days=2), "now": now},
+    )
     await connection.commit()
 
     with pytest.raises(DBAPIError, match="immutable V3 record"):
@@ -372,3 +383,64 @@ async def test_universe_repository_publishes_latest_and_diffs_atomically() -> No
         ).all()
     await engine.dispose()
     assert diff_types == [("ADDED", 1), ("CHANGED", 1), ("REMOVED", 1)]
+
+
+@pytest.mark.asyncio
+async def test_bar_bundle_repository_is_atomic_and_idempotent() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    security_id = uuid4()
+    code = f"{security_id.int % 1_000_000:06d}"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO v3.securities (security_id, code, market, name) "
+                "VALUES (:security_id, :code, 'SH', 'bar fixture')"
+            ),
+            {"security_id": security_id, "code": code},
+        )
+
+    bundle = await BuildDailyBarRevisionsService(
+        [FakeProvider("integration-bars")], clock=lambda: NOW
+    ).execute(security_id, "600000")
+    service = PublishBarBundleService(lambda: SQLAlchemyUnitOfWork(sessions))
+    first = await service.execute(bundle)
+    second = await service.execute(bundle)
+
+    async with engine.connect() as connection:
+        factor_count = (
+            await connection.execute(
+                text(
+                    "SELECT count(*) FROM v3.adjustment_factor_revisions "
+                    "WHERE security_id=:security_id"
+                ),
+                {"security_id": security_id},
+            )
+        ).scalar_one()
+        series_count = (
+            await connection.execute(
+                text(
+                    "SELECT count(*) FROM v3.bar_series_revisions "
+                    "WHERE security_id=:security_id"
+                ),
+                {"security_id": security_id},
+            )
+        ).scalar_one()
+        bar_count = (
+            await connection.execute(
+                text(
+                    "SELECT count(*) FROM v3.market_bars b "
+                    "JOIN v3.bar_series_revisions r ON r.revision_id=b.revision_id "
+                    "WHERE r.security_id=:security_id"
+                ),
+                {"security_id": security_id},
+            )
+        ).scalar_one()
+    await engine.dispose()
+
+    assert first.factor_created is True
+    assert first.series_created == 2
+    assert second.factor_created is False
+    assert second.series_created == 0
+    assert (factor_count, series_count, bar_count) == (1, 2, 6)

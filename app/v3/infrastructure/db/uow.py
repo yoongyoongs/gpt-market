@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.v3.infrastructure.db.repositories import (
     SQLAlchemyAgentTaskRepository,
     SQLAlchemyAuditRepository,
+    SQLAlchemyBarRepository,
     SQLAlchemyUniverseRepository,
 )
 
@@ -23,6 +24,7 @@ class SQLAlchemyUnitOfWork:
         self.tasks = SQLAlchemyAgentTaskRepository(self._session)
         self.audits = SQLAlchemyAuditRepository(self._session)
         self.universes = SQLAlchemyUniverseRepository(self._session)
+        self.bars = SQLAlchemyBarRepository(self._session)
         return self
 
     async def __aexit__(

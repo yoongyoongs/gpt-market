@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from app.providers.eastmoney import market_of, parse_kline_row, parse_kline_rows, parse_quote, scale_raw, to_eastmoney_secid
+from app.config import Settings
+from app.providers.eastmoney import (
+    EastmoneyProvider,
+    market_of,
+    parse_kline_row,
+    parse_kline_rows,
+    parse_quote,
+    scale_raw,
+    to_eastmoney_secid,
+)
 
 
 @pytest.mark.parametrize(
@@ -95,3 +104,24 @@ def test_kline_parser_accepts_array_and_observed_space_delimited_encoding() -> N
     second = "2026-08-27,9.79,9.80,9.82,9.69,203556,198606168.71"
     assert [item.close for item in parse_kline_rows([first, second])] == [9.84, 9.8]
     assert [item.close for item in parse_kline_rows(f"{first} {second}")] == [9.84, 9.8]
+
+
+@pytest.mark.asyncio
+async def test_kline_uses_configured_retries_so_alternate_hosts_are_reached() -> None:
+    provider = EastmoneyProvider(Settings(_env_file=None, eastmoney_retries=3))
+    observed_attempts = None
+
+    async def request(url, params, *, require_key=None, attempts=None):
+        nonlocal observed_attempts
+        observed_attempts = attempts
+        return {
+            "data": {
+                "klines": ["2026-08-27,9.79,9.80,9.82,9.69,203556,198606168.71"]
+            }
+        }
+
+    provider._request = request
+    result = await provider.get_kline("600000", "day", 1, "qfq")
+
+    assert result.klines[0].close == 9.8
+    assert observed_attempts == 3

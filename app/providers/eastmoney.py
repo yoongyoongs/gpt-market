@@ -297,7 +297,7 @@ class EastmoneyProvider(MarketDataProvider):
                     "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 },
                 require_key="klines",
-                attempts=1,
+                attempts=self.settings.eastmoney_retries,
             )
             klines = parse_kline_rows(payload["data"].get("klines"))
             if not klines:

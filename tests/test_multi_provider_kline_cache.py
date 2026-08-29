@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import sys
 
 import pytest
 
@@ -160,6 +161,7 @@ async def test_kline_l1_l2_cache_provisional_and_stale_fallback(tmp_path, monkey
     fixed_now = datetime(2026, 8, 28, 10, 0, tzinfo=now_shanghai().tzinfo)
     clock = [fixed_now]
     monkeypatch.setattr("app.services.market_data_service.now_shanghai", lambda: clock[0])
+    monkeypatch.setattr(sys.modules[__name__], "now_shanghai", lambda: clock[0])
     eastmoney = StubProvider("eastmoney", fail=True)
     tencent = StubProvider("tencent")
     manager = ProviderManager(eastmoney, tencent, attempts_per_provider=1)
@@ -183,7 +185,7 @@ async def test_kline_l1_l2_cache_provisional_and_stale_fallback(tmp_path, monkey
 
     first = await service.get_kline("603019", "day", 3, "qfq", quote=current_quote)
     calls_after_first = tencent.kline_calls
-    second = await service.get_kline("603019", "day", 3, "qfq", quote=current_quote)
+    await service.get_kline("603019", "day", 3, "qfq", quote=current_quote)
     assert len(first.klines) == 3
     assert first.klines[-1].close == current_quote.price
     assert tencent.kline_calls == calls_after_first

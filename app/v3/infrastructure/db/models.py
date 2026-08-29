@@ -483,7 +483,7 @@ class MarketBarModel(Base):
     low: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     close: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(24, 4), nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
     provisional: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fetch_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

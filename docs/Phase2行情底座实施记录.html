@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="01d776b681cc37c852ca2c8304838ed9e95ec65ba1bbb8a2ca43d09fff936090"><title>V3 Phase 2 行情底座实施记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 本轮实现</a></li>
+<li><a href="#2-provider">2. Provider 实测</a></li>
+<li><a href="#3">3. 数据正确性</a></li>
+<li><a href="#4">4. 持久化验收</a></li>
+<li><a href="#5">5. 当前未完成</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase2行情底座实施记录.md · 内容哈希：01d776b681cc</div><h1 id="v3-phase-2">V3 Phase 2 行情底座实施记录<a class="headerlink" href="#v3-phase-2" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>日期：2026-08-30（Asia/Shanghai）<br>
+状态：Phase 2 中间实施记录，不代表 Phase 2 整体验收完成<br>
+分支：<code>codex/phase2-market-data-foundation</code></p>
+</blockquote>
+<h2 id="1">1. 本轮实现<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>建立日 K <code>RAW/QFQ</code> 成对抓取和 Provider 顺序 fallback；</li>
+<li>同一 Provider 能取得 RAW 与 QFQ 时，按交易日通过 <code>QFQ close / RAW close</code> 生成不可变 Factor Revision；</li>
+<li>只有 QFQ 时不伪造 RAW/Factor，Revision 明确标记 <code>LIMITED</code> 及原因；</li>
+<li>非空但陈旧的 K 线通过 <code>minimum_last_bar_date</code> 门禁拒绝，不把旧数据当成功；</li>
+<li>当前未收盘日 Bar 单独标记 <code>partial</code>，不进入 <code>PUBLISHED</code> Revision；</li>
+<li>周/月 K 由同口径日 K 本地聚合，周期完整性由注入的交易日历判断；</li>
+<li>Factor、RAW/QFQ、周/月 Revision 和 Bars 通过同一 Unit of Work 发布；</li>
+<li>V3 <code>market_bars.amount</code> 改为可空。腾讯和新浪未提供历史成交额时保存 <code>null/UNKNOWN</code>，不再写入伪造的 <code>0</code>。</li>
+</ul>
+<h2 id="2-provider">2. Provider 实测<a class="headerlink" href="#2-provider" title="Permanent link">&para;</a></h2>
+<p>探针：<code>scripts/v3_phase2_bar_probe.py</code>，300 个交易日，4 并发，最后 Bar 不得早于当前日期前 10 个自然日。</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>样本数</td>
+<td style="text-align: right;">20</td>
+</tr>
+<tr>
+<td>成功数 / 成功率</td>
+<td style="text-align: right;">20 / 100%</td>
+</tr>
+<tr>
+<td>东方财富主源</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td>腾讯接管</td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td>新浪接管</td>
+<td style="text-align: right;">6</td>
+</tr>
+<tr>
+<td>RAW 可用</td>
+<td style="text-align: right;">20</td>
+</tr>
+<tr>
+<td>Factor 可用</td>
+<td style="text-align: right;">20</td>
+</tr>
+<tr>
+<td>FULL / LIMITED</td>
+<td style="text-align: right;">20 / 0</td>
+</tr>
+<tr>
+<td>每只平均耗时</td>
+<td style="text-align: right;">1.057 秒</td>
+</tr>
+<tr>
+<td>4 并发墙钟耗时</td>
+<td style="text-align: right;">5.872 秒</td>
+</tr>
+<tr>
+<td>每只有效 Bar</td>
+<td style="text-align: right;">300</td>
+</tr>
+<tr>
+<td>最后 Bar 日期</td>
+<td style="text-align: right;">全部为 2026-08-28</td>
+</tr>
+</tbody>
+</table>
+<p>样本覆盖沪市主板、科创板、深市主板、创业板和北交所。北交所使用 2025 年全面切换后的 <code>920xxx</code> 当前证券代码；旧 <code>4/8</code> 代码只返回切换前历史，已由陈旧门禁拒绝。</p>
+<p>东方财富三个历史域名在服务器上的实际行为为：<code>push2his</code> 与 <code>push2</code> 主动断开，<code>push2delay</code> 返回 <code>rc=0</code> 但 <code>klines=[]</code>。系统完整保留该错误并继续走腾讯/Sina，不把 HTTP 成功或 <code>rc=0</code> 当成数据成功。</p>
+<h2 id="3">3. 数据正确性<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<ul>
+<li>腾讯日 K 可取得 RAW/QFQ，但历史响应无成交额，V3 保存 <code>amount=null</code>；</li>
+<li>腾讯对部分科创板和北交所只返回 RAW 或空 QFQ，系统继续 fallback；</li>
+<li>新浪适配器读取日 K 与独立 QFQ Factor，按生效日选择因子并推导 QFQ；</li>
+<li>RAW/QFQ 日期未完全对齐时，QFQ Revision 降为 <code>LIMITED</code>，不得绑定不完整 Factor；</li>
+<li>Provider 返回错误代码、错误周期、错误复权类型、空序列、重复/乱序或陈旧序列时均拒绝。</li>
+</ul>
+<h2 id="4">4. 持久化验收<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>服务器隔离 PostgreSQL 17 从空库执行 <code>0001 -&gt; 0002</code> 后通过：</p>
+<ul>
+<li><code>amount=NULL</code> 的正式 Market Bar 可写入；</li>
+<li>Factor Revision 先于绑定它的 QFQ Revision 生效；</li>
+<li>首次 Bundle 发布写入 1 个 Factor Revision、2 个 Series Revision 和 6 条 Market Bar；</li>
+<li>原 Bundle 再发布时 Factor/Series 均为零新增；</li>
+<li>Series 任一写入失败时 Factor 与 Bars 整组回滚；</li>
+<li>已发布 Bar 仍受不可变触发器保护。</li>
+</ul>
+<h2 id="5">5. 当前未完成<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>全市场 5,000+ 证券批次、断点续跑和失败重试；</li>
+<li>严格交易日历 Provider 及日常增量调度；</li>
+<li>全市场覆盖率不低于 90% 的正式持久化验收；</li>
+<li>Corporate Action 原始事实 Provider；</li>
+<li>完整 Revision supersedes 链和批次运行观测；</li>
+<li>Phase 2 Job/Container/部署开关。</li>
+</ul>
+<p>因此本记录只证明 Bar 数据层单股链路和 20 只真实样本通过，不把 Phase 2 标记为已完成。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

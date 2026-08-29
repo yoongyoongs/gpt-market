@@ -25,6 +25,7 @@
 - [测试与验收规范](testing-acceptance.md)
 - [Baseline 一致性修补摘要](Baseline一致性修补摘要.md)
 - [V3 Phase 1 基础验收记录](Phase1基础验收记录.md)
+- [V3 Phase 2 行情底座实施记录](Phase2行情底座实施记录.md)
 - [服务器部署记录](deployment.md)
 - [东方财富字段实测记录](eastmoney_fields.md)
 - `eastmoney_probe.json`：带时间戳的字段探针样例；

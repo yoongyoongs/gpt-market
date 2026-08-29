@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.market_data import Market, SecurityMember, UniverseSnapshot
+from app.v3.domain.market_data import (
+    AdjustmentFactorRevision,
+    BarSeriesRevision,
+    Market,
+    SecurityMember,
+    UniverseSnapshot,
+)
 from app.v3.infrastructure.db.models import (
     AgentTaskModel,
+    AdjustmentFactorModel,
+    AdjustmentFactorRevisionModel,
     AuditEventModel,
+    BarSeriesRevisionModel,
+    MarketBarModel,
     SecurityModel,
     UniverseDiffModel,
     UniverseMemberModel,
@@ -161,7 +173,7 @@ class SQLAlchemyUniverseRepository:
             return False
 
         previous = await self._members_by_key(snapshot.previous_snapshot_id)
-        current: dict[tuple[str, str], tuple[SecurityMember, object]] = {}
+        current: dict[tuple[str, str], tuple[SecurityMember, UUID]] = {}
         for member in snapshot.members:
             security_id = (
                 await self._session.execute(
@@ -207,7 +219,7 @@ class SQLAlchemyUniverseRepository:
 
     async def _members_by_key(
         self, snapshot_id
-    ) -> dict[tuple[str, str], tuple[SecurityMember, object]]:
+    ) -> dict[tuple[str, str], tuple[SecurityMember, UUID]]:
         if snapshot_id is None:
             return {}
         rows = (
@@ -244,3 +256,83 @@ class SQLAlchemyUniverseRepository:
             "delisting_risk": member.delisting_risk,
             "raw_reference": member.raw_reference,
         }
+
+
+class SQLAlchemyBarRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish_factor_revision(self, revision: AdjustmentFactorRevision) -> bool:
+        inserted = (
+            await self._session.execute(
+                insert(AdjustmentFactorRevisionModel)
+                .values(
+                    factor_revision_id=revision.factor_revision_id,
+                    security_id=revision.security_id,
+                    source=revision.source,
+                    upstream_source=revision.upstream_source,
+                    derivation_method=revision.derivation_method,
+                    fetch_time=revision.fetch_time,
+                    known_at=revision.known_at,
+                    content_hash=revision.content_hash,
+                    supersedes_revision_id=revision.supersedes_revision_id,
+                )
+                .on_conflict_do_nothing(index_elements=[AdjustmentFactorRevisionModel.content_hash])
+                .returning(AdjustmentFactorRevisionModel.factor_revision_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return False
+        self._session.add_all(
+            AdjustmentFactorModel(
+                factor_revision_id=revision.factor_revision_id,
+                trading_time=item.trading_time,
+                factor=item.factor,
+            )
+            for item in revision.factors
+        )
+        return True
+
+    async def publish_series_revision(self, revision: BarSeriesRevision) -> bool:
+        inserted = (
+            await self._session.execute(
+                insert(BarSeriesRevisionModel)
+                .values(
+                    revision_id=revision.revision_id,
+                    security_id=revision.security_id,
+                    period=revision.period.value,
+                    adjust_type=revision.adjust_type.value,
+                    source=revision.source,
+                    upstream_source=revision.upstream_source,
+                    raw_bar_available=revision.raw_bar_available,
+                    factor_revision_id=revision.factor_revision_id,
+                    point_in_time_precision=revision.point_in_time_precision.value,
+                    precision_reason=revision.precision_reason,
+                    known_at=revision.known_at,
+                    content_hash=revision.content_hash,
+                    supersedes_revision_id=revision.supersedes_revision_id,
+                    status="PUBLISHED",
+                )
+                .on_conflict_do_nothing(index_elements=[BarSeriesRevisionModel.content_hash])
+                .returning(BarSeriesRevisionModel.revision_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return False
+        self._session.add_all(
+            MarketBarModel(
+                revision_id=revision.revision_id,
+                bar_time=item.bar_time,
+                open=item.open,
+                high=item.high,
+                low=item.low,
+                close=item.close,
+                volume=item.volume,
+                amount=item.amount,
+                provisional=item.provisional,
+                event_time=item.bar_time,
+                fetch_time=item.fetch_time,
+            )
+            for item in revision.bars
+        )
+        return True
