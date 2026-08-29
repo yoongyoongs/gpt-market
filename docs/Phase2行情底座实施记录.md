@@ -14,6 +14,10 @@
 - 周/月 K 由同口径日 K 本地聚合，周期完整性由注入的交易日历判断；
 - Factor、RAW/QFQ、周/月 Revision 和 Bars 通过同一 Unit of Work 发布；
 - V3 `market_bars.amount` 改为可空。腾讯和新浪未提供历史成交额时保存 `null/UNKNOWN`，不再写入伪造的 `0`。
+- 历史 Backfill 固定绑定不可变 Universe Snapshot，并按稳定目标序号持久化每只证券结果；
+- 中断后只重试失败或尚未处理的证券，已成功证券通过运行游标和已发布覆盖检查双重跳过；
+- 每只证券完成后立即 checkpoint，运行计数由唯一目标结果重新计算，避免重试造成重复累计；
+- `row_version` 乐观锁拒绝同一运行的并发写入，网络请求保持在数据库事务之外。
 
 ## 2. Provider 实测
 
@@ -56,10 +60,14 @@
 - 原 Bundle 再发布时 Factor/Series 均为零新增；
 - Series 任一写入失败时 Factor 与 Bars 整组回滚；
 - 已发布 Bar 仍受不可变触发器保护。
+- 真实 Universe Snapshot 中两只证券完成 Backfill 后，运行记录为 `COMPLETED / 2 / 2 / 0`；
+- RAW/QFQ 的日、周、月共生成 8 个 Series Revision；同一 `run_id` 再执行时直接返回，序列数保持 8；
+- 单元故障注入覆盖“首轮部分失败后只重试失败目标”和“发布成功但 checkpoint 前崩溃后无重复恢复”；
+- PostgreSQL 端到端测试：`test_backfill_run_reads_universe_checkpoints_and_replays_without_duplicates`，服务器隔离 PostgreSQL 17 实测通过。
 
 ## 5. 当前未完成
 
-- 全市场 5,000+ 证券批次、断点续跑和失败重试；
+- 全市场 5,000+ 证券正式跑批及覆盖率/耗时验收；
 - 严格交易日历 Provider 及日常增量调度；
 - 全市场覆盖率不低于 90% 的正式持久化验收；
 - Corporate Action 原始事实 Provider；

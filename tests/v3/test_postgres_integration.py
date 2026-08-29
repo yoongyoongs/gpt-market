@@ -11,11 +11,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.v3.application.register_agent_task import RegisterAgentTaskService
+from app.v3.application.aggregate_daily_bars import AggregateDailyBarsService
+from app.v3.application.backfill_daily_bars import BackfillDailyBarsService
 from app.v3.application.ingest_daily_bars import BuildDailyBarRevisionsService
 from app.v3.application.publish_bar_bundle import PublishBarBundleService
+from app.v3.application.register_agent_task import RegisterAgentTaskService
 from app.v3.contracts.agent import AgentTask, Subject, SubjectType
 from app.v3.domain.market_data import (
+    IngestionRunStatus,
     Market,
     SecurityMember,
     UniverseSnapshot,
@@ -23,6 +26,7 @@ from app.v3.domain.market_data import (
     UniverseSnapshotStatus,
 )
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
+from tests.v3.test_backfill_daily_bars import AlwaysOpenCalendar, DynamicProvider
 from tests.v3.test_ingest_daily_bars import FakeProvider, NOW
 
 
@@ -444,3 +448,75 @@ async def test_bar_bundle_repository_is_atomic_and_idempotent() -> None:
     assert second.factor_created is False
     assert second.series_created == 0
     assert (factor_count, series_count, bar_count) == (1, 2, 6)
+
+
+@pytest.mark.asyncio
+async def test_backfill_run_reads_universe_checkpoints_and_replays_without_duplicates() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    code_seed = uuid4().int % 99_998
+    codes = (f"6{code_seed:05d}", f"6{code_seed + 1:05d}")
+    universe = UniverseSnapshot.build(
+        UniverseSnapshotContent(
+            snapshot_id=uuid4(),
+            source_code=f"backfill-{uuid4()}",
+            status=UniverseSnapshotStatus.PRIMARY,
+            as_of=now,
+            fetch_time=now,
+            known_at=now,
+            coverage=1,
+            stale=False,
+            members=(
+                SecurityMember(code=codes[0], market=Market.SH, name="回填甲"),
+                SecurityMember(code=codes[1], market=Market.SH, name="回填乙"),
+            ),
+        )
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.universes.publish(universe) is True
+        await uow.commit()
+
+    def uow_factory() -> SQLAlchemyUnitOfWork:
+        return SQLAlchemyUnitOfWork(sessions)
+    publisher = PublishBarBundleService(uow_factory)
+    runner = BackfillDailyBarsService(
+        uow_factory,
+        BuildDailyBarRevisionsService([DynamicProvider("integration")], clock=lambda: NOW),
+        AggregateDailyBarsService(AlwaysOpenCalendar(), clock=lambda: NOW),
+        publisher,
+        clock=lambda: now,
+    )
+    first = await runner.execute(minimum_last_bar_date=(NOW - timedelta(days=10)).date())
+    second = await runner.execute(
+        run_id=first.run_id,
+        minimum_last_bar_date=(NOW - timedelta(days=10)).date(),
+    )
+
+    async with engine.connect() as connection:
+        run_counts = (
+            await connection.execute(
+                text(
+                    "SELECT status, expected_count, processed_count, successful_count, failed_count "
+                    "FROM v3.market_data_ingestion_runs WHERE run_id=:run_id"
+                ),
+                {"run_id": first.run_id},
+            )
+        ).one()
+        series_count = (
+            await connection.execute(
+                text(
+                    "SELECT count(*) FROM v3.bar_series_revisions r "
+                    "JOIN v3.universe_members um ON um.security_id=r.security_id "
+                    "WHERE um.snapshot_id=:snapshot_id"
+                ),
+                {"snapshot_id": universe.snapshot_id},
+            )
+        ).scalar_one()
+    await engine.dispose()
+
+    assert first.status is IngestionRunStatus.COMPLETED
+    assert second.status is IngestionRunStatus.COMPLETED
+    assert tuple(run_counts) == ("COMPLETED", 2, 2, 2, 0)
+    assert series_count == 8

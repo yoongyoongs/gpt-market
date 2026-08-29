@@ -5,7 +5,13 @@ from typing import Protocol
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.market_data import AdjustmentFactorRevision, BarSeriesRevision, UniverseSnapshot
+from app.v3.domain.market_data import (
+    AdjustmentFactorRevision,
+    BarIngestionTarget,
+    BarSeriesRevision,
+    MarketDataIngestionRun,
+    UniverseSnapshot,
+)
 
 
 class AgentTaskRepository(Protocol):
@@ -21,11 +27,25 @@ class UniverseRepository(Protocol):
 
     async def publish(self, snapshot: UniverseSnapshot) -> bool: ...
 
+    async def targets(self, snapshot_id) -> tuple[BarIngestionTarget, ...]: ...
+
 
 class BarRepository(Protocol):
     async def publish_factor_revision(self, revision: AdjustmentFactorRevision) -> bool: ...
 
     async def publish_series_revision(self, revision: BarSeriesRevision) -> bool: ...
+
+    async def has_daily_coverage(
+        self, security_id, *, minimum_bars: int, minimum_last_bar_date
+    ) -> bool: ...
+
+
+class IngestionRunRepository(Protocol):
+    async def add(self, run: MarketDataIngestionRun) -> None: ...
+
+    async def get(self, run_id) -> MarketDataIngestionRun | None: ...
+
+    async def save(self, run: MarketDataIngestionRun, *, expected_version: int) -> bool: ...
 
 
 class UnitOfWork(Protocol):
@@ -33,6 +53,7 @@ class UnitOfWork(Protocol):
     audits: AuditRepository
     universes: UniverseRepository
     bars: BarRepository
+    ingestion_runs: IngestionRunRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

@@ -40,6 +40,51 @@ class PointInTimePrecision(StrEnum):
     LIMITED = "LIMITED"
 
 
+class IngestionRunStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    PARTIAL = "PARTIAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class BarIngestionTarget(V3Contract):
+    security_id: UUID
+    code: str = Field(pattern=r"^\d{6}$")
+    market: Market
+    suspended: bool = False
+    is_new_listing: bool = False
+
+
+class MarketDataIngestionRun(V3Contract):
+    run_id: UUID
+    run_type: str = Field(min_length=1, max_length=64)
+    universe_snapshot_id: UUID
+    status: IngestionRunStatus
+    cursor: dict[str, Any] = Field(default_factory=dict)
+    expected_count: int = Field(ge=0)
+    processed_count: int = Field(ge=0)
+    successful_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    errors: tuple[dict[str, Any], ...] = ()
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    row_version: int = Field(ge=1)
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def validate_optional_datetimes(cls, value: datetime | None, info) -> datetime | None:
+        return None if value is None else require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "MarketDataIngestionRun":
+        if self.processed_count != self.successful_count + self.failed_count:
+            raise ValueError("processed_count must equal successful_count + failed_count")
+        if self.processed_count > self.expected_count:
+            raise ValueError("processed_count cannot exceed expected_count")
+        return self
+
+
 class AdjustmentFactorPoint(V3Contract):
     trading_time: datetime
     factor: float = Field(gt=0)

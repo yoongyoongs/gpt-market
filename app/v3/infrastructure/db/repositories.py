@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +10,11 @@ from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
+    BarIngestionTarget,
     BarSeriesRevision,
+    IngestionRunStatus,
     Market,
+    MarketDataIngestionRun,
     SecurityMember,
     UniverseSnapshot,
 )
@@ -22,6 +25,7 @@ from app.v3.infrastructure.db.models import (
     AuditEventModel,
     BarSeriesRevisionModel,
     MarketBarModel,
+    MarketDataIngestionRunModel,
     SecurityModel,
     UniverseDiffModel,
     UniverseMemberModel,
@@ -217,6 +221,26 @@ class SQLAlchemyUniverseRepository:
             )
         return True
 
+    async def targets(self, snapshot_id) -> tuple[BarIngestionTarget, ...]:
+        rows = (
+            await self._session.execute(
+                select(UniverseMemberModel, SecurityModel)
+                .join(SecurityModel, SecurityModel.security_id == UniverseMemberModel.security_id)
+                .where(UniverseMemberModel.snapshot_id == snapshot_id)
+                .order_by(SecurityModel.market, SecurityModel.code)
+            )
+        ).all()
+        return tuple(
+            BarIngestionTarget(
+                security_id=security.security_id,
+                code=security.code,
+                market=Market(security.market),
+                suspended=member.suspended,
+                is_new_listing=member.is_new_listing,
+            )
+            for member, security in rows
+        )
+
     async def _members_by_key(
         self, snapshot_id
     ) -> dict[tuple[str, str], tuple[SecurityMember, UUID]]:
@@ -336,3 +360,104 @@ class SQLAlchemyBarRepository:
             for item in revision.bars
         )
         return True
+
+    async def has_daily_coverage(
+        self, security_id, *, minimum_bars: int, minimum_last_bar_date
+    ) -> bool:
+        row = (
+            await self._session.execute(
+                select(
+                    BarSeriesRevisionModel.raw_bar_available,
+                    func.count(MarketBarModel.bar_time),
+                    func.max(MarketBarModel.bar_time),
+                )
+                .join(MarketBarModel, MarketBarModel.revision_id == BarSeriesRevisionModel.revision_id)
+                .where(
+                    BarSeriesRevisionModel.security_id == security_id,
+                    BarSeriesRevisionModel.period == "DAY",
+                    BarSeriesRevisionModel.adjust_type == "QFQ",
+                    BarSeriesRevisionModel.status == "PUBLISHED",
+                )
+                .group_by(
+                    BarSeriesRevisionModel.revision_id,
+                    BarSeriesRevisionModel.raw_bar_available,
+                    BarSeriesRevisionModel.known_at,
+                )
+                .order_by(BarSeriesRevisionModel.known_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if row is None:
+            return False
+        raw_available, count, last_bar_time = row
+        return bool(
+            raw_available
+            and count >= minimum_bars
+            and last_bar_time.date() >= minimum_last_bar_date
+        )
+
+
+class SQLAlchemyIngestionRunRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, run: MarketDataIngestionRun) -> None:
+        self._session.add(
+            MarketDataIngestionRunModel(
+                run_id=run.run_id,
+                run_type=run.run_type,
+                universe_snapshot_id=run.universe_snapshot_id,
+                status=run.status.value,
+                cursor=run.cursor,
+                expected_count=run.expected_count,
+                processed_count=run.processed_count,
+                successful_count=run.successful_count,
+                failed_count=run.failed_count,
+                errors=list(run.errors),
+                started_at=run.started_at,
+                completed_at=run.completed_at,
+                row_version=run.row_version,
+            )
+        )
+
+    async def get(self, run_id) -> MarketDataIngestionRun | None:
+        model = await self._session.get(MarketDataIngestionRunModel, run_id)
+        if model is None:
+            return None
+        return MarketDataIngestionRun(
+            run_id=model.run_id,
+            run_type=model.run_type,
+            universe_snapshot_id=model.universe_snapshot_id,
+            status=IngestionRunStatus(model.status),
+            cursor=model.cursor,
+            expected_count=model.expected_count,
+            processed_count=model.processed_count,
+            successful_count=model.successful_count,
+            failed_count=model.failed_count,
+            errors=tuple(model.errors),
+            started_at=model.started_at,
+            completed_at=model.completed_at,
+            row_version=model.row_version,
+        )
+
+    async def save(self, run: MarketDataIngestionRun, *, expected_version: int) -> bool:
+        result = await self._session.execute(
+            update(MarketDataIngestionRunModel)
+            .where(
+                MarketDataIngestionRunModel.run_id == run.run_id,
+                MarketDataIngestionRunModel.row_version == expected_version,
+            )
+            .values(
+                status=run.status.value,
+                cursor=run.cursor,
+                expected_count=run.expected_count,
+                processed_count=run.processed_count,
+                successful_count=run.successful_count,
+                failed_count=run.failed_count,
+                errors=list(run.errors),
+                started_at=run.started_at,
+                completed_at=run.completed_at,
+                row_version=expected_version + 1,
+            )
+        )
+        return result.rowcount == 1

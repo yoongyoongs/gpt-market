@@ -8,6 +8,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyAgentTaskRepository,
     SQLAlchemyAuditRepository,
     SQLAlchemyBarRepository,
+    SQLAlchemyIngestionRunRepository,
     SQLAlchemyUniverseRepository,
 )
 
@@ -25,6 +26,7 @@ class SQLAlchemyUnitOfWork:
         self.audits = SQLAlchemyAuditRepository(self._session)
         self.universes = SQLAlchemyUniverseRepository(self._session)
         self.bars = SQLAlchemyBarRepository(self._session)
+        self.ingestion_runs = SQLAlchemyIngestionRunRepository(self._session)
         return self
 
     async def __aexit__(
