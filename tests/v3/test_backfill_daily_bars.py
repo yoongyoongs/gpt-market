@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timezone
 from types import TracebackType
 from uuid import uuid4
@@ -32,6 +33,22 @@ class DynamicProvider(FakeProvider):
         if code in self.failed_codes and adjust_type.value == "QFQ":
             raise RuntimeError(f"{code} unavailable")
         return result(self.code, adjust_type).model_copy(update={"code": code})
+
+
+class TrackingProvider(DynamicProvider):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.active = 0
+        self.maximum_active = 0
+
+    async def fetch(self, code, period, adjust_type, limit):
+        self.active += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        try:
+            await asyncio.sleep(0.005)
+            return await super().fetch(code, period, adjust_type, limit)
+        finally:
+            self.active -= 1
 
 
 class Store:
@@ -175,3 +192,33 @@ async def test_crash_after_publish_resumes_without_duplicate_revision() -> None:
     )
     assert resumed.status is IngestionRunStatus.COMPLETED
     assert publisher.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_backfill_bounds_concurrency_and_checkpoints_every_target() -> None:
+    targets = tuple(target(f"6{index:05d}") for index in range(6))
+    store = Store(targets)
+    provider = TrackingProvider("provider")
+    publisher = FakePublisher(store)
+
+    completed = await service(store, provider, publisher).execute(
+        minimum_last_bar_date=date(2026, 8, 20),
+        concurrency=3,
+    )
+
+    assert completed.status is IngestionRunStatus.COMPLETED
+    assert completed.processed_count == 6
+    assert provider.maximum_active == 3
+    assert store.save_calls == 8
+
+
+@pytest.mark.asyncio
+async def test_backfill_rejects_unbounded_concurrency() -> None:
+    store = Store((target("600000"),))
+    runner = service(store, DynamicProvider("provider"), FakePublisher(store))
+
+    with pytest.raises(ValueError, match="between 1 and 32"):
+        await runner.execute(
+            minimum_last_bar_date=date(2026, 8, 20),
+            concurrency=33,
+        )

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="610a5b894f800b2c262e91cc7327e0de072c2e1c4648dc35685a5c075853610c"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="35cc2f5a37ad238e74700c79500ff2db7ffe8b6833e445a36aed883e7f84221c"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：610a5b894f80</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：35cc2f5a37ad</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-30（Asia/Shanghai）
 当前分支：<code>codex/phase2-market-data-foundation</code>
@@ -59,12 +59,13 @@
 <li>Phase 2 日 K 单股链路已实现 RAW/QFQ 成对获取、Factor Revision、QFQ-only LIMITED、陈旧门禁、partial 隔离、交易日历驱动的周/月聚合及同事务发布；实现记录见 <code>docs/Phase2行情底座实施记录.md</code>。</li>
 <li>Phase 2 历史 Backfill 已实现不可变 Universe 绑定、逐证券 checkpoint、失败目标重试、发布后崩溃恢复、已完成运行幂等返回和 <code>row_version</code> 并发冲突保护；真实 PostgreSQL 17 端到端重放保持 8 个序列零重复。</li>
 <li>Phase 2 严格交易日历已接入 <code>exchange_calendars:XSHG</code>，记录版本与覆盖边界，越界硬失败；已按上交所 2026 春节休市安排验证节后短周聚合，本地及服务器 Python 3.12 均通过。</li>
+<li>Phase 2 Backfill 已支持默认 4、上限 32 的受控并发；网络/发布并行但 checkpoint 单协调器串行，3 并发上限及真实 PostgreSQL 并发重放均通过。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
 <li>将 Universe Refresh 接入 Phase 2 Job/Container，并补全运行观测；</li>
 <li>实现全市场 Raw Bar/Factor Revision、增量更新和本地周/月聚合持久化。</li>
-<li>执行全市场 5,000+ 正式跑批，补齐并发吞吐、覆盖率和耗时汇总。</li>
+<li>接入可执行 Job 和结构化覆盖率报告后，执行全市场 5,000+ 正式跑批。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
@@ -110,6 +111,7 @@
 <li>Bar Bundle 在隔离 PostgreSQL 17 通过 nullable 成交额、Factor 外键、首次发布、重复零新增和不可变约束；全套本地回归 <code>114 passed, 11 skipped</code>。</li>
 <li>Backfill/Resume V3 专项测试 <code>43 passed, 7 skipped</code>；服务器隔离 PostgreSQL 17 端到端验证 Universe 目标读取、2/2 checkpoint、日周月 RAW/QFQ 发布及同 run 重放零新增。</li>
 <li>严格交易日历对照上交所 2026 春节公告验证 2 月 23 日休市、2 月 24 日开市和节后四交易日短周；服务器 Python 3.12 日历/聚合测试 <code>6 passed</code>。</li>
+<li>Backfill 6 目标并发测试确认配置 3 时最大活跃数为 3，逐目标 checkpoint 完整；服务器真实 PostgreSQL 默认并发发布和同 run 重放 <code>1 passed</code>。</li>
 <li>生产 <code>market-mcp</code> 在 Phase 1/2 隔离验收期间持续为 <code>healthy</code>；Phase 1 已合并，生产 V3 仍未启用。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>

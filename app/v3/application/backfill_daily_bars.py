@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
@@ -43,45 +44,31 @@ class BackfillDailyBarsService:
         limit: int = 300,
         minimum_last_bar_date: date,
         stop_after: int | None = None,
+        concurrency: int = 4,
     ) -> MarketDataIngestionRun:
+        if not 1 <= concurrency <= 32:
+            raise ValueError("concurrency must be between 1 and 32")
+        if stop_after is not None and stop_after < 0:
+            raise ValueError("stop_after cannot be negative")
         run, targets = await self._load_or_create(run_id)
         outcomes = dict(run.cursor.get("outcomes") or {})
         if run.status is IngestionRunStatus.COMPLETED and len(outcomes) == len(targets):
             return run
         pending = [index for index in range(len(targets)) if outcomes.get(str(index), {}).get("status") != "SUCCESS"]
-        attempted = 0
+        if stop_after is not None:
+            pending = pending[:stop_after]
         run = await self._checkpoint(run, outcomes, IngestionRunStatus.RUNNING)
-        for index in pending:
-            if stop_after is not None and attempted >= stop_after:
-                break
-            target = targets[index]
-            attempted += 1
-            try:
-                if not await self._already_published(target, minimum_last_bar_date):
-                    daily = await self._builder.execute(
-                        target.security_id,
-                        target.code,
-                        limit=limit,
-                        minimum_last_bar_date=(None if target.suspended else minimum_last_bar_date),
-                    )
-                    aggregates = []
-                    for source in filter(None, (daily.raw_revision, daily.adjusted_revision)):
-                        aggregates.extend(
-                            (
-                                self._aggregator.execute(source, BarPeriod.WEEK),
-                                self._aggregator.execute(source, BarPeriod.MONTH),
-                            )
-                        )
-                    await self._publisher.execute(daily, aggregates)
-                outcomes[str(index)] = {"status": "SUCCESS", "code": target.code}
-            except Exception as exc:
-                outcomes[str(index)] = {
-                    "status": "FAILED",
-                    "code": target.code,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:500],
-                }
-            run = await self._checkpoint(run, outcomes, IngestionRunStatus.RUNNING)
+        for offset in range(0, len(pending), concurrency):
+            batch = pending[offset : offset + concurrency]
+            results = await asyncio.gather(
+                *(
+                    self._process_target(index, targets[index], limit, minimum_last_bar_date)
+                    for index in batch
+                )
+            )
+            for index, outcome in results:
+                outcomes[str(index)] = outcome
+                run = await self._checkpoint(run, outcomes, IngestionRunStatus.RUNNING)
 
         processed = len(outcomes)
         successful = sum(item.get("status") == "SUCCESS" for item in outcomes.values())
@@ -94,6 +81,39 @@ class BackfillDailyBarsService:
         else:
             status = IngestionRunStatus.PARTIAL
         return await self._checkpoint(run, outcomes, status)
+
+    async def _process_target(
+        self,
+        index: int,
+        target: BarIngestionTarget,
+        limit: int,
+        minimum_last_bar_date: date,
+    ) -> tuple[int, dict[str, str]]:
+        try:
+            if not await self._already_published(target, minimum_last_bar_date):
+                daily = await self._builder.execute(
+                    target.security_id,
+                    target.code,
+                    limit=limit,
+                    minimum_last_bar_date=(None if target.suspended else minimum_last_bar_date),
+                )
+                aggregates = []
+                for source in filter(None, (daily.raw_revision, daily.adjusted_revision)):
+                    aggregates.extend(
+                        (
+                            self._aggregator.execute(source, BarPeriod.WEEK),
+                            self._aggregator.execute(source, BarPeriod.MONTH),
+                        )
+                    )
+                await self._publisher.execute(daily, aggregates)
+            return index, {"status": "SUCCESS", "code": target.code}
+        except Exception as exc:
+            return index, {
+                "status": "FAILED",
+                "code": target.code,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            }
 
     async def _load_or_create(
         self, run_id: UUID | None

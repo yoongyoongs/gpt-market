@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="2e03c360bb765628feee0d85cb250721bbeca6ea78f77bea07a0a131b5bec7ed"><title>V3 Phase 2 行情底座实施记录</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="97a457dde423c7ea95e182731e4b5694a5ff747e73833e89511aa4ca4eab72b1"><title>V3 Phase 2 行情底座实施记录</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -14,7 +14,7 @@
 <li><a href="#6">6. 当前未完成</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase2行情底座实施记录.md · 内容哈希：2e03c360bb76</div><h1 id="v3-phase-2">V3 Phase 2 行情底座实施记录<a class="headerlink" href="#v3-phase-2" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase2行情底座实施记录.md · 内容哈希：97a457dde423</div><h1 id="v3-phase-2">V3 Phase 2 行情底座实施记录<a class="headerlink" href="#v3-phase-2" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>日期：2026-08-30（Asia/Shanghai）<br>
 状态：Phase 2 中间实施记录，不代表 Phase 2 整体验收完成<br>
@@ -34,6 +34,7 @@
 <li>中断后只重试失败或尚未处理的证券，已成功证券通过运行游标和已发布覆盖检查双重跳过；</li>
 <li>每只证券完成后立即 checkpoint，运行计数由唯一目标结果重新计算，避免重试造成重复累计；</li>
 <li><code>row_version</code> 乐观锁拒绝同一运行的并发写入，网络请求保持在数据库事务之外。</li>
+<li>Backfill 支持 <code>1..32</code> 的显式受控并发，默认 4；按并发窗口抓取/发布，由单协调器逐目标串行 checkpoint；</li>
 <li>严格交易日历采用 <code>exchange_calendars:XSHG</code>，运行时记录包版本、日历代码及覆盖起止日期；</li>
 <li>日历覆盖外日期显式抛出 <code>TradingCalendarOutOfRange</code>，不以普通工作日规则静默替代交易日。</li>
 </ul>
@@ -120,6 +121,8 @@
 <li>RAW/QFQ 的日、周、月共生成 8 个 Series Revision；同一 <code>run_id</code> 再执行时直接返回，序列数保持 8；</li>
 <li>单元故障注入覆盖“首轮部分失败后只重试失败目标”和“发布成功但 checkpoint 前崩溃后无重复恢复”；</li>
 <li>PostgreSQL 端到端测试：<code>test_backfill_run_reads_universe_checkpoints_and_replays_without_duplicates</code>，服务器隔离 PostgreSQL 17 实测通过。</li>
+<li>6 目标、并发上限 3 的故障注入测试实测最大并发为 3，并产生初始、逐目标和终态共 8 次 checkpoint；</li>
+<li>真实 PostgreSQL 17 以默认并发重跑 2 目标发布与幂等重放通过。</li>
 </ul>
 <h2 id="5">5. 交易日历验收<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
 <ul>
@@ -131,7 +134,7 @@
 </ul>
 <h2 id="6">6. 当前未完成<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
 <ul>
-<li>全市场 5,000+ 证券正式跑批及覆盖率/耗时验收；</li>
+<li>全市场 5,000+ 证券正式跑批及覆盖率/耗时验收（受控并发能力已具备）；</li>
 <li>日常增量调度，以及 2027 年交易日历发布后的升级复验；</li>
 <li>全市场覆盖率不低于 90% 的正式持久化验收；</li>
 <li>Corporate Action 原始事实 Provider；</li>
