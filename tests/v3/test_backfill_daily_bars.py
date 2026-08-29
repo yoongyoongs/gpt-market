@@ -195,7 +195,7 @@ async def test_crash_after_publish_resumes_without_duplicate_revision() -> None:
 
 
 @pytest.mark.asyncio
-async def test_backfill_bounds_concurrency_and_checkpoints_every_target() -> None:
+async def test_backfill_bounds_concurrency_and_checkpoints_every_batch() -> None:
     targets = tuple(target(f"6{index:05d}") for index in range(6))
     store = Store(targets)
     provider = TrackingProvider("provider")
@@ -209,7 +209,8 @@ async def test_backfill_bounds_concurrency_and_checkpoints_every_target() -> Non
     assert completed.status is IngestionRunStatus.COMPLETED
     assert completed.processed_count == 6
     assert provider.maximum_active == 3
-    assert store.save_calls == 8
+    assert store.save_calls == 4
+    assert completed.cursor == {"next_index": 6, "failures": {}}
 
 
 @pytest.mark.asyncio

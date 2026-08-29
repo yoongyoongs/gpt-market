@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -73,6 +74,7 @@ class ExchangeUniverseProvider:
     code = "official_exchanges"
     sse_url = "https://query.sse.com.cn/sseQuery/commonQuery.do"
     szse_url = "https://www.szse.cn/api/report/ShowReport/data"
+    bse_url = "https://www.bse.cn/nqxxController/nqxxCnzq.do"
 
     def __init__(
         self,
@@ -160,6 +162,39 @@ class ExchangeUniverseProvider:
             raise UniverseProviderError("SZSE universe payload is malformed")
         return payload
 
+    async def _bse_page(self, page: int) -> dict[str, Any]:
+        client = await self._get_client()
+        last_error: Exception | None = None
+        for attempt in range(self._attempts):
+            try:
+                async with self._semaphore:
+                    response = await client.post(
+                        self.bse_url,
+                        data={
+                            "page": str(page),
+                            "typejb": "T",
+                            "xxfcbj[]": "2",
+                            "xxzqdm": "",
+                            "sortfield": "xxzqdm",
+                            "sorttype": "asc",
+                        },
+                        headers={"Referer": "https://www.bse.cn/nq/listedcompany.html"},
+                    )
+                    await asyncio.sleep(self._request_gap)
+                response.raise_for_status()
+                start = response.text.find("[")
+                if start < 0:
+                    raise ValueError("BSE universe payload has no JSON array")
+                payload = json.JSONDecoder().raw_decode(response.text[start:])[0]
+                if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+                    raise ValueError("BSE universe payload is malformed")
+                return payload[0]
+            except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if attempt + 1 < self._attempts:
+                    await asyncio.sleep(0.25 * (2**attempt))
+        raise UniverseProviderError(f"BSE universe request failed: {last_error}") from last_error
+
     @staticmethod
     def _parse_sse(payload: dict[str, Any]) -> list[SecurityMember]:
         rows = payload["pageHelp"].get("data") or []
@@ -206,10 +241,39 @@ class ExchangeUniverseProvider:
             )
         return members
 
+    @staticmethod
+    def _parse_bse(payload: dict[str, Any]) -> list[SecurityMember]:
+        members = []
+        for row in payload.get("content") or []:
+            code = str(row.get("xxzqdm") or "").strip()
+            name = str(row.get("xxzqjc") or "").strip()
+            if not re.fullmatch(r"920\d{3}", code) or not name:
+                continue
+            is_st, delisting_risk = _risk_flags(name)
+            members.append(
+                SecurityMember(
+                    code=code,
+                    market=Market.BJ,
+                    name=name,
+                    trading_status="ACTIVE",
+                    is_st=is_st,
+                    delisting_risk=delisting_risk,
+                    raw_reference={
+                        "exchange": "BSE",
+                        "listing_date": row.get("xxgprq"),
+                        "industry": row.get("xxhyzl"),
+                    },
+                )
+            )
+        return members
+
     async def fetch_snapshot(self) -> UniverseFetchResult:
         fetched_at = now_shanghai()
-        sse_main, sse_star, szse_first = await asyncio.gather(
-            self._sse_page("1", 1), self._sse_page("8", 1), self._szse_page(1)
+        sse_main, sse_star, szse_first, bse_first = await asyncio.gather(
+            self._sse_page("1", 1),
+            self._sse_page("8", 1),
+            self._szse_page(1),
+            self._bse_page(0),
         )
         sse_payloads = [sse_main, sse_star]
         sse_requests = []
@@ -218,9 +282,11 @@ class ExchangeUniverseProvider:
             sse_requests.extend(self._sse_page(stock_type, page) for page in range(2, page_count + 1))
         szse_metadata = szse_first[0].get("metadata") or {}
         szse_page_count = int(szse_metadata.get("pagecount") or 1)
-        remaining = await asyncio.gather(*sse_requests)
-        szse_remaining = await asyncio.gather(
-            *(self._szse_page(page) for page in range(2, szse_page_count + 1))
+        bse_page_count = int(bse_first.get("totalPages") or 1)
+        remaining, szse_remaining, bse_remaining = await asyncio.gather(
+            asyncio.gather(*sse_requests),
+            asyncio.gather(*(self._szse_page(page) for page in range(2, szse_page_count + 1))),
+            asyncio.gather(*(self._bse_page(page) for page in range(1, bse_page_count))),
         )
         sse_payloads.extend(remaining)
         members = [member for payload in sse_payloads for member in self._parse_sse(payload)]
@@ -232,8 +298,17 @@ class ExchangeUniverseProvider:
                 f"SZSE universe incomplete: expected {szse_expected}, parsed {len(szse_members)}"
             )
         members.extend(szse_members)
+        bse_payloads = [bse_first, *bse_remaining]
+        bse_members = [member for payload in bse_payloads for member in self._parse_bse(payload)]
+        bse_expected = int(bse_first.get("totalElements") or 0)
+        if bse_expected and len(bse_members) != bse_expected:
+            raise UniverseProviderError(
+                f"BSE universe incomplete: expected {bse_expected}, parsed {len(bse_members)}"
+            )
+        members.extend(bse_members)
         expected_total = sum(int(payload["pageHelp"].get("total") or 0) for payload in (sse_main, sse_star))
         expected_total += max(szse_expected, len(szse_members))
+        expected_total += max(bse_expected, len(bse_members))
         return UniverseFetchResult(
             source_code=self.code,
             as_of=fetched_at,

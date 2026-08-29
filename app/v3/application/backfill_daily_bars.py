@@ -51,13 +51,17 @@ class BackfillDailyBarsService:
         if stop_after is not None and stop_after < 0:
             raise ValueError("stop_after cannot be negative")
         run, targets = await self._load_or_create(run_id)
-        outcomes = dict(run.cursor.get("outcomes") or {})
-        if run.status is IngestionRunStatus.COMPLETED and len(outcomes) == len(targets):
+        next_index, failures = self._cursor_state(run)
+        if (
+            run.status is IngestionRunStatus.COMPLETED
+            and next_index == len(targets)
+            and not failures
+        ):
             return run
-        pending = [index for index in range(len(targets)) if outcomes.get(str(index), {}).get("status") != "SUCCESS"]
+        pending = [*sorted(int(index) for index in failures), *range(next_index, len(targets))]
         if stop_after is not None:
             pending = pending[:stop_after]
-        run = await self._checkpoint(run, outcomes, IngestionRunStatus.RUNNING)
+        run = await self._checkpoint(run, next_index, failures, IngestionRunStatus.RUNNING)
         for offset in range(0, len(pending), concurrency):
             batch = pending[offset : offset + concurrency]
             results = await asyncio.gather(
@@ -67,11 +71,21 @@ class BackfillDailyBarsService:
                 )
             )
             for index, outcome in results:
-                outcomes[str(index)] = outcome
-                run = await self._checkpoint(run, outcomes, IngestionRunStatus.RUNNING)
+                if outcome["status"] == "SUCCESS":
+                    failures.pop(str(index), None)
+                else:
+                    failures[str(index)] = outcome
+            new_indices = [index for index in batch if index >= next_index]
+            if new_indices:
+                if new_indices != list(range(next_index, next_index + len(new_indices))):
+                    raise RuntimeError("backfill high-water mark lost target ordering")
+                next_index += len(new_indices)
+            run = await self._checkpoint(
+                run, next_index, failures, IngestionRunStatus.RUNNING
+            )
 
-        processed = len(outcomes)
-        successful = sum(item.get("status") == "SUCCESS" for item in outcomes.values())
+        processed = next_index
+        successful = processed - len(failures)
         if processed < len(targets):
             status = IngestionRunStatus.RUNNING
         elif successful == len(targets):
@@ -80,7 +94,24 @@ class BackfillDailyBarsService:
             status = IngestionRunStatus.FAILED
         else:
             status = IngestionRunStatus.PARTIAL
-        return await self._checkpoint(run, outcomes, status)
+        return await self._checkpoint(run, next_index, failures, status)
+
+    @staticmethod
+    def _cursor_state(
+        run: MarketDataIngestionRun,
+    ) -> tuple[int, dict[str, dict[str, str]]]:
+        if "next_index" in run.cursor:
+            return int(run.cursor["next_index"]), dict(run.cursor.get("failures") or {})
+        outcomes = dict(run.cursor.get("outcomes") or {})
+        next_index = 0
+        while str(next_index) in outcomes:
+            next_index += 1
+        failures = {
+            index: outcome
+            for index, outcome in outcomes.items()
+            if int(index) < next_index and outcome.get("status") == "FAILED"
+        }
+        return next_index, failures
 
     async def _process_target(
         self,
@@ -139,7 +170,7 @@ class BackfillDailyBarsService:
             run_type="HISTORICAL_DAILY_BACKFILL",
             universe_snapshot_id=snapshot.snapshot_id,
             status=IngestionRunStatus.PENDING,
-            cursor={"outcomes": {}},
+            cursor={"next_index": 0, "failures": {}},
             expected_count=len(targets),
             processed_count=0,
             successful_count=0,
@@ -166,12 +197,13 @@ class BackfillDailyBarsService:
     async def _checkpoint(
         self,
         run: MarketDataIngestionRun,
-        outcomes: dict,
+        next_index: int,
+        failures: dict[str, dict[str, str]],
         status: IngestionRunStatus,
     ) -> MarketDataIngestionRun:
-        successful = sum(item.get("status") == "SUCCESS" for item in outcomes.values())
-        failed = sum(item.get("status") == "FAILED" for item in outcomes.values())
-        errors = tuple(item for item in outcomes.values() if item.get("status") == "FAILED")
+        failed = len(failures)
+        successful = next_index - failed
+        errors = tuple(failures[index] for index in sorted(failures, key=int))
         terminal = status in {
             IngestionRunStatus.COMPLETED,
             IngestionRunStatus.PARTIAL,
@@ -180,8 +212,8 @@ class BackfillDailyBarsService:
         updated = run.model_copy(
             update={
                 "status": status,
-                "cursor": {"outcomes": outcomes},
-                "processed_count": successful + failed,
+                "cursor": {"next_index": next_index, "failures": failures},
+                "processed_count": next_index,
                 "successful_count": successful,
                 "failed_count": failed,
                 "errors": errors[-100:],

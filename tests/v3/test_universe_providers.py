@@ -30,3 +30,23 @@ def test_exchange_provider_parses_szse_json() -> None:
     assert [(item.market.value, item.code, item.name) for item in members] == [
         ("SZ", "000001", "平安银行")
     ]
+
+
+def test_exchange_provider_parses_current_bse_codes() -> None:
+    members = ExchangeUniverseProvider._parse_bse(
+        {
+            "content": [
+                {
+                    "xxzqdm": "920000",
+                    "xxzqjc": "安徽凤凰",
+                    "xxgprq": "20201223",
+                    "xxhyzl": "汽车制造业",
+                },
+                {"xxzqdm": "830000", "xxzqjc": "旧代码不得进入当前快照"},
+            ]
+        }
+    )
+
+    assert [(item.market.value, item.code, item.name) for item in members] == [
+        ("BJ", "920000", "安徽凤凰")
+    ]
