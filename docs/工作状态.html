@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="5cb271c26d65be5ec17f6f021b364a2598758ff262dbb9c7ef583b2467113b1c"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="009ed8b4783abd1733e5c3c5bac9d0049013161ccde2ebda1b823d59df2feb54"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：5cb271c26d65</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：009ed8b4783a</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-29（Asia/Shanghai）
 当前分支：<code>codex/phase1-foundation</code>
@@ -41,12 +41,14 @@
 <li>五份核心 V3 设计文档及架构实施稿已完成五项一致性修补；</li>
 <li>《需求追踪矩阵》已覆盖全部 49 项 P0/P1，并映射 Phase、模块、表/存储、API/Job、测试、状态和证据；</li>
 <li>《Baseline 一致性修补摘要》已建立，最新审查输入已归档。</li>
+<li>Phase 1 启动检查点已创建并推送：<code>ca754f3</code>；</li>
+<li>已审计配置、Container、Compose、依赖、SQLite/JSONL 和测试结构；</li>
+<li>ADR-0001 已确认 PostgreSQL 17 + SQLAlchemy 2.0 async + asyncpg + Alembic async，V3 默认关闭并与 Legacy 生命周期隔离。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 1：审计当前配置、容器、存储、依赖和测试结构；</li>
-<li>形成 PostgreSQL Driver/ORM、Migration 和 Worker 基础的选型 ADR；</li>
-<li>拆分首个可验证实施步骤和回滚点。</li>
+<li>Phase 1 首个实现步骤：增加 V3 配置、依赖、PostgreSQL Compose、Migration 骨架和禁用态 Container；</li>
+<li>准备 <code>known_at</code>、Canonical Hash、Agent Contract、Audit 与 Task 基础的最小 Domain/Schema。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
@@ -72,13 +74,16 @@
 <li>文档生成检查：29 组 Markdown/HTML 内容 Hash 同步（包含根 README、CONTRIBUTING 与 <code>docs</code>）；</li>
 <li>需求追踪检查：需求规格中的 49 项 P0/P1 与矩阵 49 项一一对应，无缺失、无重复、无额外编号；</li>
 <li>术语检查：正式文档不存在 <code>corporate_action_adjustments</code> 或整包 <code>ALL_OR_NOTHING</code> 旧设计；</li>
-<li>项目 <code>.venv</code> 当前没有 <code>pip</code>，本轮使用 Codex 随附 Python 安装文档开发依赖并执行生成器。</li>
+<li>当前本地 <code>.venv</code> 使用 Python 3.13 且已有 <code>pip</code>；项目生产基线仍为 Python 3.12，后续数据库依赖需同时验证 3.12 容器。</li>
+<li>Phase 1 启动前全套测试：<code>72 passed, 5 skipped</code>；</li>
+<li>本机 Docker/Compose 可用；仓库内不存在既有 SQLAlchemy/Alembic/PostgreSQL 实现；</li>
+<li>SQLAlchemy/Alembic/asyncpg 选型已对照官方 async 文档核验。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
-<li>审计 <code>app/config.py</code>、<code>app/container.py</code>、<code>docker-compose.yml</code>、依赖、SQLite/JSONL 和现有测试；</li>
-<li>记录 Phase 1 ADR、最小表/契约范围、Migration 与备份恢复策略；</li>
-<li>从 PostgreSQL Compose + Migration 骨架开始首个实现步骤；</li>
+<li>增加 V3 Feature Flag、数据库配置和依赖；</li>
+<li>增加 PostgreSQL Compose 与 Alembic async 骨架；</li>
+<li>实现默认禁用的 V3 Database/Container 生命周期并验证 Legacy 不回归；</li>
 <li>每个步骤按“状态更新、测试、中文提交、立即推送”执行。</li>
 </ol>
 <p>当前回滚点为 <code>origin/main@68884db</code>；Phase 1 未验收前不合并 <code>main</code>、不部署服务器。</p>
