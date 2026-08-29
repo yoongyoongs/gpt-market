@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="61183a39296d68c1dd5cbea3787bfe347273c6b35c80a819cf27e996a547b480"><title>gpt-market V3 数据库设计</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="48daf4b765d9875c0adc794dd06e0f74909c58dbbc6432d34465a9ba4d8e6e97"><title>gpt-market V3 数据库设计</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -68,6 +68,7 @@
 <li><a href="#103-entry_plans">10.3 entry_plans</a></li>
 <li><a href="#104-reviews">10.4 reviews</a></li>
 <li><a href="#105-market_reviews">10.5 market_reviews</a></li>
+<li><a href="#106-position_reviews">10.6 position_reviews</a></li>
 </ul>
 </li>
 <li><a href="#11-accounttrade-portfolio">11. Account、Trade 与 Portfolio</a><ul>
@@ -75,9 +76,10 @@
 <li><a href="#112-opening_positions">11.2 opening_positions</a></li>
 <li><a href="#113-trade_ledger">11.3 trade_ledger</a></li>
 <li><a href="#114-trade_corrections">11.4 trade_corrections</a></li>
-<li><a href="#115-reconciliations">11.5 reconciliations</a></li>
-<li><a href="#116-position_projections-portfolio_snapshots">11.6 position_projections / portfolio_snapshots</a></li>
-<li><a href="#117-portfolio_preferences">11.7 portfolio_preferences</a></li>
+<li><a href="#115-portfolio_adjustments">11.5 portfolio_adjustments</a></li>
+<li><a href="#116-reconciliations">11.6 reconciliations</a></li>
+<li><a href="#117-position_projections-portfolio_snapshots">11.7 position_projections / portfolio_snapshots</a></li>
+<li><a href="#118-portfolio_preferences">11.8 portfolio_preferences</a></li>
 </ul>
 </li>
 <li><a href="#12-performancereplay-strategy">12. Performance、Replay 与 Strategy</a></li>
@@ -93,7 +95,7 @@
 <li><a href="#17-phase-1">17. Phase 1 输出要求</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/数据库设计.md · 内容哈希：61183a39296d</div><h1 id="gpt-market-v3">gpt-market V3 数据库设计<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/数据库设计.md · 内容哈希：48daf4b765d9</div><h1 id="gpt-market-v3">gpt-market V3 数据库设计<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>基线：V3 Architecture Baseline 1.0
 状态：逻辑设计基线，尚未创建 PostgreSQL Migration。
@@ -142,7 +144,7 @@ known_at
 created_at
 </code></pre>
 <h3 id="32">3.2 不可变约定<a class="headerlink" href="#32" title="Permanent link">&para;</a></h3>
-<p>Decision、Review、MarketReview、Trade、Evidence Raw、Feature Run、Context Pack 完成后禁止 UPDATE 业务内容。纠错使用 Correction/Revision/Replacement 记录。数据库权限和 Trigger 可在稳定后增加不可变保护。</p>
+<p>Decision、Review、PositionReview、MarketReview、EntryPlan Version、Trade、Portfolio Adjustment、Evidence Raw、Feature Run、Context Pack 完成后禁止 UPDATE 业务内容。纠错使用 Correction/Revision/Replacement 记录。数据库权限和 Trigger 可在稳定后增加不可变保护。</p>
 <h2 id="4">4. 数据域关系总览<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
 <pre><code class="language-mermaid">erDiagram
     UNIVERSE_SNAPSHOT ||--o{ UNIVERSE_MEMBER : contains
@@ -154,10 +156,15 @@ created_at
     TASK_RUN ||--o{ AI_RESULT_ATOMIC_GROUP : imports
     AI_RESULT_BUNDLE ||--o{ AI_RESULT_ATOMIC_GROUP : contains
     DECISION ||--o{ REVIEW : reviewed_by
+    ACCOUNT ||--o{ POSITION_REVIEW : receives
+    DECISION o|--o{ POSITION_REVIEW : optional_context
+    ENTRY_PLAN ||--o| ENTRY_PLAN : supersedes
     ACCOUNT ||--o{ TRADE_LEDGER : records
     ACCOUNT ||--o{ OPENING_POSITION : starts
+    ACCOUNT ||--o{ PORTFOLIO_ADJUSTMENT : adjusts
+    CORPORATE_ACTION o|--o{ PORTFOLIO_ADJUSTMENT : causes
     DECISION o|--o{ TRADE_LEDGER : informs
-    ENTRY_PLAN o|--o{ TRADE_LEDGER : compared_with
+    ENTRY_PLAN o|--o{ TRADE_LEDGER : binds_version
 </code></pre>
 <h2 id="5-universe">5. Universe 与证券主数据<a class="headerlink" href="#5-universe" title="Permanent link">&para;</a></h2>
 <h3 id="51-securities">5.1 <code>securities</code><a class="headerlink" href="#51-securities" title="Permanent link">&para;</a></h3>
@@ -213,43 +220,51 @@ created_at
 <h3 id="91-task_profiles">9.1 <code>task_profiles</code><a class="headerlink" href="#91-task_profiles" title="Permanent link">&para;</a></h3>
 <p>Profile Code + Version，Schedule、Timezone、Trading Calendar、Context Level、候选/TopK、输出 Schema、宽限期、Strategy Version 和启用状态。</p>
 <h3 id="92-expected_runs-task_runs">9.2 <code>expected_runs</code> / <code>task_runs</code><a class="headerlink" href="#92-expected_runs-task_runs" title="Permanent link">&para;</a></h3>
-<p>Expected 保存理论任务时间与状态；Task Run 保存实际用户触发/待导入/完成/错过状态、Context 和结果。Expected 不代表 AI 已执行。</p>
+<p>Expected 保存理论任务时间与状态；Task Run 保存实际用户触发/待导入/部分完成/完成/错过状态、Context 和结果。Expected 不代表 AI 已执行。</p>
+<p><code>task_runs</code> 至少增加 <code>expected_group_count</code>、<code>successful_group_count</code>、<code>failed_group_count</code>、<code>pending_group_count</code>，并保持 <code>expected = successful + failed + pending</code>（Single Result 视为 expected=1）。状态规则：完全未导入为 <code>PENDING_IMPORT</code>；至少一组成功但仍有失败/待修正为 <code>PARTIAL_COMPLETED</code>；全部必需组成功为 <code>COMPLETED</code>；超过宽限期且完全无结果为 <code>MISSED</code>；人工取消为 <code>CANCELLED</code>。计数与状态必须在 Atomic Group 事务提交后更新，使用行锁或乐观版本避免并发丢失。</p>
 <h3 id="93-agent_tasks">9.3 <code>agent_tasks</code><a class="headerlink" href="#93-agent_tasks" title="Permanent link">&para;</a></h3>
 <p>保存 Task Contract、subject、trigger、as_of、Context Hash、约束和期望结果类型。</p>
 <h3 id="94-ai_result_bundles">9.4 <code>ai_result_bundles</code><a class="headerlink" href="#94-ai_result_bundles" title="Permanent link">&para;</a></h3>
 <p>Bundle Hash、Agent Identity、produced_at、Preview Revision、Idempotency Key、确认人/时间和整体状态。</p>
 <h3 id="95-ai_result_atomic_groups">9.5 <code>ai_result_atomic_groups</code><a class="headerlink" href="#95-ai_result_atomic_groups" title="Permanent link">&para;</a></h3>
-<p><code>group_id</code>，<code>bundle_id</code>，subject、group_hash、validation_status、commit_status、error、retry_of_group_id。唯一键 <code>(bundle_id, group_id)</code>。</p>
+<p><code>group_id</code>，<code>bundle_id</code>，<code>task_run_id</code>，subject、required、group_hash、validation_status、commit_status、error、retry_of_group_id。唯一键 <code>(bundle_id, group_id)</code>。成功/失败状态是 Task Run Group Count 的事实来源。</p>
 <h3 id="96-ai_result_envelopes-ai_result_dependencies">9.6 <code>ai_result_envelopes</code> / <code>ai_result_dependencies</code><a class="headerlink" href="#96-ai_result_envelopes-ai_result_dependencies" title="Permanent link">&para;</a></h3>
 <p>保存每个 Result 的 Schema、Payload Hash、Context/Evidence/Task 引用和组内依赖。跨组不得依赖尚未创建对象。</p>
 <h2 id="10-decisionwatchlist-review">10. Decision、Watchlist 与 Review<a class="headerlink" href="#10-decisionwatchlist-review" title="Permanent link">&para;</a></h2>
 <h3 id="101-watchlists-watchlist_events">10.1 <code>watchlists</code> / <code>watchlist_events</code><a class="headerlink" href="#101-watchlists-watchlist_events" title="Permanent link">&para;</a></h3>
 <p>Watchlist 保存当前投影；每次状态变化写 Event。当前状态可由 Event 重建或校验。</p>
 <h3 id="102-decisions-decision_corrections">10.2 <code>decisions</code> / <code>decision_corrections</code><a class="headerlink" href="#102-decisions-decision_corrections" title="Permanent link">&para;</a></h3>
-<p>Decision 保存完整 Agent Identity、Task/Context/Feature/Recall、Evidence、Thesis、Risk、Horizon 和 Hash。Correction 只追加旧值、新值、原因和操作者。</p>
+<p>Decision 保存完整 Agent Identity、Task/Context/Feature/Recall、Evidence、Thesis、Risk、Horizon、<code>original_entry_plan_id</code>、<code>original_entry_plan_snapshot</code>、<code>original_entry_plan_hash</code> 和 Decision Hash。Correction 只追加旧值、新值、原因和操作者。Decision 中的计划快照永久代表首次判断，不随当前 EntryPlan 变化。</p>
 <h3 id="103-entry_plans">10.3 <code>entry_plans</code><a class="headerlink" href="#103-entry_plans" title="Permanent link">&para;</a></h3>
-<p>计划区间、Trigger、Cancel Condition、Stop/Target、Quantity/Position Suggestion、Horizon、Decision ID、版本和状态。</p>
+<p>EntryPlan 是 Canonical Trade Plan 的不可变版本。至少保存：<code>entry_plan_id</code>、<code>decision_id</code>、<code>version</code>、<code>supersedes_entry_plan_id nullable</code>、<code>created_by_review_id nullable</code>、<code>created_by_position_review_id nullable</code>、<code>status</code>、<code>effective_from</code>、计划区间、Trigger、Cancel Condition、Stop/Target、Quantity/Position Suggestion、Horizon、<code>content_hash</code>、<code>created_at</code>。</p>
+<p>唯一约束 <code>(decision_id, version)</code>；<code>supersedes_entry_plan_id</code> 必须属于同一 Decision 且版本递增。Version 1 不带创建 Review；后续版本只能由普通 Review 或 PositionReview 之一创建。当前有效版本通过 <code>entry_plan_projections.current_entry_plan_id</code> 或唯一 Active Status 表达，不覆盖旧行。没有 Decision 的手工交易可以没有 EntryPlan。</p>
 <h3 id="104-reviews">10.4 <code>reviews</code><a class="headerlink" href="#104-reviews" title="Permanent link">&para;</a></h3>
-<p>绑定 Decision、Previous Review、Context、Evidence、状态、建议和 Hash，只追加。</p>
+<p>绑定 Decision、Previous Review、Context、Evidence、状态、建议和 Hash，只追加。若 Review 调整交易计划，同一 Atomic Group 中必须创建新 EntryPlan Version，并由 <code>created_by_review_id</code> 指向该 Review。</p>
 <h3 id="105-market_reviews">10.5 <code>market_reviews</code><a class="headerlink" href="#105-market_reviews" title="Permanent link">&para;</a></h3>
 <p>绑定 Task Run、Market Regime、Context、Evidence、Agent Identity、as_of、结论、风险、关注行业和 Previous MarketReview，只追加。</p>
+<h3 id="106-position_reviews">10.6 <code>position_reviews</code><a class="headerlink" href="#106-position_reviews" title="Permanent link">&para;</a></h3>
+<p>独立保存 <code>PositionReviewResult</code>，不要求存在 Decision。至少包含：<code>position_review_id</code>、<code>account_id</code>、<code>security_id</code>、<code>position_snapshot_id/portfolio_snapshot_id</code>、<code>decision_id nullable</code>、<code>entry_plan_id nullable</code>、<code>previous_position_review_id nullable</code>、<code>task_run_id</code>、<code>context_pack_id</code>、<code>context_pack_hash</code>、<code>evidence_ids</code>、完整 Agent Identity、<code>as_of</code>、真实数量/成本 Snapshot 引用、<code>thesis_status</code>、supporting/contrary Evidence、changed_facts、new_risks、time_efficiency、recommended_action、reason、content_hash、created_at。</p>
+<p>PositionReview 只追加；Decision/EntryPlan 外键均可空，支持 <code>MANUAL_TRADE_WITHOUT_AI_ENTRY</code>。recommended_action 仅为建议，不能由数据库 Trigger 或 Application Service 自动创建 SELL。索引建议 <code>(account_id, security_id, as_of desc)</code> 和 <code>previous_position_review_id</code>。</p>
 <h2 id="11-accounttrade-portfolio">11. Account、Trade 与 Portfolio<a class="headerlink" href="#11-accounttrade-portfolio" title="Permanent link">&para;</a></h2>
 <h3 id="111-accounts">11.1 <code>accounts</code><a class="headerlink" href="#111-accounts" title="Permanent link">&para;</a></h3>
 <p>账户 ID、名称、币种、成本法、状态。敏感券商标识单独加密或不保存。</p>
 <h3 id="112-opening_positions">11.2 <code>opening_positions</code><a class="headerlink" href="#112-opening_positions" title="Permanent link">&para;</a></h3>
 <p>系统接管前基准数量、平均成本、基准时间、来源、确认人和 Evidence。唯一/版本约束避免重复建立基准。</p>
 <h3 id="113-trade_ledger">11.3 <code>trade_ledger</code><a class="headerlink" href="#113-trade_ledger" title="Permanent link">&para;</a></h3>
-<p><code>trade_id</code>，account/security、side、trade_time、price、quantity、fee、source/reference、Decision/EntryPlan、执行匹配与偏差、created_at。禁止 UPDATE/DELETE。</p>
+<p><code>trade_id</code>，account/security、side、trade_time、price、quantity、fee、source/reference、Decision、<code>entry_plan_id nullable</code>、<code>entry_plan_version nullable</code>、执行匹配与偏差、created_at。禁止 UPDATE/DELETE。Execution Deviation 永久绑定成交时适用的 EntryPlan Version；后续 Plan 变化不得重算该绑定。</p>
 <h3 id="114-trade_corrections">11.4 <code>trade_corrections</code><a class="headerlink" href="#114-trade_corrections" title="Permanent link">&para;</a></h3>
 <p>对原 Trade 的 Reverse/Correction，保存原因、替代值和人工确认。原 Trade 保留。</p>
-<h3 id="115-reconciliations">11.5 <code>reconciliations</code><a class="headerlink" href="#115-reconciliations" title="Permanent link">&para;</a></h3>
+<h3 id="115-portfolio_adjustments">11.5 <code>portfolio_adjustments</code><a class="headerlink" href="#115-portfolio_adjustments" title="Permanent link">&para;</a></h3>
+<p>账户级不可变调整记录，与市场事实层 <code>corporate_actions</code> 分离。至少保存：<code>portfolio_adjustment_id</code>、<code>account_id</code>、<code>security_id</code>、<code>corporate_action_id nullable</code>、<code>adjustment_type</code>、<code>effective_time</code>、<code>quantity_delta</code>、<code>cash_delta</code>、<code>cost_basis_delta</code>、<code>currency</code>、<code>source</code>、<code>source_reference</code>、<code>known_at</code>、<code>confirmation_status</code>、<code>confirmed_by nullable</code>、<code>confirmed_at nullable</code>、<code>created_at</code>、<code>supersedes_adjustment_id nullable</code>、<code>content_hash</code>。</p>
+<p>Adjustment 类型覆盖 <code>CASH_DIVIDEND/STOCK_DIVIDEND/CAPITALIZATION/SPLIT/REVERSE_SPLIT/RIGHTS_ISSUE/OTHER</code>。记录只追加，不覆盖 Trade Ledger；来源不可靠时 <code>source=UNKNOWN</code>、<code>confirmation_status=PENDING_RECONCILIATION</code>，确认或纠错通过新记录完成。</p>
+<h3 id="116-reconciliations">11.6 <code>reconciliations</code><a class="headerlink" href="#116-reconciliations" title="Permanent link">&para;</a></h3>
 <p>券商事实与 Projection 的差异、对账时间、原因、调整方式、证据和确认人。未知原因保持 UNKNOWN。</p>
-<h3 id="116-position_projections-portfolio_snapshots">11.6 <code>position_projections</code> / <code>portfolio_snapshots</code><a class="headerlink" href="#116-position_projections-portfolio_snapshots" title="Permanent link">&para;</a></h3>
-<p>Projection 保存数量、成本、收益和版本，带 <code>last_ledger_sequence</code>；Snapshot 用于历史分析。Projection 可删除重建，不是 Ledger 替代品。</p>
-<h3 id="117-portfolio_preferences">11.7 <code>portfolio_preferences</code><a class="headerlink" href="#117-portfolio_preferences" title="Permanent link">&para;</a></h3>
+<h3 id="117-position_projections-portfolio_snapshots">11.7 <code>position_projections</code> / <code>portfolio_snapshots</code><a class="headerlink" href="#117-position_projections-portfolio_snapshots" title="Permanent link">&para;</a></h3>
+<p>Projection 保存数量、成本、现金影响、收益和版本，带 <code>last_ledger_sequence</code>、<code>last_adjustment_sequence</code>；Snapshot 用于历史分析。Projection 必须能从 Opening Position + Portfolio Adjustment + Trade Ledger + Correction/Reconciliation 重建，可删除重算，不是事实 Ledger 的替代品。</p>
+<h3 id="118-portfolio_preferences">11.8 <code>portfolio_preferences</code><a class="headerlink" href="#118-portfolio_preferences" title="Permanent link">&para;</a></h3>
 <p>保存用户软偏好及版本，不作为数据库硬筛选约束。</p>
 <h2 id="12-performancereplay-strategy">12. Performance、Replay 与 Strategy<a class="headerlink" href="#12-performancereplay-strategy" title="Permanent link">&para;</a></h2>
-<p><code>performance_observations</code> 保存成熟 Horizon 的行情结果；<code>performance_summaries</code> 保存按 Regime/Channel/Strategy/Decision 模式聚合；<code>regression_cases</code> 保存输入要求和阻塞原因；<code>replay_runs</code> 保存 as_of、Revision Set、结果和泄漏检查；<code>strategy_versions</code>、<code>strategy_proposals</code>、<code>strategy_experiments</code>、<code>guardrail_versions</code> 保存版本、审批、Shadow 和回滚关系。</p>
+<p><code>performance_observations</code> 保存成熟 Horizon 的行情结果，并区分 Decision 原始 EntryPlan、后续 Plan Version 和真实成交绑定版本；<code>performance_summaries</code> 保存按 Regime/Channel/Strategy/Decision 模式聚合；<code>regression_cases</code> 保存输入要求和阻塞原因；<code>replay_runs</code> 保存 as_of、Revision Set、结果和泄漏检查；<code>strategy_versions</code>、<code>strategy_proposals</code>、<code>strategy_experiments</code>、<code>guardrail_versions</code> 保存版本、审批、Shadow 和回滚关系。</p>
 <h2 id="13-audit">13. Audit 与运维表<a class="headerlink" href="#13-audit" title="Permanent link">&para;</a></h2>
 <h3 id="131-audit_events">13.1 <code>audit_events</code><a class="headerlink" href="#131-audit_events" title="Permanent link">&para;</a></h3>
 <p><code>audit_id</code>，actor_type/id，action，object_type/id，request_id，before_hash，after_hash，result，event_time，metadata。不得记录 Secret。</p>
@@ -260,8 +275,10 @@ created_at
 <h2 id="14">14. 事务与约束<a class="headerlink" href="#14" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Atomic Group：单组单事务；组失败不回滚其他组；</li>
-<li>Trade Confirm：Draft 校验、Ledger Append、Projection Update、Audit 同事务；</li>
-<li>Decision/Review：内容不可变，Hash 唯一；</li>
+<li>Atomic Group 提交后：Group Status、Task Run Group Count、Task Status 和 Audit 同事务更新；</li>
+<li>Trade Confirm：Draft 校验、EntryPlan Version 绑定、Ledger Append、Projection Update、Audit 同事务；</li>
+<li>Portfolio Adjustment Confirm：Adjustment Append、Projection Update 和 Audit 同事务；</li>
+<li>Decision/Review/PositionReview/EntryPlan Version：内容不可变，Hash 唯一；</li>
 <li>Feature Publish：只有 Run 完整成功后标记 Published；</li>
 <li>Context Confirm：导入时再次核对 Context Hash；</li>
 <li>Idempotency：Import、Draft Confirm、Trade、Job Run 均有唯一键；</li>

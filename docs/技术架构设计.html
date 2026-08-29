@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="6ea6d761b3ab8bf07b856edd4e4acabbe0ceae21aea90acd2a95d9cacf8192a9"><title>gpt-market V3 技术架构设计</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="0ee9a707616d3a45644548f94c76c865d0de31935ee712e2552c46f9069038e2"><title>gpt-market V3 技术架构设计</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -45,7 +45,7 @@
 <li><a href="#14">14. 技术决策待确认</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/技术架构设计.md · 内容哈希：6ea6d761b3ab</div><h1 id="gpt-market-v3">gpt-market V3 技术架构设计<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/技术架构设计.md · 内容哈希：0ee9a707616d</div><h1 id="gpt-market-v3">gpt-market V3 技术架构设计<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>基线：V3 Architecture Baseline 1.0
 状态：目标架构，包含当前实现对照；PostgreSQL、V3 Worker 和 V3 模块尚未实现。</p>
@@ -185,7 +185,7 @@
 <h3 id="42-application-layer">4.2 Application Layer<a class="headerlink" href="#42-application-layer" title="Permanent link">&para;</a></h3>
 <p>编排用例：Build Feature Run、Query Universe、Build Context、Import Bundle、Confirm Trade Draft、Replay Strategy。负责事务边界和权限检查。</p>
 <h3 id="43-domain-layer">4.3 Domain Layer<a class="headerlink" href="#43-domain-layer" title="Permanent link">&para;</a></h3>
-<p>包含 Evidence、Task、Decision、Watchlist、Trade Ledger、Portfolio、Performance 等业务不变量。不得依赖 FastAPI、httpx、模型 SDK或具体数据库驱动。</p>
+<p>包含 Evidence、Task、Decision、版本化 EntryPlan、Watchlist、PositionReview、Trade Ledger、Portfolio Adjustment、Portfolio、Performance 等业务不变量。不得依赖 FastAPI、httpx、模型 SDK或具体数据库驱动。</p>
 <h3 id="44-infrastructure-layer">4.4 Infrastructure Layer<a class="headerlink" href="#44-infrastructure-layer" title="Permanent link">&para;</a></h3>
 <p>Repository、PostgreSQL、Migration、Provider Adapter、Raw File Store、Cache、Scheduler、Clock、ID 和 Hash 实现。</p>
 <p>依赖方向始终从外向内：Interface/Infrastructure 依赖 Application/Domain，Domain 不反向依赖框架。</p>
@@ -222,20 +222,22 @@
 <h3 id="63-ai-result-pipeline">6.3 AI Result Pipeline<a class="headerlink" href="#63-ai-result-pipeline" title="Permanent link">&para;</a></h3>
 <pre><code class="language-text">Upload Single/Bundle → Parse → Group Validation → Batch Preview
 → One User Confirmation → Per Atomic Group Transaction
-→ Successful/Failed Group Result → Task/Audit Update
+→ Successful/Failed Group Result → Task Group Counters/Audit Update
 </code></pre>
-<p>同组严格原子，不同组容错隔离。Confirm 绑定 Bundle Hash、Preview Revision 和 Idempotency Key。</p>
+<p>同组严格原子，不同组容错隔离。Confirm 绑定 Bundle Hash、Preview Revision 和 Idempotency Key。Task Run 根据 expected/successful/failed/pending Group Count 计算 <code>PENDING_IMPORT/PARTIAL_COMPLETED/COMPLETED</code>，而不是把部分成功误标为完成。</p>
 <h3 id="64-trade-pipeline">6.4 Trade Pipeline<a class="headerlink" href="#64-trade-pipeline" title="Permanent link">&para;</a></h3>
-<pre><code class="language-text">Manual/Image → Draft → User Confirm
-→ Immutable Ledger / Opening / Reconciliation
+<pre><code class="language-text">Manual/Image/Corporate Action → Draft or Pending Reconciliation → User Confirm
+→ Immutable Ledger / Opening / Portfolio Adjustment / Reconciliation
 → Projection Rebuild → Portfolio Context
 </code></pre>
-<p>OCR、AI 和外部 Agent 都不能绕过 Draft 与用户确认。</p>
+<p>OCR、AI 和外部 Agent 都不能绕过 Draft 与用户确认。市场层 Corporate Action 不能直接修改账户持仓，必须转换成账户级 Append-only Portfolio Adjustment；来源不可靠时保持 UNKNOWN/Pending。</p>
 <h2 id="7">7. 并发与一致性<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
 <ul>
 <li>使用数据库唯一约束和幂等键防止重复导入；</li>
 <li>Atomic Group 使用独立事务；</li>
 <li>Ledger 追加使用账户/证券维度串行化或乐观版本检查；</li>
+<li>EntryPlan 通过版本链和 Current Projection 表达当前有效计划，禁止 UPDATE 历史版本；</li>
+<li>Trade/Execution Deviation 永久绑定成交当时的 EntryPlan Version；</li>
 <li>Feature Run、Context Pack、Decision 等完成后不可变；</li>
 <li>长任务使用 Run 状态和断点游标，禁止持有数据库长事务；</li>
 <li>Cache 发布使用不可变对象引用交换；</li>
@@ -305,6 +307,10 @@
 <li>Worker Queue/Run 耗时和失败；</li>
 <li>Context 大小与裁剪；</li>
 <li>Bundle 成功/失败组数；</li>
+<li>Task Run 的 Expected/Successful/Failed/Pending Group Count 与 Partial Completed 数；</li>
+<li>PositionReview 创建数、无 Decision 的手工持仓 Review 数和建议动作分布；</li>
+<li>Portfolio Adjustment Pending/Confirmed、来源 UNKNOWN 和 Projection Rebuild 差异；</li>
+<li>EntryPlan Version 数、当前版本和成交绑定版本缺失数；</li>
 <li>Ledger/Projection 一致性；</li>
 <li>READ API P50/P95/P99；</li>
 <li>Expected Run 的 Pending/Missed 数。</li>

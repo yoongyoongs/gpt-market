@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="d5078c744f19f5356288ada6c686c25f59cf95504adad13b05953391764fd3d5"><title>gpt-market V3 需求规格说明</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="ee1568a3946304791a238758c7b3d35c8f0f61c4450e7db07834916fbc5b2a43"><title>gpt-market V3 需求规格说明</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -35,10 +35,13 @@
 </ul>
 </li>
 <li><a href="#8-v3">8. V3 范围外</a></li>
-<li><a href="#9">9. 验收总则</a></li>
+<li><a href="#9">9. 验收总则</a><ul>
+<li><a href="#91">9.1 本轮新增关键验收</a></li>
+</ul>
+</li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求规格说明.md · 内容哈希：d5078c744f19</div><h1 id="gpt-market-v3">gpt-market V3 需求规格说明<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求规格说明.md · 内容哈希：ee1568a39463</div><h1 id="gpt-market-v3">gpt-market V3 需求规格说明<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>文档版本：V3 Architecture Baseline 1.0 配套需求
 状态：实施前基线
@@ -339,6 +342,12 @@
 <td style="text-align: right;">P0</td>
 <td>待实现</td>
 </tr>
+<tr>
+<td>FR-AI-008</td>
+<td>Task Run 支持 PARTIAL_COMPLETED 和组级成功/失败/待处理计数</td>
+<td style="text-align: right;">P0</td>
+<td>待实现</td>
+</tr>
 </tbody>
 </table>
 <h3 id="65">6.5 决策状态<a class="headerlink" href="#65" title="Permanent link">&para;</a></h3>
@@ -386,6 +395,18 @@
 <td>FR-DC-006</td>
 <td>expected_horizon 与 time_efficiency 可解释</td>
 <td style="text-align: right;">P1</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>FR-DC-007</td>
+<td>EntryPlan 为独立版本化 Canonical Trade Plan，旧版本不可覆盖</td>
+<td style="text-align: right;">P0</td>
+<td>待实现</td>
+</tr>
+<tr>
+<td>FR-DC-008</td>
+<td>PositionReview 可脱离 Decision 持久化并管理手工建仓后的真实持仓</td>
+<td style="text-align: right;">P0</td>
 <td>待实现</td>
 </tr>
 </tbody>
@@ -443,6 +464,12 @@
 <td style="text-align: right;">P0</td>
 <td>待实现</td>
 </tr>
+<tr>
+<td>FR-TR-008</td>
+<td>账户级 Portfolio Adjustment 追加记录公司行动对数量、现金和成本的实际影响</td>
+<td style="text-align: right;">P0</td>
+<td>待实现</td>
+</tr>
 </tbody>
 </table>
 <h3 id="67">6.7 评价与演进<a class="headerlink" href="#67" title="Permanent link">&para;</a></h3>
@@ -486,6 +513,12 @@
 <td style="text-align: right;">P2</td>
 <td>待实现</td>
 </tr>
+<tr>
+<td>FR-PF-006</td>
+<td>Performance 分别评价原始 EntryPlan、后续版本和真实成交所绑定版本</td>
+<td style="text-align: right;">P1</td>
+<td>待实现</td>
+</tr>
 </tbody>
 </table>
 <h2 id="7">7. 非功能需求<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
@@ -494,7 +527,9 @@
 <li>MCP、REST、GPT Web 必须复用相同事实 Service；</li>
 <li>同一 Snapshot/Feature Run/Context Pack 必须可通过 ID 和 Hash 复现；</li>
 <li>Bundle 同一 Atomic Group 全部成功或全部回滚，不同组互不丢失；</li>
-<li>Position 可由 Opening Position、Adjustment 与 Trade Ledger 重建。</li>
+<li>Task Run 必须准确表达未导入、部分完成、全部完成和完全错过，不能把 29/30 组成功标记为 COMPLETED；</li>
+<li>Position 可由 Opening Position、账户级 Portfolio Adjustment、Trade Ledger、Correction 和 Reconciliation 重建；</li>
+<li>Execution Deviation 必须绑定成交发生时的 EntryPlan Version，而不是事后当前版本。</li>
 </ul>
 <h3 id="72">7.2 性能<a class="headerlink" href="#72" title="Permanent link">&para;</a></h3>
 <ul>
@@ -543,4 +578,13 @@
 <li>功能实现状态统一维护在《功能清单与开发状态》；</li>
 <li>实际工作进度统一维护在《工作状态》；</li>
 <li>需求变更先更新本文件与追踪关系，再进入实现。</li>
-</ol></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
+</ol>
+<h3 id="91">9.1 本轮新增关键验收<a class="headerlink" href="#91" title="Permanent link">&para;</a></h3>
+<ul>
+<li>无历史 Decision/EntryPlan 的 <code>MANUAL_TRADE_WITHOUT_AI_ENTRY</code> 持仓可以创建 Append-only PositionReview，且建议动作不能生成真实 SELL；</li>
+<li>账户级分红、送转、拆并股、配股调整不覆盖 Trade Ledger，Projection 可从 Opening + Adjustment + Trade + Correction/Reconciliation 重建；</li>
+<li>30 个 Atomic Group 中 29 成功、1 失败时，Task Run 为 <code>PARTIAL_COMPLETED</code>，计数为 30/29/1/0，成功组不丢失；</li>
+<li>Review 修改 Stop/Target/Window/Quantity/Horizon 时创建新 EntryPlan Version，旧版本与 Decision 原始快照永久保留；</li>
+<li>Execution Deviation 和 Performance 均使用真实成交当时绑定的 EntryPlan Version；</li>
+<li>所有 P0/P1 需求必须出现在《需求追踪矩阵》中，并有 Phase、模块、表/API/Job、测试和当前状态。</li>
+</ul></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

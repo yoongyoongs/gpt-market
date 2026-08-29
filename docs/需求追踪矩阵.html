@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="43393e242099cb2565609a27d89c7f403f737a4e8a0ce7ad9ddb4c6cf398e51f"><title>gpt-market V3 需求追踪矩阵</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 使用规则</a></li>
+<li><a href="#2">2. 市场数据与发现</a></li>
+<li><a href="#3-evidence-context">3. Evidence 与 Context</a></li>
+<li><a href="#4-agenttask">4. Agent、Task 与导入</a></li>
+<li><a href="#5">5. 决策、计划与复盘</a></li>
+<li><a href="#6-portfolio">6. 真实交易与 Portfolio</a></li>
+<li><a href="#7-performance-replay">7. Performance 与 Replay</a></li>
+<li><a href="#8">8. 完成判定</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求追踪矩阵.md · 内容哈希：43393e242099</div><h1 id="gpt-market-v3">gpt-market V3 需求追踪矩阵<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>基线：V3 Architecture Baseline 1.0</p>
+<p>状态：实施前追踪基线</p>
+<p>范围：覆盖《需求规格说明》全部 P0/P1；P2 在进入对应扩展阶段前再纳入阻塞验收。</p>
+</blockquote>
+<h2 id="1">1. 使用规则<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>每个需求必须有 Phase、责任模块、数据落点、API/Job、测试、状态和证据承接；缺少任一项不得标记完成。</li>
+<li><code>待实现</code> 表示设计已完成但尚无 V3 代码证据；<code>部分已有</code> 只表示 V1/V2 存在可复用能力，不等于 V3 验收通过；<code>设计约束已确认</code> 不等于功能实现。</li>
+<li>实施时在本表追加真实测试名、提交号、Migration、运行记录或验收报告，不用口头结论替换证据。</li>
+<li>状态变化必须与《功能清单与开发状态》和《工作状态》同步，并按开发规范及时提交、推送。</li>
+</ul>
+<h2 id="2">2. 市场数据与发现<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-MD-001</td>
+<td>冗余 Universe Provider 与 LKG</td>
+<td>P0</td>
+<td style="text-align: right;">2</td>
+<td>Universe</td>
+<td><code>universe_sources/snapshots/members/diffs</code></td>
+<td>Job: Universe Refresh；<code>GET /api/v3/universe/query</code></td>
+<td>Provider fallback、空数据拒绝、LKG stale</td>
+<td>待实现</td>
+<td>需求 §5；详细设计 §4；实施稿 Phase 2</td>
+</tr>
+<tr>
+<td>FR-MD-002</td>
+<td>全 A 股 250–300 日日 K</td>
+<td>P0</td>
+<td style="text-align: right;">2</td>
+<td>Bar Ingestion</td>
+<td><code>raw_bars/bar_series_revisions</code></td>
+<td>Job: Historical Backfill/Daily Bar</td>
+<td>全市场覆盖、断点续跑、日期/OHLC 校验</td>
+<td>待实现</td>
+<td>需求 §5；详细设计 §5；实施稿 Phase 2</td>
+</tr>
+<tr>
+<td>FR-MD-003</td>
+<td>raw Bar、公司行动和复权因子优先落库</td>
+<td>P0</td>
+<td style="text-align: right;">2</td>
+<td>Bar/Corporate Action</td>
+<td><code>raw_bars/corporate_actions/adjustment_factor_revisions</code></td>
+<td>Job: Bar/Factor Ingestion</td>
+<td>raw 不可变、factor revision、前复权-only 限制</td>
+<td>待实现</td>
+<td>需求 §5；数据库 §5；详细设计 §5</td>
+</tr>
+<tr>
+<td>FR-MD-004</td>
+<td>生成绑定 Revision 的复权派生序列</td>
+<td>P0</td>
+<td style="text-align: right;">2</td>
+<td>Derived Series</td>
+<td><code>bar_series_revisions</code></td>
+<td>Job: Derived Series Build</td>
+<td>revision 绑定、重算一致性、源数据限制标记</td>
+<td>待实现</td>
+<td>需求 §5；详细设计 §5.2</td>
+</tr>
+<tr>
+<td>FR-MD-005</td>
+<td>日 K 增量、周/月 K 本地聚合</td>
+<td>P0</td>
+<td style="text-align: right;">2</td>
+<td>Bar Aggregation</td>
+<td><code>raw_bars/bar_series_revisions</code></td>
+<td>Job: Daily Bar Increment/Aggregate</td>
+<td>增量幂等、周月边界、停牌日</td>
+<td>部分已有，V3 待实现</td>
+<td>需求 §5；现有 Legacy Kline；实施稿 Phase 2</td>
+</tr>
+<tr>
+<td>FR-MD-006</td>
+<td>全市场 Feature Run 版本化/重放</td>
+<td>P0</td>
+<td style="text-align: right;">3</td>
+<td>Feature</td>
+<td><code>feature_runs/security_features</code></td>
+<td>Job: Feature Run；<code>GET /api/v3/universe/features</code></td>
+<td>Published 门禁、run hash、重放一致</td>
+<td>待实现</td>
+<td>需求 §5；详细设计 §5.3</td>
+</tr>
+<tr>
+<td>FR-MD-007</td>
+<td>事实型 MarketRegimeSnapshot</td>
+<td>P1</td>
+<td style="text-align: right;">3</td>
+<td>Market Regime</td>
+<td><code>market_regime_snapshots</code></td>
+<td>Job: Market Regime；<code>GET /api/v3/market-regime</code></td>
+<td>事实字段、stale/LKG、无买卖硬开关</td>
+<td>待实现</td>
+<td>需求 §5；详细设计 §6</td>
+</tr>
+<tr>
+<td>FR-DI-001</td>
+<td>Full Universe Query 分页/排序/过滤/字段选择</td>
+<td>P0</td>
+<td style="text-align: right;">3</td>
+<td>Universe Query</td>
+<td><code>feature_runs/security_features</code></td>
+<td><code>GET /api/v3/universe/query</code></td>
+<td>白名单 Filter、稳定 Cursor、最大页长</td>
+<td>待实现</td>
+<td>需求 §6；详细设计 §5.4</td>
+</tr>
+<tr>
+<td>FR-DI-002</td>
+<td>多个可解释 Recall Channel</td>
+<td>P0</td>
+<td style="text-align: right;">5</td>
+<td>Multi-Recall</td>
+<td><code>recall_channels/runs/results</code></td>
+<td>Job: Recall Run；<code>GET /api/v3/recalls</code></td>
+<td>单通道原因、失败隔离、合并不删证券</td>
+<td>待实现</td>
+<td>需求 §6；详细设计 §7.1</td>
+</tr>
+<tr>
+<td>FR-DI-003</td>
+<td>Recall 未命中仍可完整查询</td>
+<td>P0</td>
+<td style="text-align: right;">3/5</td>
+<td>Query/Recall</td>
+<td><code>security_features/recall_results</code></td>
+<td>Universe Query + Recall READ</td>
+<td>未命中证券查询回归测试</td>
+<td>待实现</td>
+<td>需求 §6；系统功能架构 §5</td>
+</tr>
+<tr>
+<td>FR-DI-004</td>
+<td>Raw 与 Action 严格分层</td>
+<td>P0</td>
+<td style="text-align: right;">5/9</td>
+<td>Opportunity/Action</td>
+<td><code>recall_results/watchlist_events</code></td>
+<td><code>GET /api/v3/raw-opportunities</code>；Context READ</td>
+<td>状态不互冒充、无 Final Score</td>
+<td>部分已有，V3 待重建</td>
+<td>需求 §6；实施稿 §20</td>
+</tr>
+<tr>
+<td>FR-DI-005</td>
+<td>Recall Miss 成熟后评价</td>
+<td>P1</td>
+<td style="text-align: right;">5/10</td>
+<td>Recall Evaluation</td>
+<td><code>recall_miss_evaluations/performance_observations</code></td>
+<td>Job: Recall Miss Mature；<code>GET /api/v3/recalls/misses</code></td>
+<td>Horizon 未成熟跳过、原 run 绑定</td>
+<td>待实现</td>
+<td>需求 §6；详细设计 §7.3</td>
+</tr>
+<tr>
+<td>FR-DI-006</td>
+<td>20–100 只 CandidateComparisonPack</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>Candidate Comparison</td>
+<td><code>candidate_comparison_packs/members</code></td>
+<td><code>GET /api/v3/candidates/comparison-pack</code></td>
+<td>候选上限、hash、紧凑字段/不拉深度资料</td>
+<td>待实现</td>
+<td>需求 §6；详细设计 §7.2</td>
+</tr>
+<tr>
+<td>FR-DI-007</td>
+<td>TopK 再加载 NORMAL/DEEP Context</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>Context Builder</td>
+<td><code>context_packs/context_pack_evidence_selections</code></td>
+<td><code>GET /api/v3/stocks/{code}/context-pack</code></td>
+<td>N→TopK 顺序、TopK 之外不深读</td>
+<td>待实现</td>
+<td>需求 §6；系统功能架构 §6</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-evidence-context">3. Evidence 与 Context<a class="headerlink" href="#3-evidence-context" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-EV-001</td>
+<td>Evidence Core</td>
+<td>P0</td>
+<td style="text-align: right;">4</td>
+<td>Evidence Ingestion</td>
+<td><code>evidence_sources/fetch_runs/raw_documents/evidence_records</code></td>
+<td>Job: Evidence Core；Stock Evidence READ</td>
+<td>官方优先、单源失败、Core 闭环覆盖</td>
+<td>待实现</td>
+<td>需求 §7；详细设计 §8</td>
+</tr>
+<tr>
+<td>FR-EV-003</td>
+<td>Fetch→Raw→Parse→Dedup→Link→Conflict→Decay</td>
+<td>P0</td>
+<td style="text-align: right;">4</td>
+<td>Evidence Pipeline</td>
+<td><code>raw_documents/evidence_records/entity_links/conflicts</code></td>
+<td>Evidence Jobs</td>
+<td>原件先落库、解析重放、去重/冲突</td>
+<td>待实现</td>
+<td>需求 §7；实施稿 §9.1</td>
+</tr>
+<tr>
+<td>FR-EV-004</td>
+<td>FACT/OFFICIAL/VENDOR/NEWS/OPINION 分类</td>
+<td>P0</td>
+<td style="text-align: right;">4</td>
+<td>Evidence Domain</td>
+<td><code>evidence_records/evidence_sources</code></td>
+<td>Evidence READ</td>
+<td>类型枚举、Opinion 不升级 Fact</td>
+<td>待实现</td>
+<td>需求 §7；实施稿 §9</td>
+</tr>
+<tr>
+<td>FR-EV-005</td>
+<td>外部文本 Untrusted 隔离</td>
+<td>P0</td>
+<td style="text-align: right;">4/6</td>
+<td>Evidence/Context</td>
+<td><code>raw_documents/context_packs</code></td>
+<td>Evidence Parse + Context Build</td>
+<td>Prompt injection fixture、指令区隔离</td>
+<td>待实现</td>
+<td>需求 §7；详细设计 §8.4</td>
+</tr>
+<tr>
+<td>FR-CT-001</td>
+<td>FAST/NORMAL/DEEP Context</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>Context Builder</td>
+<td><code>context_packs</code></td>
+<td>Stock/Task Context READ</td>
+<td>Token 预算、必保事实、质量警告</td>
+<td>待实现</td>
+<td>需求 §7；详细设计 §9</td>
+</tr>
+<tr>
+<td>FR-CT-002</td>
+<td>保存 Evidence 选择解释</td>
+<td>P1</td>
+<td style="text-align: right;">6</td>
+<td>Context Retrieval</td>
+<td><code>context_pack_evidence_selections</code></td>
+<td>Context/Evidence READ</td>
+<td>选择顺序/hash/正反面可重放</td>
+<td>待实现</td>
+<td>需求 §7；实施稿 §10.1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-agenttask">4. Agent、Task 与导入<a class="headerlink" href="#4-agenttask" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-AI-001</td>
+<td>标准 Agent Contract / Model-Agnostic Schema</td>
+<td>P0</td>
+<td style="text-align: right;">1</td>
+<td>Contracts</td>
+<td><code>agent_tasks/ai_result_envelopes</code></td>
+<td>AI Import API</td>
+<td>Schema 版本、Agent Identity、未知模型</td>
+<td>仅设计完成</td>
+<td>需求 §8；数据库 §9</td>
+</tr>
+<tr>
+<td>FR-AI-002</td>
+<td>Task Profile 的日程/时区/交易日历/Context</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>Task Registry</td>
+<td><code>task_profiles</code></td>
+<td>Task Profile READ；Expected Run Job</td>
+<td>时区、节假日、Profile 版本</td>
+<td>待实现</td>
+<td>需求 §8；详细设计 §10</td>
+</tr>
+<tr>
+<td>FR-AI-003</td>
+<td>Expected Run 不冒充 AI 已执行</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>Task Registry</td>
+<td><code>expected_runs/task_runs</code></td>
+<td>Job: Expected Run Update；Task Run READ</td>
+<td>只登记预期、宽限期/MISSED 规则</td>
+<td>待实现</td>
+<td>需求 §8；实施稿 §11</td>
+</tr>
+<tr>
+<td>FR-AI-004</td>
+<td>ChatGPT Web READ JSON API</td>
+<td>P0</td>
+<td style="text-align: right;">6</td>
+<td>V3 READ API</td>
+<td>各 Snapshot/Context 表</td>
+<td><code>/api/v3/*</code> READ</td>
+<td>契约、缓存/质量、V1/V2 不回归</td>
+<td>部分已有，V3 待实现</td>
+<td>需求 §8；详细设计 §15</td>
+</tr>
+<tr>
+<td>FR-AI-005</td>
+<td>Single/Bundle 一次导入一次确认</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>AI Import</td>
+<td><code>ai_result_imports/bundles/envelopes</code></td>
+<td>Import/Confirm API</td>
+<td>Preview hash、幂等、Single=单组</td>
+<td>待实现</td>
+<td>需求 §8；详细设计 §11</td>
+</tr>
+<tr>
+<td>FR-AI-006</td>
+<td>按逻辑 Atomic Group 原子提交</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>AI Import</td>
+<td><code>ai_result_atomic_groups/dependencies</code></td>
+<td>Confirm API</td>
+<td>单组回滚、跨组隔离、成功/失败组响应</td>
+<td>待实现</td>
+<td>需求 §8；数据库 §9.5–9.6</td>
+</tr>
+<tr>
+<td>FR-AI-007</td>
+<td>全任务记录 Context Hash/Agent Identity</td>
+<td>P0</td>
+<td style="text-align: right;">6/7</td>
+<td>Context/Import</td>
+<td><code>context_packs/market_reviews/decisions/reviews/position_reviews</code></td>
+<td>Context READ + Import API</td>
+<td>Hash 篡改拒绝、Identity 完整性</td>
+<td>待实现</td>
+<td>需求 §8；数据库 §10</td>
+</tr>
+<tr>
+<td>FR-AI-008</td>
+<td>Task Run PARTIAL_COMPLETED 与组计数</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>Task/Import</td>
+<td><code>task_runs/ai_result_atomic_groups</code></td>
+<td>Confirm；Task Run READ</td>
+<td>29/30 部分成功、计数不变量、重试完成</td>
+<td>待实现</td>
+<td>需求 §8；数据库 §9.2/9.5；详细设计 §10–11</td>
+</tr>
+</tbody>
+</table>
+<h2 id="5">5. 决策、计划与复盘<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-DC-001</td>
+<td>Watchlist 状态机与事件历史</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>Watchlist</td>
+<td><code>watchlists/watchlist_events/proposals</code></td>
+<td>Watchlist READ + Import</td>
+<td>非法跃迁、部分卖出、信号非成交</td>
+<td>待实现</td>
+<td>需求 §9；详细设计 §12</td>
+</tr>
+<tr>
+<td>FR-DC-002</td>
+<td>Immutable Decision 与 Correction</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>Decision</td>
+<td><code>decisions/decision_corrections</code></td>
+<td>Decision READ + Import</td>
+<td>禁 UPDATE/DELETE、追加纠错、hash</td>
+<td>待实现</td>
+<td>需求 §9；数据库 §10.2</td>
+</tr>
+<tr>
+<td>FR-DC-003</td>
+<td>Append-only Review 与 MarketReview</td>
+<td>P0</td>
+<td style="text-align: right;">7</td>
+<td>Review</td>
+<td><code>reviews/market_reviews</code></td>
+<td>Review/Market Review READ + Import</td>
+<td>Previous Link、独立组、禁止交易副作用</td>
+<td>待实现</td>
+<td>需求 §9；数据库 §10.4–10.5</td>
+</tr>
+<tr>
+<td>FR-DC-004</td>
+<td>EntryPlan 与真实成交分离</td>
+<td>P0</td>
+<td style="text-align: right;">7/8</td>
+<td>Plan/Trade</td>
+<td><code>entry_plans/trade_ledger</code></td>
+<td>Plan READ + Manual Trade</td>
+<td>建议不建仓、成交须用户确认</td>
+<td>待实现</td>
+<td>需求 §9；系统功能架构 §7–8</td>
+</tr>
+<tr>
+<td>FR-DC-005</td>
+<td>Raw/Action/Entry/ActualTrade 不互冒充</td>
+<td>P0</td>
+<td style="text-align: right;">5/7/8/9</td>
+<td>Opportunity/Decision/Trade</td>
+<td><code>recall_results/watchlists/entry_plans/trade_ledger</code></td>
+<td>对应 READ/WRITE</td>
+<td>分层状态与资金事实边界</td>
+<td>待实现</td>
+<td>需求 §9；实施稿 §20</td>
+</tr>
+<tr>
+<td>FR-DC-006</td>
+<td>expected_horizon/time_efficiency 可解释</td>
+<td>P1</td>
+<td style="text-align: right;">9</td>
+<td>Action/Review</td>
+<td><code>decisions/reviews/position_reviews</code></td>
+<td>Context/Review READ</td>
+<td>枚举、交易日计算、无黑盒总分</td>
+<td>待实现</td>
+<td>需求 §9；实施稿 §21</td>
+</tr>
+<tr>
+<td>FR-DC-007</td>
+<td>EntryPlan Canonical 不可变版本链</td>
+<td>P0</td>
+<td style="text-align: right;">7/9</td>
+<td>EntryPlan</td>
+<td><code>entry_plans/decisions</code></td>
+<td>Plan Versions READ + Import</td>
+<td>V1 固定、supersedes 链、旧版不可覆盖</td>
+<td>待实现</td>
+<td>需求 §9；数据库 §10.4；详细设计 §12</td>
+</tr>
+<tr>
+<td>FR-DC-008</td>
+<td>独立 PositionReview 支持手工持仓</td>
+<td>P0</td>
+<td style="text-align: right;">8/9</td>
+<td>Position Review</td>
+<td><code>position_reviews</code></td>
+<td>Portfolio Reviews/Context READ + Import</td>
+<td>decision/plan 为空、追加链、不生成 SELL</td>
+<td>待实现</td>
+<td>需求 §9；数据库 §10.6；详细设计 §12.1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-portfolio">6. 真实交易与 Portfolio<a class="headerlink" href="#6-portfolio" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-TR-001</td>
+<td>手工录入真实 BUY/SELL</td>
+<td>P0</td>
+<td style="text-align: right;">8</td>
+<td>Trade</td>
+<td><code>trade_ledger</code></td>
+<td>Manual Trade Preview/Confirm</td>
+<td>超卖、重复、确认前不入账</td>
+<td>待实现</td>
+<td>需求 §10；详细设计 §13.1</td>
+</tr>
+<tr>
+<td>FR-TR-002</td>
+<td>截图只生成 Draft</td>
+<td>P1</td>
+<td style="text-align: right;">8</td>
+<td>Image Import</td>
+<td><code>image_imports/trade_drafts/position_snapshot_drafts</code></td>
+<td>Import Image/Draft Confirm</td>
+<td>低置信字段、持仓图不伪造 BUY</td>
+<td>待实现</td>
+<td>需求 §10；实施稿 §17</td>
+</tr>
+<tr>
+<td>FR-TR-003</td>
+<td>Immutable Trade Ledger</td>
+<td>P0</td>
+<td style="text-align: right;">8</td>
+<td>Trade Ledger</td>
+<td><code>trade_ledger/trade_corrections</code></td>
+<td>Trade Confirm/Correction</td>
+<td>禁 UPDATE/DELETE、Reverse、幂等</td>
+<td>待实现</td>
+<td>需求 §10；数据库 §11.3–11.4</td>
+</tr>
+<tr>
+<td>FR-TR-004</td>
+<td>Opening Position / Reconciliation</td>
+<td>P0</td>
+<td style="text-align: right;">8</td>
+<td>Portfolio Bootstrap</td>
+<td><code>opening_positions/reconciliations</code></td>
+<td>Draft Confirm/Reconcile</td>
+<td>不伪造历史 BUY、UNKNOWN 保留</td>
+<td>待实现</td>
+<td>需求 §10；实施稿 §17.1</td>
+</tr>
+<tr>
+<td>FR-TR-005</td>
+<td>Ledger 可重建，Projection 仅缓存</td>
+<td>P0</td>
+<td style="text-align: right;">8</td>
+<td>Projection</td>
+<td><code>position_projections</code> + Ledger</td>
+<td>Job: Projection Verify；Portfolio READ</td>
+<td>全量重放、sequence、缓存丢弃重建</td>
+<td>待实现</td>
+<td>需求 §10；详细设计 §13.3</td>
+</tr>
+<tr>
+<td>FR-TR-006</td>
+<td>多维 Execution Deviation</td>
+<td>P1</td>
+<td style="text-align: right;">8</td>
+<td>Execution Analysis</td>
+<td><code>trade_ledger/performance_observations</code></td>
+<td>Trade Confirm；Performance READ</td>
+<td>价格/时间/数量/触发/取消、无 Plan</td>
+<td>待实现</td>
+<td>需求 §10；详细设计 §13.5</td>
+</tr>
+<tr>
+<td>FR-TR-007</td>
+<td>Portfolio 事实和软偏好不硬筛选</td>
+<td>P0</td>
+<td style="text-align: right;">8/9</td>
+<td>Portfolio Context</td>
+<td><code>portfolio_snapshots/preferences</code></td>
+<td>Portfolio/Preferences READ</td>
+<td>偏好只进 Context、不删除候选</td>
+<td>待实现</td>
+<td>需求 §10；系统功能架构 §8</td>
+</tr>
+<tr>
+<td>FR-TR-008</td>
+<td>账户级 Portfolio Adjustment</td>
+<td>P0</td>
+<td style="text-align: right;">8</td>
+<td>Portfolio Adjustment</td>
+<td><code>corporate_actions/portfolio_adjustments</code></td>
+<td>Job: Corporate Action Match；Adjustments READ/Confirm</td>
+<td>Draft→确认→重建、UNKNOWN/pending、Reverse</td>
+<td>待实现</td>
+<td>需求 §10；数据库 §11.5；详细设计 §13.4</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-performance-replay">7. Performance 与 Replay<a class="headerlink" href="#7-performance-replay" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>需求摘要</th>
+<th>优先级</th>
+<th style="text-align: right;">Phase</th>
+<th>模块</th>
+<th>表/存储</th>
+<th>API / Job</th>
+<th>测试承接</th>
+<th>当前状态</th>
+<th>当前证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FR-PF-001</td>
+<td>七类能力独立评价</td>
+<td>P1</td>
+<td style="text-align: right;">10</td>
+<td>Performance</td>
+<td><code>performance_observations/summaries</code></td>
+<td>Job: Performance Mature；Performance READ</td>
+<td>七类不混分、无成交分支</td>
+<td>待实现</td>
+<td>需求 §11；详细设计 §14</td>
+</tr>
+<tr>
+<td>FR-PF-002</td>
+<td>多 Horizon、超额、MFE/MAE、Target/Stop</td>
+<td>P1</td>
+<td style="text-align: right;">10</td>
+<td>Performance</td>
+<td><code>performance_observations</code></td>
+<td>Performance Job/READ</td>
+<td>Horizon 成熟、基准绑定、MFE/MAE</td>
+<td>待实现</td>
+<td>需求 §11；实施稿 §19</td>
+</tr>
+<tr>
+<td>FR-PF-003</td>
+<td>Replay 严格 known_at</td>
+<td>P0</td>
+<td style="text-align: right;">10</td>
+<td>Replay</td>
+<td><code>replay_runs/regression_cases</code> + revisions</td>
+<td>Replay API/Job</td>
+<td>未来 Evidence/Revision 必须 BLOCKED</td>
+<td>待实现</td>
+<td>需求 §11；详细设计 §14/18.4</td>
+</tr>
+<tr>
+<td>FR-PF-004</td>
+<td>601233 缺时点数据保持 BLOCKED</td>
+<td>P0</td>
+<td style="text-align: right;">10</td>
+<td>Regression</td>
+<td><code>regression_cases/replay_runs</code></td>
+<td>Cases/Replay READ</td>
+<td>固定案例断言 <code>BLOCKED_BY_MISSING_POINT_IN_TIME_DATA</code></td>
+<td>设计约束已确认</td>
+<td>需求 §11；实施稿 §22</td>
+</tr>
+<tr>
+<td>FR-PF-006</td>
+<td>原始/修订/成交绑定 Plan 分别评价</td>
+<td>P1</td>
+<td style="text-align: right;">10</td>
+<td>Performance/EntryPlan</td>
+<td><code>entry_plans/trade_ledger/performance_observations</code></td>
+<td>Performance READ/Job</td>
+<td>三类版本归因、最新版不得覆盖历史</td>
+<td>待实现</td>
+<td>需求 §11；数据库 §12；详细设计 §14</td>
+</tr>
+</tbody>
+</table>
+<h2 id="8">8. 完成判定<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>某行只有同时满足以下条件才可标记“已完成”：</p>
+<ol>
+<li>对应 Migration/表或明确的无状态实现已经合并；</li>
+<li>API/Job 契约已实现并通过契约测试；</li>
+<li>单元、集成及必要的 Replay/回归测试通过；</li>
+<li>《功能清单与开发状态》《工作状态》已同步；</li>
+<li>中文提交已推送，并在“当前证据”记录提交号、测试记录或验收报告。</li>
+</ol></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
