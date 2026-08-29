@@ -15,6 +15,8 @@ RUN pip install --index-url "$PIP_INDEX_URL" -r requirements.txt
 COPY app ./app
 COPY scripts ./scripts
 COPY docs ./docs
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
 USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
