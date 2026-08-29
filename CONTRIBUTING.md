@@ -1,5 +1,7 @@
 # 开发与贡献指南
 
+开始任何任务前，先阅读 [开发工作规范](docs/开发规范.md) 和 [当前工作状态](docs/工作状态.md)。每完成一个可验证步骤，都必须同步状态、提交并推送 GitHub。
+
 ## 环境
 
 要求 Python 3.12。
@@ -52,12 +54,12 @@ python -m pytest tests/test_mcp_web_parity.py -q
 
 ## Commit 建议
 
-提交应保持单一目的，消息使用动词开头，例如：
+提交应保持单一目的，并使用中文说明，例如：
 
 ```text
-Add shared snapshot metadata
-Fix canonical scan cache key
-Document MCP and Web parity contract
+功能：增加共享快照元数据
+修复：统一扫描缓存键
+文档：补充MCP与Web一致性约定
 ```
 
 不要提交真实行情凭据、服务器密码、私有域名证书、运行日志或本地虚拟环境。

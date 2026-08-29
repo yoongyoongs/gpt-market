@@ -2,16 +2,26 @@
 
 只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
 
+## 接手开发必读
+
+换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。必须按顺序阅读：
+
+1. 本 README；
+2. [V3 架构设计实施稿](docs/架构设计实施稿.md)；
+3. [开发工作规范](docs/开发规范.md)；
+4. [当前工作状态](docs/工作状态.md)；
+5. 当前任务相关代码和测试。
+
+然后检查 `git status --short --branch`、最近提交和远端同步状态。默认无需阅读 V1/V2 历史过程文档；需要追溯时再通过 [文档索引](docs/README.md) 定向查看。
+
+开发必须遵循“小步可验证”：每完成一个独立步骤，就更新工作状态、运行测试、使用中文提交说明提交并立即推送 GitHub。若 Token、时间或外部条件即将中断，必须在任务分支创建可恢复检查点并写清下一步，禁止只把进度留在对话中。
+
 ## 文档导航
 
-- [开发设计文档](docs/development-design.md)：架构、单一事实源、缓存、质量、指标、扫描与扩展设计。
-- [API 与 MCP 工具参考](docs/api-reference.md)：8 个工具、Web 路由、请求参数和响应模型。
+- [完整文档索引](docs/README.md)：必读、当前参考和历史归档分类。
+- [API 与 MCP 工具参考](docs/api-reference.md)：现有工具、Web 路由、请求参数和响应模型。
 - [测试与验收规范](docs/testing-acceptance.md)：parity、联网测试、发布门禁和排障流程。
 - [东方财富字段实测记录](docs/eastmoney_fields.md)：原始字段、缩放、时间和 K 线格式。
-- [多数据源与 K 线缓存设计](docs/data-source-resilience.md)：Provider 切换、SQLite、临时日 K、限流、健康状态与故障语义。
-- [周期能力矩阵与修复验收](docs/period-capability-audit-20260829.md)：Quote、分钟/日/周/月 K、复权、本地聚合、partial 和 20 股服务器实测。
-- [V2 机会扫描 Phase 1 验收](docs/opportunity-scanner-v2-phase1.md)：V1/V2 并行、候选池、评分公式、真实验收、数据缺口与 Phase 2 计划。
-- [2026-08-28 上线验收](docs/multi-provider-acceptance-20260828.md)：连续三次扫描、缓存命中、双源接管、Live/MCP 与 Top30 前后对比。
 - [服务器部署记录](docs/deployment.md)：Docker、Nginx、Quick Tunnel 与运维命令。
 - [开发与贡献指南](CONTRIBUTING.md)：本地环境、修改边界和提交前检查。
 
@@ -49,7 +59,7 @@ REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kl
 
 `Market/Scanner Service → MarketDataService → ProviderManager → EastmoneyProvider/TencentProvider` 是唯一业务数据路径。东方财富 `secid`、腾讯 `sh/sz` 等代码转换和字段缩放只存在于各自 Provider。日 K 线由 `MarketDataService` 统一读取 L1 内存与 L2 SQLite；MCP 与 Web 使用同一个 singleton Container、同一个缓存、同一个技术指标服务、同一个扫描器以及同一个 `serialize_business()`。
 
-V2 Phase2A 另有独立只读链路：`ScannerService → FundamentalProviderManager → FundamentalProvider`。它只为 V2 增加基本面分与财务风险，不改变上述行情链路、MCP 或 V1。详见 [Phase2A 基本面设计](docs/phase2a-fundamentals.md)。
+V2 Phase2A 另有独立只读链路：`ScannerService → FundamentalProviderManager → FundamentalProvider`。它只为 V2 增加基本面分与财务风险，不改变上述行情链路、MCP 或 V1。历史设计见 [Phase2A 基本面设计](docs/archive/v2/phase2a-fundamentals.md)。
 
 同一底层行情生成确定性的 `snapshot_id`，扫描另带 `scan_id`。全市场快照会填充规范的 `quote:{code}` 缓存，因此紧邻的市场、扫描和单股调用会尽量复用同一标准化 Quote。`tests/test_mcp_web_parity.py` 自动比较三个验收股票、单股详情、市场概况、行业 Top10 和扫描结果。
 
@@ -233,7 +243,8 @@ python scripts/acceptance.py
 app/{api,indicators,mcp,providers,services,utils}
 tests/
 scripts/{probe_eastmoney.py,test_mcp_client.py,acceptance.py}
-docs/{development-design.md,api-reference.md,testing-acceptance.md,eastmoney_fields.md,deployment.md}
+docs/{架构设计实施稿.md,开发规范.md,工作状态.md,README.md}
+docs/archive/{v2,v3-design-inputs}
 Dockerfile
 docker-compose.yml
 nginx.conf.example

@@ -111,7 +111,7 @@ Provider 请求 `fltt=2` 时使用已缩放值；探针使用 `fltt=1` 验证原
 - 成交额：元。
 - 时间：带 `Asia/Shanghai` 时区的 ISO 8601。
 
-详细字段映射见 [东方财富字段实测记录](eastmoney_fields.md)。
+详细字段映射见 [东方财富字段实测记录](../../eastmoney_fields.md)。
 
 ### 5.3 K 线标准化
 
