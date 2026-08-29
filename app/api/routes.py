@@ -19,6 +19,7 @@ from app.api.live import (
     log_live_response,
     unavailable_stock_page,
 )
+from app.api.v2_dashboard_cache import V2DashboardCache
 
 router = APIRouter()
 
@@ -77,6 +78,13 @@ async def _load_live_snapshot():
 
 
 live_cache = LiveSnapshotCache(_load_live_snapshot)
+
+
+async def _load_v2_dashboard():
+    return await container.scanner.scan_mainboard_v2(top_n=30, pool_size=420, min_amount=50_000_000)
+
+
+v2_dashboard_cache = V2DashboardCache(_load_v2_dashboard)
 
 
 def _web_secret() -> str | None:
@@ -397,7 +405,19 @@ async def gpt_scan_v2_html(
     pool_size: int = 420,
     min_amount: float = 50_000_000,
 ):
-    result = await container.scanner.scan_mainboard_v2(top_n, pool_size, min_amount)
+    if (top_n, pool_size, min_amount) == (30, 420, 50_000_000):
+        state = v2_dashboard_cache.get()
+        if state.result is None:
+            return HTMLResponse(
+                "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+                "<meta http-equiv=\"refresh\" content=\"3\"><title>V2 机会扫描初始化中</title></head>"
+                "<body><h1>V2 机会扫描正在初始化</h1><p>后台正在生成首份扫描快照，请稍后自动重试。</p></body></html>",
+                status_code=503,
+                headers=NO_CACHE_HEADERS,
+            )
+        result = state.result
+    else:
+        result = await container.scanner.scan_mainboard_v2(top_n, pool_size, min_amount)
     return v2_scan_page(result, secret)
 
 
