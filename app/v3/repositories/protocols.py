@@ -23,6 +23,8 @@ from app.v3.domain.evidence import (
     EvidenceConflict,
     EvidenceFetchRun,
     EvidenceRelation,
+    EvidenceReadQuery,
+    EvidenceRepositoryPage,
     EvidenceSource,
     NormalizedEvidence,
     ParseAttempt,
@@ -122,6 +124,10 @@ class EvidenceRepository(Protocol):
     async def retrieve(
         self, *, subject_type: str, subject_id: str, as_of: datetime, limit: int
     ) -> tuple[NormalizedEvidence, ...]: ...
+
+    async def retrieve_view(
+        self, *, query: EvidenceReadQuery
+    ) -> EvidenceRepositoryPage: ...
 
 
 class CorporateActionRepository(Protocol):

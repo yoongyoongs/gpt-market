@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,10 @@ from app.v3.domain.evidence import (
     EvidenceConflict,
     EvidenceAvailability,
     EvidenceFetchRun,
+    EvidenceMatchType,
+    EvidenceReadQuery,
+    EvidenceRepositoryPage,
+    EvidenceRepositoryView,
     EvidenceRelation,
     EvidenceSource,
     EvidenceSourceType,
@@ -424,6 +428,127 @@ class SQLAlchemyEvidenceRepository:
             )
         ).scalars().all()
         return tuple(self._record(model) for model in models)
+
+    async def retrieve_view(
+        self, *, query: EvidenceReadQuery
+    ) -> EvidenceRepositoryPage:
+        confirmed_link = exists().where(
+            EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+            EvidenceEntityLinkModel.entity_type == query.subject_type,
+            EvidenceEntityLinkModel.entity_id == query.subject_id,
+            EvidenceEntityLinkModel.status == "CONFIRMED",
+        )
+        candidate_link = exists().where(
+            EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+            EvidenceEntityLinkModel.entity_type == query.subject_type,
+            EvidenceEntityLinkModel.entity_id == query.subject_id,
+            EvidenceEntityLinkModel.status == "CANDIDATE",
+        )
+        direct = and_(
+            EvidenceRecordModel.subject_type == query.subject_type,
+            EvidenceRecordModel.subject_id == query.subject_id,
+        )
+        conflict_status = (
+            select(EvidenceConflictModel.status)
+            .join(
+                EvidenceConflictMemberModel,
+                EvidenceConflictMemberModel.conflict_id == EvidenceConflictModel.conflict_id,
+            )
+            .where(EvidenceConflictMemberModel.evidence_id == EvidenceRecordModel.evidence_id)
+            .order_by(EvidenceConflictModel.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        match_type = (
+            select(EvidenceEntityLinkModel.status)
+            .where(
+                EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+                EvidenceEntityLinkModel.entity_type == query.subject_type,
+                EvidenceEntityLinkModel.entity_id == query.subject_id,
+                EvidenceEntityLinkModel.status.in_(("CONFIRMED", "CANDIDATE")),
+            )
+            .order_by(EvidenceEntityLinkModel.confidence.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        relevance_age_days = func.greatest(
+            0.0,
+            func.extract(
+                "epoch",
+                query.as_of - func.coalesce(
+                    EvidenceRecordModel.event_time,
+                    EvidenceRecordModel.publish_time,
+                    EvidenceRecordModel.known_at,
+                ),
+            ) / 86400.0,
+        )
+        effective_relevance = case(
+            (
+                EvidenceRecordModel.decay_model == DecayModel.LINEAR.value,
+                func.greatest(
+                    0.0,
+                    EvidenceRecordModel.relevance * (
+                        1 - func.coalesce(EvidenceRecordModel.decay_rate, 0) * relevance_age_days
+                    ),
+                ),
+            ),
+            (
+                EvidenceRecordModel.decay_model == DecayModel.EXPONENTIAL.value,
+                EvidenceRecordModel.relevance * func.exp(
+                    -func.coalesce(EvidenceRecordModel.decay_rate, 0) * relevance_age_days
+                ),
+            ),
+            else_=EvidenceRecordModel.relevance,
+        )
+        filters = [
+            or_(direct, confirmed_link, candidate_link if query.include_candidates else False),
+            EvidenceRecordModel.known_at <= query.as_of,
+            EvidenceRecordModel.availability == EvidenceAvailability.AVAILABLE.value,
+            or_(EvidenceRecordModel.expire_at.is_(None), EvidenceRecordModel.expire_at >= query.as_of),
+            effective_relevance > 0,
+            effective_relevance >= query.min_effective_relevance,
+        ]
+        if query.evidence_types:
+            filters.append(EvidenceRecordModel.evidence_type.in_(tuple(query.evidence_types)))
+        if query.source_types:
+            filters.append(EvidenceRecordModel.source_type.in_(tuple(query.source_types)))
+        rows = (
+            await self._session.execute(
+                select(EvidenceRecordModel, match_type, conflict_status)
+                .where(*filters)
+                .order_by(
+                    effective_relevance.desc(),
+                    EvidenceRecordModel.source_priority,
+                    EvidenceRecordModel.known_at.desc(),
+                    EvidenceRecordModel.evidence_id,
+                )
+                .limit(query.limit)
+            )
+        ).all()
+        result = []
+        for model, link_status, current_conflict_status in rows:
+            if model.subject_type == query.subject_type and model.subject_id == query.subject_id:
+                matched_by = EvidenceMatchType.DIRECT
+            elif link_status == "CONFIRMED":
+                matched_by = EvidenceMatchType.CONFIRMED_LINK
+            else:
+                matched_by = EvidenceMatchType.CANDIDATE_LINK
+            result.append(EvidenceRepositoryView(
+                record=self._record(model),
+                match_type=matched_by,
+                conflict_status=current_conflict_status or "NONE",
+            ))
+        coverage_rows = (
+            await self._session.execute(
+                select(EvidenceRecordModel.evidence_type, func.count())
+                .where(*filters)
+                .group_by(EvidenceRecordModel.evidence_type)
+            )
+        ).all()
+        return EvidenceRepositoryPage(
+            views=tuple(result),
+            coverage_counts={EvidenceType(kind): count for kind, count in coverage_rows},
+        )
 
     @staticmethod
     def _raw(model: RawDocumentModel) -> RawDocument:

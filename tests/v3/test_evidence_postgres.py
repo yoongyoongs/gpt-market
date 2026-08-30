@@ -19,6 +19,8 @@ from app.v3.domain.evidence import (
     EvidenceSource,
     EvidenceSourceType,
     EvidenceFetchRun,
+    EvidenceMatchType,
+    EvidenceReadQuery,
     FetchRunStatus,
     FetchedDocument,
     NormalizedEvidence,
@@ -459,4 +461,110 @@ async def test_multisource_exact_duplicate_and_conflict_are_append_only() -> Non
     assert dict(relation_types.all()) == {"EXACT_DUPLICATE": 1}
     assert conflict[1] == 1
     assert member_count == 3
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_evidence_read_view_uses_confirmed_links_and_hides_candidates_by_default() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = uuid4().hex
+    linked_entity_id = f"FIXTURE:{suffix}"
+    source = EvidenceSource(
+        code=f"fixture-read-{suffix}",
+        source_type=EvidenceSourceType.NEWS,
+        capabilities={"types": ["NEWS"]},
+        priority=80,
+        parser_version="fixture-v1",
+        reliability=0.8,
+    )
+    fetched = FetchedDocument(
+        document_key=f"read-{suffix}",
+        raw_reference=f"https://example.invalid/read/{suffix}",
+        mime_type="application/json",
+        payload_text='{"title":"linked evidence"}',
+        fetch_time=NOW,
+        known_at=NOW,
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        source_id = await uow.evidence.upsert_source(source)
+        raw = RawDocument.build(
+            evidence_source_id=source_id,
+            fetched=fetched,
+            normalized_reference=fetched.raw_reference,
+        )
+        assert await uow.evidence.add_raw_if_absent(raw)
+        await uow.commit()
+    records = tuple(
+        NormalizedEvidence.build(
+            raw_document_id=raw.raw_document_id,
+            evidence_type=EvidenceType.NEWS,
+            source_type=EvidenceSourceType.NEWS,
+            source_priority=source.priority,
+            subject_type="MARKET",
+            subject_id="CN_A_SHARES",
+            claim_key=f"news:{suffix}:{index}",
+            source=source.code,
+            payload={"index": index},
+            normalized_payload={"index": index},
+            fetch_time=NOW,
+            known_at=NOW,
+            confidence=0.8,
+            relevance=0.9 - index * 0.1,
+            decay_model=DecayModel.NONE,
+            parser_version="fixture-v1",
+        )
+        for index in range(2)
+    )
+    links = (
+        EntityLink.build(
+            evidence_id=records[0].evidence_id,
+            entity_type="SECURITY",
+            entity_id=linked_entity_id,
+            match_basis={"alias": "贵州茅台"},
+            confidence=0.98,
+            status=EntityLinkStatus.CONFIRMED,
+        ),
+        EntityLink.build(
+            evidence_id=records[1].evidence_id,
+            entity_type="SECURITY",
+            entity_id=linked_entity_id,
+            match_basis={"alias": "茅台"},
+            confidence=0.7,
+            status=EntityLinkStatus.CANDIDATE,
+        ),
+    )
+    attempt = ParseAttempt.build(
+        raw_document_id=raw.raw_document_id,
+        parser_code="fixture-read",
+        parser_version="fixture-v1",
+        status=ParseStatus.SUCCESS,
+        output_count=2,
+        error=None,
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.evidence.publish_parse(attempt, records, links)
+        await uow.commit()
+    base_query = EvidenceReadQuery(
+        subject_type="SECURITY",
+        subject_id=linked_entity_id,
+        as_of=NOW,
+        evidence_types=(EvidenceType.NEWS,),
+        source_types=(EvidenceSourceType.NEWS,),
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        confirmed = await uow.evidence.retrieve_view(query=base_query)
+        with_candidates = await uow.evidence.retrieve_view(
+            query=base_query.model_copy(update={"include_candidates": True})
+        )
+    assert [(item.record.evidence_id, item.match_type) for item in confirmed.views] == [
+        (records[0].evidence_id, EvidenceMatchType.CONFIRMED_LINK)
+    ]
+    assert {item.match_type for item in with_candidates.views} == {
+        EvidenceMatchType.CONFIRMED_LINK,
+        EvidenceMatchType.CANDIDATE_LINK,
+    }
     await engine.dispose()

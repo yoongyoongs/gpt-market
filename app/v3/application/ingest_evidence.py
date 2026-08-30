@@ -2,15 +2,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from typing import Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field
 
 from app.v3.contracts.base import V3Contract
 from app.v3.application.analyze_evidence import AnalyzeEvidenceService
-from app.v3.domain.evidence import ParseAttempt, ParseStatus, RawDocument
+from app.v3.domain.evidence import (
+    EntityLink,
+    NormalizedEvidence,
+    ParseAttempt,
+    ParseStatus,
+    RawDocument,
+)
 from app.v3.providers.evidence import EvidenceParser, EvidenceProvider
 from app.v3.repositories.protocols import UnitOfWork
+
+
+class EvidenceEntityLinker(Protocol):
+    def links_for(self, records: tuple[NormalizedEvidence, ...]) -> tuple[EntityLink, ...]: ...
 
 
 def normalize_reference(value: str) -> str:
@@ -46,11 +57,13 @@ class IngestEvidenceBatchService:
         uow_factory: Callable[[], UnitOfWork],
         *,
         analyzer: AnalyzeEvidenceService | None = None,
+        entity_linker: EvidenceEntityLinker | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock
         self._analyzer = analyzer or AnalyzeEvidenceService(uow_factory)
+        self._entity_linker = entity_linker
 
     async def execute(
         self,
@@ -101,7 +114,11 @@ class IngestEvidenceBatchService:
             started_at = self._clock()
             try:
                 parsed = parser.parse(raw, source)
-                self._validate_parser_output(raw, source, parsed.records, parsed.links)
+                links = self._merge_links(
+                    parsed.links,
+                    () if self._entity_linker is None else self._entity_linker.links_for(parsed.records),
+                )
+                self._validate_parser_output(raw, source, parsed.records, links)
                 analysis = await self._analyzer.execute(parsed.records)
                 completed_at = self._clock()
                 attempt = ParseAttempt.build(
@@ -118,7 +135,7 @@ class IngestEvidenceBatchService:
                     published = await uow.evidence.publish_parse(
                         attempt,
                         parsed.records,
-                        parsed.links,
+                        links,
                         analysis.relations,
                         analysis.conflicts,
                     )
@@ -172,3 +189,12 @@ class IngestEvidenceBatchService:
             raise ValueError("parser output contains duplicate evidence IDs")
         if any(link.evidence_id not in record_ids for link in links):
             raise ValueError("entity link references evidence outside the parse bundle")
+
+    @staticmethod
+    def _merge_links(
+        parser_links: tuple[EntityLink, ...], matched_links: tuple[EntityLink, ...]
+    ) -> tuple[EntityLink, ...]:
+        merged = {}
+        for link in (*matched_links, *parser_links):
+            merged[(link.evidence_id, link.entity_type, link.entity_id)] = link
+        return tuple(merged.values())

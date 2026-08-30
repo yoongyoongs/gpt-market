@@ -445,3 +445,57 @@ class EvidenceConflict(V3Contract):
         payload = cls.model_construct(**normalized, content_hash="0" * 64)
         content_hash = canonical_hash(payload.model_dump(exclude={"conflict_id", "content_hash"}))
         return cls(**normalized, content_hash=content_hash)
+
+
+class EvidenceMatchType(StrEnum):
+    DIRECT = "DIRECT"
+    CONFIRMED_LINK = "CONFIRMED_LINK"
+    CANDIDATE_LINK = "CANDIDATE_LINK"
+
+
+class EvidenceReadQuery(V3Contract):
+    subject_type: str = Field(min_length=1, max_length=32)
+    subject_id: str = Field(min_length=1, max_length=128)
+    as_of: datetime
+    evidence_types: tuple[EvidenceType, ...] = ()
+    source_types: tuple[EvidenceSourceType, ...] = ()
+    min_effective_relevance: float = Field(default=0, ge=0, le=1)
+    include_candidates: bool = False
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: datetime) -> datetime:
+        return require_aware(value, "as_of")
+
+
+class EvidenceRepositoryView(V3Contract):
+    record: NormalizedEvidence
+    match_type: EvidenceMatchType
+    conflict_status: str = "NONE"
+
+
+class EvidenceRepositoryPage(V3Contract):
+    views: tuple[EvidenceRepositoryView, ...]
+    coverage_counts: dict[EvidenceType, int]
+
+
+class EvidenceReadItem(V3Contract):
+    record: NormalizedEvidence
+    match_type: EvidenceMatchType
+    effective_relevance: float = Field(ge=0, le=1)
+    conflict_status: str
+
+
+class EvidenceTypeCoverage(V3Contract):
+    evidence_type: EvidenceType
+    status: str
+    count: int = Field(ge=0)
+
+
+class EvidenceReadPage(V3Contract):
+    subject_type: str
+    subject_id: str
+    as_of: datetime
+    items: tuple[EvidenceReadItem, ...]
+    coverage: tuple[EvidenceTypeCoverage, ...]

@@ -1,8 +1,8 @@
 # Phase 4 证据管道实施记录
 
-> 日期：2026-08-30（Asia/Shanghai）  
-> 分支：`codex/phase4-evidence-ingestion`  
-> 状态：Evidence 基础闭环、Core Provider、Fallback/全源 Registry Job 已完成；实体匹配和 READ API 待完成
+> 日期：2026-08-31（Asia/Shanghai）
+> 分支：`codex/phase4-evidence-ingestion`
+> 状态：Phase 4 Core Evidence Ingestion 技术验收完成；Extended 按后续迭代接入
 
 ## 1. 当前范围
 
@@ -20,6 +20,8 @@
 - 巨潮官方公告、东方财富财务/业绩预告/业绩快报、中国政府网最新政策和东方财富基础财经新闻 Provider/Parser。
 - 上交所官方公告备用源、公告跨源语义 Claim Key 与 A 股代码入口过滤；
 - Registry fallback/全源采集、单源失败隔离、分段 `--resume` 和结构化 Job 报告。
+- 基于 Published Universe 的 Security 字典、显式 Industry 字典和 Market 别名匹配；歧义实体只落 `CANDIDATE`。
+- `GET /api/v3/evidence/{subject_type}/{subject_id}` 时点读取，支持类型/来源/有效相关性过滤、Candidate 开关、冲突状态和逐类型 `AVAILABLE/UNKNOWN` Coverage。
 
 ## 2. 关键不变量
 
@@ -53,7 +55,7 @@
 - Phase 4 Domain/PostgreSQL 专项 `13 passed`：Raw 去重、跨来源同内容保留、Parse/Link/Relation/Conflict 原子发布、时点 Retrieval、解析失败保留 Raw、重复跑批幂等和不可变触发器通过。
 - 两页真实数据库分段任务验证首段 `RUNNING + cursor`、恢复后 `COMPLETED`、终态重放不请求 Provider，陈旧 `row_version` checkpoint 被拒绝。
 - 多源真实数据库样例验证相同值建立 `EXACT_DUPLICATE`，不同值形成保留三方成员的 `OPEN` Conflict，并按来源优先级、置信度和 `known_at` 记录临时选择。
-- 配置真实 PostgreSQL 的完整回归 `182 passed, 5 skipped`；本轮 Ruff、`git diff --check` 通过。
+- 配置真实 PostgreSQL 的完整回归 `186 passed, 5 skipped`；本轮改动 Ruff、`git diff --check` 通过。
 
 首批 Core Source 真实联网探针（2026-08-30，均执行 Fetch 与前三条 Parse）：
 
@@ -71,13 +73,17 @@
 
 - 真实 Provider → Raw → Parse → Link/Conflict → Fetch Run 的 PostgreSQL 17 验收：巨潮 `3/3`、财务 `20/20`、政策 `1/1`、新闻 `5/5`，共 29 条 Raw 和 29 条 Evidence，解析失败 0；分页源保持 `RUNNING + cursor`，耗尽源为 `COMPLETED`。
 - `scripts/v3_phase4_evidence.py --collect-all --max-batches 1` 已在 3 只真实证券隔离 Universe 上通过：公告巨潮/上交所双源、财务 24、业绩快报 13、业绩预告 24、政策和新闻均独立报告；已有 Raw 重放显示明确 `duplicate_count`，未重复发布。
-- Registry 专项覆盖主源 `FAILED`、主源 `PARTIAL` 后备用接管、异常能力隔离、无 Provider `UNAVAILABLE` 和互补来源全源采集。当前完整回归 `182 passed, 5 skipped`。
+- Registry 专项覆盖主源 `FAILED`、主源 `PARTIAL` 后备用接管、异常能力隔离、无 Provider `UNAVAILABLE` 和互补来源全源采集。
+- 实体匹配专项覆盖唯一代码/名称、显式行业词、市场别名、数字边界、同名歧义和外部注入文本仅作数据；解析器明确 Link 优先于目录补充 Link。
+- 真实 PostgreSQL 验证 MARKET 主题 Evidence 可经 `CONFIRMED` Link 被 Security 查询读取，`CANDIDATE` 默认隐藏且仅在显式参数下返回，类型/来源过滤有效。
+- Decay-aware READ 连续 100 次实测返回 50 条：平均 `7.438 ms`、P95 `10.385 ms`、最大 `11.195 ms`；数据库按有效相关性排序/过滤并独立聚合 Coverage，衰减为 0 的记录不冒充可用。
+- 当前完整回归 `186 passed, 5 skipped`，2 条既有依赖/异步资源警告未由本阶段引入。
 - 本轮文件 Ruff 和 `git diff --check` 通过；全仓仍保留既有 Legacy Ruff 告警，未扩大 V1/V2 修改范围。
 
-## 5. 待完成
+## 5. 验收结论与边界
 
-1. 完成 Security/Industry/Market 实体字典匹配与低置信 Candidate 工作流；
-2. 完成 Decay-aware Retrieval、Coverage/UNKNOWN 和 READ API；
-3. 扩大真实多源样本验收、性能测试、文档收口、Phase 4 标签。
+Phase 4 Core 满足实施稿验收要点：Core Source 闭环可运行；Official/Vendor/News/Opinion 类型不混淆；冲突成员全部保留；外部文本保持 Untrusted Data，不能进入 Instruction；Extended 不阻塞 Phase 5。
 
-本记录不表示 Phase 4 或整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 `0004`。
+当前行业分类权威源尚未进入 V3，匹配器只接受显式 Industry Catalog；目录为空时行业 Coverage 保持 `UNKNOWN`，不从新闻词语或 Feature 猜测行业。Prompt 中的标签、预算和 Instruction 隔离属于 Phase 6 Context Builder，Phase 4 没有把外部正文送入 Prompt 的路径。
+
+本记录只表示 Phase 4 技术验收完成，不表示整个 V3 完成。生产 V3 仍关闭，生产数据库尚未执行 `0004`。

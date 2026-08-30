@@ -8,6 +8,8 @@ from uuid import UUID
 from app.config import get_settings
 from app.utils.time import now_shanghai
 from app.v3.application.run_evidence_ingestion import RunEvidenceIngestionService
+from app.v3.application.ingest_evidence import IngestEvidenceBatchService
+from app.v3.application.link_evidence_entities import EvidenceEntityMatcher
 from app.v3.application.run_evidence_registry import (
     CapabilityRunStatus,
     RunEvidenceRegistryService,
@@ -109,9 +111,14 @@ async def run(args: argparse.Namespace) -> int:
             raise RuntimeError("a published V3 universe snapshot is required")
         codes = tuple(member.code for member in snapshot.members)
         registry = build_registry(codes)
+        entity_matcher = EvidenceEntityMatcher.from_universe(snapshot)
+        batch_service = IngestEvidenceBatchService(
+            container.uow,
+            entity_linker=entity_matcher,
+        )
         service = RunEvidenceRegistryService(
             registry,
-            RunEvidenceIngestionService(container.uow),
+            RunEvidenceIngestionService(container.uow, batch_service=batch_service),
         )
         result = await service.execute(
             capabilities=tuple(EvidenceCapability),
