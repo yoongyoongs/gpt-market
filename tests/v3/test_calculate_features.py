@@ -42,6 +42,7 @@ def test_full_feature_calculation_binds_revision_and_long_windows() -> None:
     assert result.atr14 is not None
     assert result.relative_industry_strength is None
     assert "relative_industry_strength" in result.missing_fields
+    assert result.coverage == 26 / 28
     assert result.quality["adjust_type"] == "QFQ"
     assert result.stale is False
 

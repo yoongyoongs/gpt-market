@@ -17,7 +17,7 @@ MA_WINDOWS = (5, 10, 20, 60)
 
 
 class CalculateSecurityFeatureService:
-    feature_fields = 35
+    feature_fields = 28
 
     def execute(
         self,
