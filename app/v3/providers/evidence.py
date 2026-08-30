@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field, model_validator
@@ -28,6 +29,14 @@ class EvidenceFetchBatch(V3Contract):
         return self
 
 
+class EvidenceCapability(StrEnum):
+    ANNOUNCEMENT = "ANNOUNCEMENT"
+    FINANCIAL = "FINANCIAL"
+    PERFORMANCE = "PERFORMANCE"
+    NEWS = "NEWS"
+    POLICY = "POLICY"
+
+
 class ParsedEvidenceBundle(V3Contract):
     records: tuple[NormalizedEvidence, ...]
     links: tuple[EntityLink, ...] = ()
@@ -52,3 +61,9 @@ class EvidenceParser(Protocol):
     version: str
 
     def parse(self, raw: RawDocument, source: EvidenceSource) -> ParsedEvidenceBundle: ...
+
+
+class EvidenceRegistry(Protocol):
+    def providers_for(
+        self, capability: EvidenceCapability
+    ) -> tuple[tuple[EvidenceProvider, EvidenceParser], ...]: ...

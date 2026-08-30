@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="7ba799743ce86ca5f593613292767cb95982efd1edb3048d400fe1acac05caf4"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="dec2d6157eb76ea2ca7eadba0e35a1b62142624f6a77b636f24471ca351d126e"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：7ba799743ce8</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：dec2d6157eb7</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-30（Asia/Shanghai）
 当前分支：<code>codex/phase4-evidence-ingestion</code>
@@ -24,7 +24,7 @@
 状态对应提交：以本文件所在的 <code>origin/main</code> 最新提交为准</p>
 </blockquote>
 <h2 id="_1">当前结论<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
-<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1–3 已完成并建立稳定标签；Phase 4 Evidence Ingestion 正在开发，基础数据闭环、Fetch Run、Conflict/Dedup 和首批 Core Provider 已完成，实体匹配、Job 和 READ API 尚未完成。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。Phase 5 至 Phase 11 尚未开发，不能将当前里程碑表述为整个 Phase 4 或整个 V3 完成。</p>
+<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1–3 已完成并建立稳定标签；Phase 4 Evidence Ingestion 正在开发，基础数据闭环、Conflict/Dedup、Core Provider 和 Registry Job 已完成，实体匹配和 READ API 尚未完成。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。Phase 5 至 Phase 11 尚未开发，不能将当前里程碑表述为整个 Phase 4 或整个 V3 完成。</p>
 <h2 id="_2">已完成<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
 <ul>
 <li>V2/Phase2A 基线提交：<code>556a335</code>；</li>
@@ -84,14 +84,16 @@
 <li>Phase 4 Raw 先提交再 Parse 的最小闭环已实现；Opinion 不升级 Fact、Untrusted、时点 Retrieval、Decay 和低置信 Link 契约已落地。</li>
 <li>Phase 4 Fetch Run 已支持游标 checkpoint、分段恢复、终态重放、Provider 失败终态和 <code>row_version</code> 并发冲突保护。</li>
 <li>Phase 4 已实现规范 Payload 精确/近似 Dedup Relation、同 Claim 多值 Conflict Set、全成员保留和按来源优先级/置信度/时点的临时选择解释。</li>
-<li>Phase 4 PostgreSQL 17 <code>0003 -&gt; 0004 -&gt; 0003 -&gt; 0004</code> 双往返通过；专项 <code>13 passed</code>，配置真实库的完整回归 <code>175 passed, 5 skipped</code>。</li>
+<li>Phase 4 PostgreSQL 17 <code>0003 -&gt; 0004 -&gt; 0003 -&gt; 0004</code> 双往返通过；配置真实库的完整回归 <code>182 passed, 5 skipped</code>。</li>
 <li>Phase 4 首批 Core Provider 已接入巨潮公告、东方财富财务/业绩预告/快报、中国政府网政策和东方财富基础财经新闻；能力 Registry、按源限流、重试和结构硬校验已实现。</li>
-<li>六个真实入口 Fetch/Parse 探针全部请求成功；真实 PostgreSQL 端到端落库共 29 条 Raw/29 条 Evidence、失败 0；当前完整回归 <code>175 passed, 5 skipped</code>。</li>
+<li>七个真实入口 Fetch/Parse 探针全部请求成功；真实 PostgreSQL 端到端落库共 29 条 Raw/29 条 Evidence、失败 0；当前完整回归 <code>182 passed, 5 skipped</code>。</li>
+<li>上交所官方公告备用源已实测 2 日窗口 1,931 组；巨潮入口增加 A 股代码硬过滤，债券/基金不会再被通用市场映射误标为证券 Evidence。</li>
+<li>Registry Job 已支持真实 fallback、<code>PARTIAL</code> 后接管、能力级失败隔离、全源交叉采集、分段恢复参数和逐源计数；3 只真实证券隔离 Job 全能力成功。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>完成 Phase 4 Registry 批次调度、Provider 失败隔离、实体匹配、Decay-aware Retrieval 和 Core READ API；</li>
-<li>增加交易所公告备用源并扩大 Core Source 真实样本验收。</li>
+<li>完成 Phase 4 实体匹配、Decay-aware Retrieval 和 Core READ API；</li>
+<li>扩大 Core Source 真实样本与查询性能验收。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
@@ -149,8 +151,8 @@
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
-<li>增加交易所公告备用源，完成 Registry 批次调度和单源失败隔离；</li>
-<li>完成实体匹配、Job 与 READ API，并扩大真实多源验收；</li>
+<li>完成实体匹配、Decay/Coverage 与 READ API；</li>
+<li>扩大真实多源和查询性能验收；</li>
 <li>收口 Phase 4 文档、合并与标签后进入 Phase 5 Multi-Recall。</li>
 </ol>
 <p>当前生产回滚点仍为标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 技术验收完成，但在后续 Phase 和最终生产部署前不启用 V3。</p>

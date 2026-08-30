@@ -5,7 +5,6 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta, timezone
-from enum import StrEnum
 from html.parser import HTMLParser
 from time import monotonic
 from typing import Any
@@ -26,9 +25,10 @@ from app.v3.domain.evidence import (
     NormalizedEvidence,
     RawDocument,
 )
-from app.v3.domain.hashing import canonical_json
+from app.v3.domain.hashing import canonical_hash, canonical_json
 from app.v3.providers.evidence import (
     EvidenceFetchBatch,
+    EvidenceCapability,
     EvidenceParser,
     EvidenceProvider,
     ParsedEvidenceBundle,
@@ -37,6 +37,8 @@ from app.v3.providers.evidence import (
 
 CNINFO_QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 CNINFO_STATIC_URL = "https://static.cninfo.com.cn/"
+SSE_ANNOUNCEMENT_URL = "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do"
+SSE_STATIC_URL = "https://static.sse.com.cn"
 EASTMONEY_DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 EASTMONEY_NEWS_URL = "https://finance.eastmoney.com/yaowen.html"
 GOV_POLICY_URL = "https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json"
@@ -44,14 +46,6 @@ GOV_POLICY_URL = "https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json"
 
 class EvidenceProviderError(RuntimeError):
     pass
-
-
-class EvidenceCapability(StrEnum):
-    ANNOUNCEMENT = "ANNOUNCEMENT"
-    FINANCIAL = "FINANCIAL"
-    PERFORMANCE = "PERFORMANCE"
-    NEWS = "NEWS"
-    POLICY = "POLICY"
 
 
 class AsyncRequestGate:
@@ -150,7 +144,19 @@ def _window_dates(
 
 def _security_subject(code: object) -> str:
     normalized = validate_code(str(code))
+    if not _is_a_share_code(normalized):
+        raise ValueError(f"not an A-share security code: {normalized}")
     return f"{market_of(normalized)}:{normalized}"
+
+
+def _is_a_share_code(code: object) -> bool:
+    try:
+        normalized = validate_code(str(code))
+    except ValueError:
+        return False
+    return normalized.startswith(
+        ("6", "000", "001", "002", "003", "300", "301", "4", "8", "920")
+    )
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -161,6 +167,11 @@ def _parse_datetime(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed.replace(tzinfo=SHANGHAI) if parsed.tzinfo is None else parsed
+
+
+def _announcement_claim_key(code: object, title: object, published: datetime) -> str:
+    title_hash = canonical_hash(str(title).strip())[:16]
+    return f"announcement:{validate_code(str(code))}:{published:%Y-%m-%d}:{title_hash}"
 
 
 class CninfoAnnouncementProvider(_HttpEvidenceProvider):
@@ -245,7 +256,9 @@ class CninfoAnnouncementProvider(_HttpEvidenceProvider):
                 known_at=fetch_time,
             )
             for row in rows
-            if row.get("announcementId") and row.get("adjunctUrl")
+            if row.get("announcementId")
+            and row.get("adjunctUrl")
+            and _is_a_share_code(row.get("secCode"))
         )
         exhausted = len(rows) < self._page_size or page * self._page_size >= total
         return EvidenceFetchBatch(
@@ -262,15 +275,12 @@ class CninfoAnnouncementParser:
 
     def parse(self, raw: RawDocument, source: EvidenceSource) -> ParsedEvidenceBundle:
         row = json.loads(raw.payload_text or "")
-        announcement_id = str(row["announcementId"])
         subject_id = _security_subject(row["secCode"])
         published = datetime.fromtimestamp(int(row["announcementTime"]) / 1000, tz=SHANGHAI)
         normalized = {
-            "announcement_id": announcement_id,
             "security_code": str(row["secCode"]),
             "title": str(row["announcementTitle"]).strip(),
-            "document_type": row.get("adjunctType"),
-            "announcement_types": sorted(str(row.get("announcementType") or "").split("||")),
+            "publish_date": f"{published:%Y-%m-%d}",
         }
         record = NormalizedEvidence.build(
             raw_document_id=raw.raw_document_id,
@@ -279,7 +289,9 @@ class CninfoAnnouncementParser:
             source_priority=source.priority,
             subject_type="SECURITY",
             subject_id=subject_id,
-            claim_key=f"announcement:{announcement_id}",
+            claim_key=_announcement_claim_key(
+                row["secCode"], row["announcementTitle"], published
+            ),
             source=source.code,
             upstream_source=source.upstream_source,
             payload=row,
@@ -298,6 +310,148 @@ class CninfoAnnouncementParser:
             entity_type="SECURITY",
             entity_id=subject_id,
             match_basis={"field": "secCode", "value": row["secCode"], "source": "official"},
+            confidence=1,
+            status=EntityLinkStatus.CONFIRMED,
+        )
+        return ParsedEvidenceBundle(records=(record,), links=(link,))
+
+
+class SseAnnouncementProvider(_HttpEvidenceProvider):
+    source = EvidenceSource(
+        code="sse-announcements",
+        source_type=EvidenceSourceType.OFFICIAL,
+        upstream_source="sse",
+        capabilities={"types": [EvidenceCapability.ANNOUNCEMENT]},
+        priority=20,
+        rate_limit_per_minute=30,
+        parser_version="sse-announcement-v1",
+        reliability=0.98,
+    )
+
+    def __init__(
+        self,
+        *,
+        page_size: int = 25,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 15,
+        retries: int = 2,
+    ) -> None:
+        if not 1 <= page_size <= 100:
+            raise ValueError("SSE page_size must be between 1 and 100")
+        self._page_size = page_size
+        super().__init__(client=client, timeout=timeout, retries=retries)
+
+    async def fetch(
+        self,
+        *,
+        window_start: datetime | None,
+        window_end: datetime | None,
+        cursor: dict[str, object] | None,
+    ) -> EvidenceFetchBatch:
+        start, end = _window_dates(window_start, window_end)
+        page = int((cursor or {}).get("page", 1))
+        if page < 1:
+            raise ValueError("SSE cursor page must be positive")
+        params = {
+            "isPagination": "true",
+            "pageHelp.pageSize": self._page_size,
+            "pageHelp.pageNo": page,
+            "pageHelp.cacheSize": 1,
+            "START_DATE": f"{start:%Y-%m-%d}",
+            "END_DATE": f"{end:%Y-%m-%d}",
+            "SECURITY_CODE": "",
+            "TITLE": "",
+            "BULLETIN_TYPE": "",
+            "stockType": "",
+        }
+        response = await self._get(
+            SSE_ANNOUNCEMENT_URL,
+            params=params,
+            headers={"Referer": "https://www.sse.com.cn/disclosure/listedinfo/announcement/"},
+        )
+        try:
+            payload = response.json()
+            grouped_rows = payload["result"] or []
+            page_help = payload["pageHelp"]
+            total = int(page_help["total"])
+            page_count = int(page_help["pageCount"])
+        except (TypeError, ValueError, KeyError) as exc:
+            raise EvidenceProviderError("SSE announcement response shape is invalid") from exc
+        rows = [row for group in grouped_rows for row in group if row.get("URL")]
+        fetch_time = _now_utc()
+        documents = tuple(
+            FetchedDocument(
+                document_key=f"sse:{row['ORG_BULLETIN_ID']}:{str(row['URL']).rsplit('/', 1)[-1]}",
+                raw_reference=f"{SSE_STATIC_URL}{row['URL']}",
+                mime_type="application/json",
+                payload_text=_json_payload(row),
+                response_metadata={
+                    "list_url": SSE_ANNOUNCEMENT_URL,
+                    "http_status": response.status_code,
+                    "page": page,
+                },
+                fetch_time=fetch_time,
+                known_at=fetch_time,
+            )
+            for row in rows
+            if row.get("ORG_BULLETIN_ID") and row.get("SECURITY_CODE")
+        )
+        exhausted = page >= page_count
+        return EvidenceFetchBatch(
+            documents=documents,
+            next_cursor=None if exhausted else {"page": page + 1},
+            exhausted=exhausted,
+            upstream_count=total,
+        )
+
+
+class SseAnnouncementParser:
+    code = "sse-announcement"
+    version = "sse-announcement-v1"
+
+    def parse(self, raw: RawDocument, source: EvidenceSource) -> ParsedEvidenceBundle:
+        row = json.loads(raw.payload_text or "")
+        published = _parse_datetime(row["SSEDATE"])
+        if published is None:
+            raise ValueError("SSE announcement has no valid publish date")
+        subject_id = _security_subject(row["SECURITY_CODE"])
+        normalized = {
+            "security_code": str(row["SECURITY_CODE"]),
+            "title": str(row["TITLE"]).strip(),
+            "publish_date": f"{published:%Y-%m-%d}",
+        }
+        record = NormalizedEvidence.build(
+            raw_document_id=raw.raw_document_id,
+            evidence_type=EvidenceType.OFFICIAL_DISCLOSURE,
+            source_type=source.source_type,
+            source_priority=source.priority,
+            subject_type="SECURITY",
+            subject_id=subject_id,
+            claim_key=_announcement_claim_key(
+                row["SECURITY_CODE"], row["TITLE"], published
+            ),
+            source=source.code,
+            upstream_source=source.upstream_source,
+            payload=row,
+            normalized_payload=normalized,
+            event_time=None,
+            publish_time=published,
+            fetch_time=raw.fetch_time,
+            known_at=raw.known_at,
+            confidence=source.reliability,
+            relevance=0.9,
+            decay_model=DecayModel.NONE,
+            parser_version=self.version,
+        )
+        link = EntityLink.build(
+            evidence_id=record.evidence_id,
+            entity_type="SECURITY",
+            entity_id=subject_id,
+            match_basis={
+                "field": "SECURITY_CODE",
+                "value": row["SECURITY_CODE"],
+                "source": "official",
+            },
             confidence=1,
             status=EntityLinkStatus.CONFIRMED,
         )

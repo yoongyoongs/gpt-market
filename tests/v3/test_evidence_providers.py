@@ -18,6 +18,7 @@ from app.v3.infrastructure.providers.evidence import (
     EASTMONEY_DATACENTER_URL,
     EASTMONEY_NEWS_URL,
     GOV_POLICY_URL,
+    SSE_ANNOUNCEMENT_URL,
     CninfoAnnouncementParser,
     CninfoAnnouncementProvider,
     EastmoneyNewsParser,
@@ -28,6 +29,8 @@ from app.v3.infrastructure.providers.evidence import (
     EvidenceProviderRegistry,
     GovernmentPolicyParser,
     GovernmentPolicyProvider,
+    SseAnnouncementParser,
+    SseAnnouncementProvider,
 )
 
 
@@ -55,8 +58,18 @@ async def test_cninfo_provider_and_parser_preserve_official_identity() -> None:
         return httpx.Response(
             200,
             json={
-                "totalRecordNum": 1,
+                "totalRecordNum": 2,
                 "announcements": [
+                    {
+                        "secCode": "148636",
+                        "secName": "测试债券",
+                        "announcementId": "bond-1",
+                        "announcementTitle": "债券公告",
+                        "announcementTime": 1787932800000,
+                        "adjunctUrl": "bond.pdf",
+                        "adjunctType": "PDF",
+                        "announcementType": "bond",
+                    },
                     {
                         "secCode": "600519",
                         "secName": "贵州茅台",
@@ -76,7 +89,8 @@ async def test_cninfo_provider_and_parser_preserve_official_identity() -> None:
     )
     batch = await provider.fetch(window_start=START, window_end=END, cursor=None)
     assert batch.exhausted is True
-    assert batch.upstream_count == 1
+    assert batch.upstream_count == 2
+    assert len(batch.documents) == 1
     assert batch.documents[0].document_key == "announcement:1225534028"
     assert batch.documents[0].raw_reference.endswith("1225534028.PDF")
 
@@ -88,6 +102,80 @@ async def test_cninfo_provider_and_parser_preserve_official_identity() -> None:
     assert parsed.records[0].subject_id == "SH:600519"
     assert parsed.links[0].status is EntityLinkStatus.CONFIRMED
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_sse_provider_flattens_attachments_and_matches_cninfo_claim() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.copy_with(query=None) == httpx.URL(SSE_ANNOUNCEMENT_URL)
+        assert request.url.params["START_DATE"] == "2026-08-29"
+        return httpx.Response(
+            200,
+            json={
+                "pageHelp": {"total": 2, "pageCount": 1, "pageNo": 1},
+                "result": [
+                    [
+                        {
+                            "BULLETIN_TYPE_DESC": "半年报",
+                            "ORG_BULLETIN_ID": "6551146499567446",
+                            "ORG_FILE_TYPE": 0,
+                            "SECURITY_CODE": "600519",
+                            "SECURITY_NAME": "贵州茅台",
+                            "SSEDATE": "2026-08-29",
+                            "TITLE": "2026年半年度报告",
+                            "URL": "/disclosure/a.pdf",
+                        },
+                        {
+                            "BULLETIN_TYPE_DESC": "半年报",
+                            "ORG_BULLETIN_ID": "6551146499567446",
+                            "ORG_FILE_TYPE": 1,
+                            "SECURITY_CODE": "600519",
+                            "SECURITY_NAME": "贵州茅台",
+                            "SSEDATE": "2026-08-29",
+                            "TITLE": "2026年半年度报告附件",
+                            "URL": "/disclosure/b.pdf",
+                        },
+                    ]
+                ],
+            },
+        )
+
+    provider = SseAnnouncementProvider(client=client_for(handler), retries=0)
+    batch = await provider.fetch(window_start=START, window_end=END, cursor=None)
+    assert batch.exhausted is True
+    assert len(batch.documents) == 2
+    sse_record = SseAnnouncementParser().parse(
+        raw_from(provider, batch.documents[0]), provider.source
+    ).records[0]
+
+    cninfo_source = CninfoAnnouncementProvider(
+        client=client_for(lambda _: httpx.Response(500)), retries=0
+    )
+    cninfo_fetched = batch.documents[0].model_copy(
+        update={
+            "document_key": "announcement:cninfo-same",
+            "raw_reference": "https://static.cninfo.com.cn/same.pdf",
+            "payload_text": json.dumps(
+                {
+                    "secCode": "600519",
+                    "announcementId": "cninfo-same",
+                    "announcementTitle": "2026年半年度报告",
+                    "announcementTime": 1787932800000,
+                    "adjunctUrl": "same.pdf",
+                    "adjunctType": "PDF",
+                    "announcementType": "01010503",
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    cninfo_record = CninfoAnnouncementParser().parse(
+        raw_from(cninfo_source, cninfo_fetched), cninfo_source.source
+    ).records[0]
+    assert sse_record.claim_key == cninfo_record.claim_key
+    assert sse_record.normalized_payload == cninfo_record.normalized_payload
+    await provider.close()
+    await cninfo_source.close()
 
 
 @pytest.mark.asyncio

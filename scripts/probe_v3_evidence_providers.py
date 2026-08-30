@@ -17,6 +17,8 @@ from app.v3.infrastructure.providers.evidence import (
     EastmoneyReportProvider,
     GovernmentPolicyParser,
     GovernmentPolicyProvider,
+    SseAnnouncementParser,
+    SseAnnouncementProvider,
 )
 
 
@@ -72,6 +74,7 @@ async def run(args: argparse.Namespace) -> int:
     codes = tuple(code.strip() for code in args.codes.split(",") if code.strip())
     targets = (
         ("cninfo", CninfoAnnouncementProvider(page_size=10), CninfoAnnouncementParser()),
+        ("sse", SseAnnouncementProvider(page_size=10), SseAnnouncementParser()),
         (
             "eastmoney_financial",
             EastmoneyReportProvider(
