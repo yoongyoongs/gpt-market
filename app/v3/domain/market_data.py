@@ -48,6 +48,13 @@ class IngestionRunStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class CorporateActionType(StrEnum):
+    CASH_DIVIDEND = "CASH_DIVIDEND"
+    STOCK_DISTRIBUTION = "STOCK_DISTRIBUTION"
+    CASH_AND_STOCK_DISTRIBUTION = "CASH_AND_STOCK_DISTRIBUTION"
+    OTHER_DISTRIBUTION = "OTHER_DISTRIBUTION"
+
+
 class BarIngestionTarget(V3Contract):
     security_id: UUID
     code: str = Field(pattern=r"^\d{6}$")
@@ -143,6 +150,110 @@ class AdjustmentFactorRevision(AdjustmentFactorRevisionContent):
         )
         if content.computed_content_hash() != self.content_hash:
             raise ValueError("content_hash does not match factor revision")
+        return self
+
+
+class CorporateActionDraft(V3Contract):
+    code: str = Field(pattern=r"^\d{6}$")
+    market: Market
+    action_type: CorporateActionType
+    announcement_time: datetime | None = None
+    record_time: datetime | None = None
+    effective_time: datetime
+    payload: dict[str, Any]
+    source: str = Field(min_length=1, max_length=128)
+    source_reference: str = Field(min_length=1)
+    fetch_time: datetime
+
+    @field_validator(
+        "announcement_time", "record_time", "effective_time", "fetch_time"
+    )
+    @classmethod
+    def validate_action_datetimes(cls, value: datetime | None, info) -> datetime | None:
+        return None if value is None else require_aware(value, info.field_name)
+
+
+class CorporateActionFetchResult(V3Contract):
+    source_code: str = Field(min_length=1, max_length=128)
+    fetch_time: datetime
+    actions: tuple[CorporateActionDraft, ...]
+
+    @field_validator("fetch_time")
+    @classmethod
+    def validate_fetch_time(cls, value: datetime) -> datetime:
+        return require_aware(value, "fetch_time")
+
+    @model_validator(mode="after")
+    def validate_actions(self) -> "CorporateActionFetchResult":
+        references = [action.source_reference for action in self.actions]
+        if len(references) != len(set(references)):
+            raise ValueError("corporate action source references must be unique")
+        if any(action.source != self.source_code for action in self.actions):
+            raise ValueError("corporate action source_code does not match action source")
+        return self
+
+
+class CorporateActionContent(V3Contract):
+    corporate_action_id: UUID
+    security_id: UUID
+    action_type: CorporateActionType
+    announcement_time: datetime | None = None
+    record_time: datetime | None = None
+    effective_time: datetime
+    payload: dict[str, Any]
+    source: str = Field(min_length=1, max_length=128)
+    source_reference: str = Field(min_length=1)
+    evidence_id: UUID | None = None
+    fetch_time: datetime
+    known_at: datetime
+    supersedes_action_id: UUID | None = None
+
+    @field_validator(
+        "announcement_time",
+        "record_time",
+        "effective_time",
+        "fetch_time",
+        "known_at",
+    )
+    @classmethod
+    def validate_corporate_action_datetimes(
+        cls, value: datetime | None, info
+    ) -> datetime | None:
+        return None if value is None else require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_corporate_action(self) -> "CorporateActionContent":
+        if self.known_at < self.fetch_time:
+            raise ValueError("known_at cannot be earlier than fetch_time")
+        return self
+
+    def computed_content_hash(self) -> str:
+        return canonical_hash(
+            self.model_dump(
+                exclude={
+                    "corporate_action_id",
+                    "fetch_time",
+                    "known_at",
+                    "supersedes_action_id",
+                }
+            )
+        )
+
+
+class CorporateAction(CorporateActionContent):
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, content: CorporateActionContent) -> "CorporateAction":
+        return cls(**content.model_dump(), content_hash=content.computed_content_hash())
+
+    @model_validator(mode="after")
+    def validate_content_hash(self) -> "CorporateAction":
+        content = CorporateActionContent.model_validate(
+            self.model_dump(exclude={"content_hash"})
+        )
+        if content.computed_content_hash() != self.content_hash:
+            raise ValueError("content_hash does not match corporate action")
         return self
 
 

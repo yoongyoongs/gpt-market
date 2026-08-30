@@ -7,12 +7,16 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
+    AdjustType,
     BarIngestionTarget,
+    BarPeriod,
     BarSeriesRevision,
+    CorporateAction,
     IngestionRunStatus,
     Market,
     MarketDataIngestionRun,
@@ -25,6 +29,7 @@ from app.v3.infrastructure.db.models import (
     AdjustmentFactorRevisionModel,
     AuditEventModel,
     BarSeriesRevisionModel,
+    CorporateActionModel,
     MarketBarModel,
     MarketDataIngestionRunModel,
     SecurityModel,
@@ -287,6 +292,56 @@ class SQLAlchemyBarRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def latest_factor_revision_id(self, security_id: UUID) -> UUID | None:
+        return (
+            await self._session.execute(
+                select(AdjustmentFactorRevisionModel.factor_revision_id)
+                .where(AdjustmentFactorRevisionModel.security_id == security_id)
+                .order_by(
+                    AdjustmentFactorRevisionModel.known_at.desc(),
+                    AdjustmentFactorRevisionModel.factor_revision_id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def latest_series_revision_ids(
+        self, security_id: UUID
+    ) -> dict[tuple[BarPeriod, AdjustType], UUID]:
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id,
+                BarSeriesRevisionModel.period,
+                BarSeriesRevisionModel.adjust_type,
+                func.row_number()
+                .over(
+                    partition_by=(
+                        BarSeriesRevisionModel.period,
+                        BarSeriesRevisionModel.adjust_type,
+                    ),
+                    order_by=(
+                        BarSeriesRevisionModel.known_at.desc(),
+                        BarSeriesRevisionModel.revision_id.desc(),
+                    ),
+                )
+                .label("revision_rank"),
+            )
+            .where(
+                BarSeriesRevisionModel.security_id == security_id,
+                BarSeriesRevisionModel.status == "PUBLISHED",
+            )
+            .subquery()
+        )
+        rows = (
+            await self._session.execute(select(ranked).where(ranked.c.revision_rank == 1))
+        ).mappings()
+        return {
+            (BarPeriod(row["period"]), AdjustType(row["adjust_type"])): row[
+                "revision_id"
+            ]
+            for row in rows
+        }
+
     async def publish_factor_revision(self, revision: AdjustmentFactorRevision) -> bool:
         inserted = (
             await self._session.execute(
@@ -394,7 +449,7 @@ class SQLAlchemyBarRepository:
         return bool(
             raw_available
             and count >= minimum_bars
-            and last_bar_time.date() >= minimum_last_bar_date
+            and last_bar_time.astimezone(SHANGHAI).date() >= minimum_last_bar_date
         )
 
     async def covered_daily_security_ids(
@@ -454,8 +509,86 @@ class SQLAlchemyBarRepository:
             for security_id, raw_available, count, last_bar_time in rows
             if raw_available
             and count >= minimum_bars
-            and last_bar_time.date() >= required_dates[security_id]
+            and last_bar_time.astimezone(SHANGHAI).date() >= required_dates[security_id]
         }
+
+
+class SQLAlchemyCorporateActionRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def latest_by_source_references(
+        self, source: str, references: tuple[str, ...]
+    ) -> dict[str, CorporateAction]:
+        if not references:
+            return {}
+        ranked = (
+            select(
+                CorporateActionModel,
+                func.row_number()
+                .over(
+                    partition_by=CorporateActionModel.source_reference,
+                    order_by=(
+                        CorporateActionModel.known_at.desc(),
+                        CorporateActionModel.corporate_action_id.desc(),
+                    ),
+                )
+                .label("revision_rank"),
+            )
+            .where(
+                CorporateActionModel.source == source,
+                CorporateActionModel.source_reference.in_(references),
+            )
+            .subquery()
+        )
+        rows = (
+            await self._session.execute(select(ranked).where(ranked.c.revision_rank == 1))
+        ).mappings()
+        return {
+            row["source_reference"]: CorporateAction(
+                corporate_action_id=row["corporate_action_id"],
+                security_id=row["security_id"],
+                action_type=row["action_type"],
+                announcement_time=row["announcement_time"],
+                record_time=row["record_time"],
+                effective_time=row["effective_time"],
+                payload=row["payload"],
+                source=row["source"],
+                source_reference=row["source_reference"],
+                evidence_id=row["evidence_id"],
+                fetch_time=row["fetch_time"],
+                known_at=row["known_at"],
+                supersedes_action_id=row["supersedes_action_id"],
+                content_hash=row["content_hash"],
+            )
+            for row in rows
+        }
+
+    async def publish(self, action: CorporateAction) -> bool:
+        inserted = (
+            await self._session.execute(
+                insert(CorporateActionModel)
+                .values(
+                    corporate_action_id=action.corporate_action_id,
+                    security_id=action.security_id,
+                    action_type=action.action_type.value,
+                    announcement_time=action.announcement_time,
+                    record_time=action.record_time,
+                    effective_time=action.effective_time,
+                    payload=action.payload,
+                    source=action.source,
+                    source_reference=action.source_reference,
+                    evidence_id=action.evidence_id,
+                    fetch_time=action.fetch_time,
+                    known_at=action.known_at,
+                    content_hash=action.content_hash,
+                    supersedes_action_id=action.supersedes_action_id,
+                )
+                .on_conflict_do_nothing(index_elements=[CorporateActionModel.content_hash])
+                .returning(CorporateActionModel.corporate_action_id)
+            )
+        ).scalar_one_or_none()
+        return inserted is not None
 
 
 class SQLAlchemyIngestionRunRepository:

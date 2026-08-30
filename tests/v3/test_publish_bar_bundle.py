@@ -23,6 +23,17 @@ class FakeBarRepository:
     def __init__(self, store: Store) -> None:
         self.store = store
 
+    async def latest_factor_revision_id(self, security_id):
+        matching = [item for item in self.store.factors if item.security_id == security_id]
+        return matching[-1].factor_revision_id if matching else None
+
+    async def latest_series_revision_ids(self, security_id):
+        latest = {}
+        for item in self.store.series:
+            if item.security_id == security_id:
+                latest[(item.period, item.adjust_type)] = item.revision_id
+        return latest
+
     async def publish_factor_revision(self, revision):
         if revision in self.store.factors:
             return False
@@ -105,3 +116,24 @@ async def test_republishing_same_bundle_is_idempotent() -> None:
     assert second.series_created == 0
     assert len(store.factors) == 1
     assert len(store.series) == 2
+
+
+@pytest.mark.asyncio
+async def test_new_bundle_links_previous_factor_and_series_revisions() -> None:
+    store = Store()
+    service = PublishBarBundleService(lambda: FakeUnitOfWork(store))
+    first = await bundle()
+    await service.execute(first)
+    store.committed = False
+    second = await BuildDailyBarRevisionsService(
+        [FakeProvider("primary")], clock=lambda: NOW
+    ).execute(first.adjusted_revision.security_id, "600000")
+
+    await service.execute(second)
+
+    assert store.factors[-1].supersedes_revision_id == store.factors[0].factor_revision_id
+    previous_by_key = {(item.period, item.adjust_type): item for item in store.series[:2]}
+    for revision in store.series[2:]:
+        assert revision.supersedes_revision_id == previous_by_key[
+            (revision.period, revision.adjust_type)
+        ].revision_id

@@ -9,8 +9,11 @@ from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
+    AdjustType,
     BarIngestionTarget,
+    BarPeriod,
     BarSeriesRevision,
+    CorporateAction,
     MarketDataIngestionRun,
     UniverseSnapshot,
 )
@@ -33,6 +36,12 @@ class UniverseRepository(Protocol):
 
 
 class BarRepository(Protocol):
+    async def latest_factor_revision_id(self, security_id: UUID) -> UUID | None: ...
+
+    async def latest_series_revision_ids(
+        self, security_id: UUID
+    ) -> dict[tuple[BarPeriod, AdjustType], UUID]: ...
+
     async def publish_factor_revision(self, revision: AdjustmentFactorRevision) -> bool: ...
 
     async def publish_series_revision(self, revision: BarSeriesRevision) -> bool: ...
@@ -50,6 +59,14 @@ class BarRepository(Protocol):
     ) -> set[UUID]: ...
 
 
+class CorporateActionRepository(Protocol):
+    async def latest_by_source_references(
+        self, source: str, references: tuple[str, ...]
+    ) -> dict[str, CorporateAction]: ...
+
+    async def publish(self, action: CorporateAction) -> bool: ...
+
+
 class IngestionRunRepository(Protocol):
     async def add(self, run: MarketDataIngestionRun) -> None: ...
 
@@ -63,6 +80,7 @@ class UnitOfWork(Protocol):
     audits: AuditRepository
     universes: UniverseRepository
     bars: BarRepository
+    corporate_actions: CorporateActionRepository
     ingestion_runs: IngestionRunRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...

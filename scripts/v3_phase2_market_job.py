@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -17,6 +17,7 @@ from app.services.data_quality import DataQualityService
 from app.v3.application.aggregate_daily_bars import AggregateDailyBarsService
 from app.v3.application.backfill_daily_bars import BackfillDailyBarsService
 from app.v3.application.ingest_daily_bars import BuildDailyBarRevisionsService
+from app.v3.application.ingest_corporate_actions import IngestCorporateActionsService
 from app.v3.application.publish_bar_bundle import PublishBarBundleService
 from app.v3.application.refresh_universe import RefreshUniverseService
 from app.v3.infrastructure.db.session import V3Database
@@ -27,6 +28,9 @@ from app.v3.infrastructure.providers.bars import (
     SinaHistoricalBarProvider,
 )
 from app.v3.infrastructure.providers.exchange_calendar import ExchangeCalendarsAShareCalendar
+from app.v3.infrastructure.providers.corporate_actions import (
+    EastmoneyCorporateActionProvider,
+)
 from app.v3.infrastructure.providers.universe import (
     ExchangeUniverseProvider,
     LegacyUniverseProvider,
@@ -37,14 +41,20 @@ from app.v3.jobs.market_data import latest_completed_session
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the V3 Phase 2 market-data job")
-    parser.add_argument("--mode", choices=("universe", "backfill", "all"), default="all")
+    parser.add_argument(
+        "--mode", choices=("universe", "backfill", "corporate-actions", "all"), default="all"
+    )
     parser.add_argument("--database-url", default=os.getenv("V3_DATABASE_URL"))
     parser.add_argument("--run-id", type=UUID)
     parser.add_argument("--limit", type=int, default=300)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--stop-after", type=int)
     parser.add_argument("--minimum-last-bar-date", type=date.fromisoformat)
+    parser.add_argument("--corporate-since", type=date.fromisoformat)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--lock-key", type=int, default=int(os.getenv("V3_PHASE2_LOCK_KEY", "33020001"))
+    )
     return parser
 
 
@@ -67,7 +77,7 @@ def _run_report(run) -> dict:
 async def execute(args: argparse.Namespace) -> dict:
     if not args.database_url:
         raise ValueError("V3_DATABASE_URL or --database-url is required")
-    if args.mode == "universe" and args.run_id is not None:
+    if args.mode in {"universe", "corporate-actions"} and args.run_id is not None:
         raise ValueError("--run-id is only valid for backfill or all mode")
     settings = Settings(_env_file=None, v3_database_url=args.database_url)
     database = V3Database(
@@ -89,6 +99,7 @@ async def execute(args: argparse.Namespace) -> dict:
     tencent = TencentProvider(settings, quality)
     sina = SinaHistoricalBarProvider()
     exchanges = ExchangeUniverseProvider()
+    corporate_actions = EastmoneyCorporateActionProvider()
     calendar = ExchangeCalendarsAShareCalendar()
     report: dict = {
         "status": "RUNNING",
@@ -105,6 +116,7 @@ async def execute(args: argparse.Namespace) -> dict:
     started = time.perf_counter()
     try:
         await database.check_connection()
+        await database.acquire_advisory_lock(args.lock_key)
         if args.mode in {"universe", "all"}:
             vendor_universe = LegacyUniverseProvider(eastmoney)
             refreshed = await RefreshUniverseService(
@@ -155,6 +167,22 @@ async def execute(args: argparse.Namespace) -> dict:
             )
             report["minimum_last_bar_date"] = minimum_date.isoformat()
             report["backfill"] = _run_report(run)
+        if args.mode in {"corporate-actions", "all"}:
+            corporate_since = args.corporate_since or (
+                datetime.now(timezone.utc).date() - timedelta(days=400)
+            )
+            ingested = await IngestCorporateActionsService(
+                uow_factory, (corporate_actions,)
+            ).execute(corporate_since)
+            report["corporate_actions"] = {
+                "source": ingested.source_code,
+                "since": corporate_since.isoformat(),
+                "fetched_count": ingested.fetched_count,
+                "published_count": ingested.published_count,
+                "unchanged_count": ingested.unchanged_count,
+                "outside_universe_count": ingested.outside_universe_count,
+                "provider_errors": list(ingested.provider_errors),
+            }
         report["status"] = (
             "PARTIAL" if report.get("backfill", {}).get("status") in {"PARTIAL", "FAILED"} else "COMPLETED"
         )
@@ -163,6 +191,7 @@ async def execute(args: argparse.Namespace) -> dict:
         report["completed_at"] = datetime.now(timezone.utc).isoformat()
         report["wall_seconds"] = round(time.perf_counter() - started, 3)
         await exchanges.close()
+        await corporate_actions.close()
         await sina.close()
         await tencent.close()
         await eastmoney.close()

@@ -14,10 +14,26 @@ class V3Database:
             max_overflow=max_overflow,
         )
         self.sessions = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+        self._advisory_connection = None
 
     async def check_connection(self) -> None:
         async with self.engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
 
+    async def acquire_advisory_lock(self, key: int) -> None:
+        if self._advisory_connection is not None:
+            raise RuntimeError("this database instance already holds an advisory lock")
+        connection = await self.engine.connect()
+        acquired = await connection.scalar(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
+        )
+        if not acquired:
+            await connection.close()
+            raise RuntimeError(f"V3 market-data job advisory lock {key} is already held")
+        self._advisory_connection = connection
+
     async def close(self) -> None:
+        if self._advisory_connection is not None:
+            await self._advisory_connection.close()
+            self._advisory_connection = None
         await self.engine.dispose()

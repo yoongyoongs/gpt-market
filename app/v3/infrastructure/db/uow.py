@@ -8,6 +8,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyAgentTaskRepository,
     SQLAlchemyAuditRepository,
     SQLAlchemyBarRepository,
+    SQLAlchemyCorporateActionRepository,
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyUniverseRepository,
 )
@@ -26,6 +27,7 @@ class SQLAlchemyUnitOfWork:
         self.audits = SQLAlchemyAuditRepository(self._session)
         self.universes = SQLAlchemyUniverseRepository(self._session)
         self.bars = SQLAlchemyBarRepository(self._session)
+        self.corporate_actions = SQLAlchemyCorporateActionRepository(self._session)
         self.ingestion_runs = SQLAlchemyIngestionRunRepository(self._session)
         return self
 
