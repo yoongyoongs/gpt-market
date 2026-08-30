@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="ffa33ad3c5ab5cf2922dd2afdc66715d7973e27d997625949925349a5850a3a8"><title>gpt-market V3 需求追踪矩阵</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="4d52426a8c0234862e93e87264d0e3ed6a9af02a028ba2d2356ebc996b0e697d"><title>gpt-market V3 需求追踪矩阵</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#8">8. 完成判定</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求追踪矩阵.md · 内容哈希：ffa33ad3c5ab</div><h1 id="gpt-market-v3">gpt-market V3 需求追踪矩阵<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求追踪矩阵.md · 内容哈希：4d52426a8c02</div><h1 id="gpt-market-v3">gpt-market V3 需求追踪矩阵<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>基线：V3 Architecture Baseline 1.0</p>
 <p>状态：实施前追踪基线</p>
@@ -55,8 +55,8 @@
 <td><code>universe_sources/snapshots/members/diffs</code></td>
 <td>Job: Universe Refresh；<code>GET /api/v3/universe/query</code></td>
 <td>Provider fallback、空数据拒绝、LKG stale</td>
-<td>部分实现</td>
-<td>三交易所官方 PRIMARY、东方财富 SECONDARY、覆盖/5% 扩张门禁、LKG/no-LKG 和发布事务已实现；集合对账确认官方 5,551/5,551 且排除主源 354 条污染，CLI Job 冷启动通过，API 待实现</td>
+<td>已实现</td>
+<td>三交易所官方成员 + 东方财富状态组合、Secondary/LKG、覆盖与 5% 扩张门禁、事务发布均完成；真实 5,551/5,551 并排除厂商 354 条污染，Query API 归 FR-DI-001/Phase 3</td>
 </tr>
 <tr>
 <td>FR-MD-002</td>
@@ -67,8 +67,8 @@
 <td><code>market_bars/bar_series_revisions</code></td>
 <td>Job: Historical Backfill/Daily Bar</td>
 <td>全市场覆盖、断点续跑、日期/OHLC 校验</td>
-<td>部分实现</td>
-<td>Backfill 已具备 Snapshot 固定、紧凑游标、批次 checkpoint、失败重试、崩溃恢复、1..32 并发和 CLI Job；新库首段 20/20、同 run 恢复至 40/40，Hash 往返一致；5,551 全量覆盖率终验待完成</td>
+<td>已实现</td>
+<td>5,551/5,551、失败 0；5,375 只 300 根，其余为真实上市不足 300 日新股；断点、崩溃恢复、批量覆盖、上海交易日边界和 12.966 秒全市场幂等重放通过</td>
 </tr>
 <tr>
 <td>FR-MD-003</td>
@@ -79,20 +79,20 @@
 <td><code>market_bars/corporate_actions/adjustment_factor_revisions</code></td>
 <td>Job: Bar/Factor Ingestion</td>
 <td>raw 不可变、factor revision、前复权-only 限制</td>
-<td>部分实现</td>
-<td>RAW/QFQ 成对、Factor Revision、QFQ-only LIMITED、nullable amount 和同事务发布已通过单测/真实 PostgreSQL；Corporate Action Provider 待实现</td>
+<td>已实现</td>
+<td>全市场 RAW/QFQ/Factor/FULL 5,551/5,551；QFQ-only 仍显式 LIMITED；公司行动 8,793 个逻辑事件完成幂等、计划/实施区分与更正链</td>
 </tr>
 <tr>
 <td>FR-MD-004</td>
 <td>生成绑定 Revision 的复权派生序列</td>
 <td>P0</td>
-<td style="text-align: right;">2</td>
+<td style="text-align: right;">2/3</td>
 <td>Derived Series</td>
 <td><code>bar_series_revisions</code></td>
 <td>Job: Derived Series Build</td>
 <td>revision 绑定、重算一致性、源数据限制标记</td>
 <td>部分实现</td>
-<td>QFQ Revision 已绑定 Factor Revision，日期不齐降为 LIMITED；Bundle 重放零新增已通过，supersedes/全市场重算待实现</td>
+<td>QFQ 绑定 Factor，日期不齐降 LIMITED；Factor 和各周期 Series 自动绑定 <code>supersedes</code>，同 Bundle 重放零新增，真实 PostgreSQL 通过；HFQ 派生与历史补算仍待完成</td>
 </tr>
 <tr>
 <td>FR-MD-005</td>
@@ -103,8 +103,8 @@
 <td><code>raw_bars/bar_series_revisions</code></td>
 <td>Job: Daily Bar Increment/Aggregate</td>
 <td>增量幂等、周月边界、停牌日</td>
-<td>部分实现</td>
-<td>周/月已由同口径日 K 本地聚合，partial 不发布；<code>exchange_calendars:XSHG</code> 严格日历记录版本/边界、越界硬失败，并通过 2026 春节短周实测；增量 Job 和全市场验收待实现</td>
+<td>已实现</td>
+<td>日/周各覆盖 5,551；月 5,534，17 只当月新股不伪造完整月；严格 XSHG 日历、partial 门禁、停牌、Scheduler/Worker、advisory lock 和增量覆盖均通过</td>
 </tr>
 <tr>
 <td>FR-MD-006</td>

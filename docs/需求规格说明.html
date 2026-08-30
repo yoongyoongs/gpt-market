@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="ee1568a3946304791a238758c7b3d35c8f0f61c4450e7db07834916fbc5b2a43"><title>gpt-market V3 需求规格说明</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="17a36eccc580d5a889f7f6b9ae9d3bd534e1496f359ca1871030906875de24a7"><title>gpt-market V3 需求规格说明</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -41,7 +41,7 @@
 </li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求规格说明.md · 内容哈希：ee1568a39463</div><h1 id="gpt-market-v3">gpt-market V3 需求规格说明<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/需求规格说明.md · 内容哈希：17a36eccc580</div><h1 id="gpt-market-v3">gpt-market V3 需求规格说明<a class="headerlink" href="#gpt-market-v3" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>文档版本：V3 Architecture Baseline 1.0 配套需求
 状态：实施前基线
@@ -139,31 +139,31 @@
 <td>FR-MD-001</td>
 <td>冗余 Universe Provider 与 Last-Known-Good Snapshot</td>
 <td style="text-align: right;">P0</td>
-<td>待实现</td>
+<td>已实现</td>
 </tr>
 <tr>
 <td>FR-MD-002</td>
 <td>覆盖全部 A 股至少 250–300 个交易日日 K</td>
 <td style="text-align: right;">P0</td>
-<td>待实现</td>
+<td>已实现</td>
 </tr>
 <tr>
 <td>FR-MD-003</td>
 <td>优先保存 raw/unadjusted Bar、公司行动和复权因子</td>
 <td style="text-align: right;">P0</td>
-<td>待实现</td>
+<td>已实现</td>
 </tr>
 <tr>
 <td>FR-MD-004</td>
 <td>生成绑定 Revision 的前/后复权派生序列</td>
 <td style="text-align: right;">P0</td>
-<td>待实现</td>
+<td>部分实现：前复权完成，后复权待补</td>
 </tr>
 <tr>
 <td>FR-MD-005</td>
 <td>日 K 增量更新，周/月 K 本地聚合</td>
 <td style="text-align: right;">P0</td>
-<td>部分已实现，V3 待扩展全市场</td>
+<td>已实现</td>
 </tr>
 <tr>
 <td>FR-MD-006</td>

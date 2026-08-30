@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="cb4b7eb31bef3ded8ebdfb65abd943d4944f7e41da1685ee65c9d6c1712bd1c9"><title>V3 Phase 2 行情底座实施记录</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="21c60ae0b56617f9c2baca9eab551d60c06ef19655aa7fa9d7ca831cd89242ca"><title>V3 Phase 2 行情底座实施记录</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -12,14 +12,16 @@
 <li><a href="#4">4. 数据正确性</a></li>
 <li><a href="#5">5. 持久化验收</a></li>
 <li><a href="#6">6. 交易日历验收</a></li>
-<li><a href="#7-job">7. Job 冷启动与恢复验收</a></li>
-<li><a href="#8">8. 当前未完成</a></li>
+<li><a href="#7-job">7. 全市场 Job 验收</a></li>
+<li><a href="#8-corporate-action">8. Corporate Action 验收</a></li>
+<li><a href="#9-worker">9. Worker 与调度</a></li>
+<li><a href="#10">10. 验收结论</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase2行情底座实施记录.md · 内容哈希：cb4b7eb31bef</div><h1 id="v3-phase-2">V3 Phase 2 行情底座实施记录<a class="headerlink" href="#v3-phase-2" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase2行情底座实施记录.md · 内容哈希：21c60ae0b566</div><h1 id="v3-phase-2">V3 Phase 2 行情底座实施记录<a class="headerlink" href="#v3-phase-2" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>日期：2026-08-30（Asia/Shanghai）<br>
-状态：Phase 2 中间实施记录，不代表 Phase 2 整体验收完成<br>
+状态：Phase 2 技术验收完成；生产 V3 仍保持关闭
 分支：<code>codex/phase2-market-data-foundation</code></p>
 </blockquote>
 <h2 id="1">1. 本轮实现<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
@@ -36,7 +38,7 @@
 <li>中断后只重试失败或尚未处理的证券，已成功证券通过运行游标和已发布覆盖检查双重跳过；</li>
 <li>每个受控并发批次完成后 checkpoint，运行计数由连续高水位和失败项重新计算，避免重试造成重复累计；</li>
 <li><code>row_version</code> 乐观锁拒绝同一运行的并发写入，网络请求保持在数据库事务之外。</li>
-<li>Backfill 支持 <code>1..32</code> 的显式受控并发，默认 4；按并发窗口抓取/发布，由单协调器串行 checkpoint；</li>
+<li>Backfill 支持 <code>1..32</code> 的显式受控并发，Job 默认 16；按并发窗口抓取/发布，由单协调器串行 checkpoint；</li>
 <li>游标只保存 <code>next_index</code> 连续高水位和当前失败项，成功目标不反复写入 JSONB；成功全量时游标为常量大小，避免 O(全市场) JSON 重写和 WAL 放大；</li>
 <li>东方财富历史 K 连续失败 3 次后全局熔断 300 秒，冷却后真实探测恢复；熔断期间立即进入腾讯/Sina，不为每只证券重复制造无效请求；</li>
 <li>严格交易日历采用 <code>exchange_calendars:XSHG</code>，运行时记录包版本、日历代码及覆盖起止日期；</li>
@@ -72,6 +74,7 @@
 </table>
 <p>上游声明 5,551，解析 5,551，唯一代码 5,551，覆盖率 100%，墙钟 5.309 秒；北交所 339 只全部为当前 <code>920xxx</code> 代码。任一交易所分页不完整都会拒绝整份 Secondary 快照，不以沪深数据冒充全 A 股。</p>
 <p>集合对账进一步发现东方财富列表 5,905 是官方 5,551 的超集，多出 354 条：BJ 12、SH 151、SZ 191；样本包含定向可转债、转板旧代码及大量退市证券，官方集合没有 <code>official_only</code> 缺口。因此 Job 调整为三交易所官方源 PRIMARY、东方财富 SECONDARY，并增加相对 LKG 最大 5% 异常扩张门禁；数量更多不再自动等于覆盖更好。</p>
+<p>最终生产组合 Provider 只使用三交易所决定成员资格，再以东方财富补充停牌、ST 和退市风险状态；东方财富额外 354 条不会进入 Universe。最终快照为 5,551 只，其中 4 只明确标记停牌。</p>
 <h2 id="3-bar-provider">3. Bar Provider 实测<a class="headerlink" href="#3-bar-provider" title="Permanent link">&para;</a></h2>
 <p>探针：<code>scripts/v3_phase2_bar_probe.py</code>，300 个交易日，4 并发，最后 Bar 不得早于当前日期前 10 个自然日。</p>
 <table>
@@ -160,6 +163,7 @@
 <li>Universe 成员在 Domain 按 <code>(market, code)</code> 规范排序后再哈希，Provider 返回顺序不再影响集合事实；</li>
 <li>Canonical Hash 将 aware datetime 统一转换为 UTC；Universe coverage、Factor、OHLC、成交额分别规范到 DDL 的 5/12/6/4 位小数，保证 PostgreSQL 往返可复算；</li>
 <li><code>scripts/v3_phase2_universe_hash_audit.py</code> 在 5,551 成员快照上验证存储 Hash 与数据库重建 Hash 完全一致。</li>
+<li>Factor、RAW/QFQ、周/月增量 Revision 自动指向同证券同周期上一版；同一 Bundle 重放不会形成自指或重复链，真实 PostgreSQL 已验证 <code>supersedes_revision_id</code>。</li>
 </ul>
 <h2 id="6">6. 交易日历验收<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
 <ul>
@@ -169,24 +173,38 @@
 <li>2026-02-24 至 2026-02-27 节后短周只含 4 个 Session，周五 15:10 后可发布完整周 Bar，不要求伪造第 5 根；</li>
 <li>本地严格日历及聚合测试 8 项通过，服务器 Python 3.12 镜像复测 6 项通过。</li>
 </ul>
-<h2 id="7-job">7. Job 冷启动与恢复验收<a class="headerlink" href="#7-job" title="Permanent link">&para;</a></h2>
+<h2 id="7-job">7. 全市场 Job 验收<a class="headerlink" href="#7-job" title="Permanent link">&para;</a></h2>
 <p>入口：<code>scripts/v3_phase2_market_job.py</code>。</p>
 <ul>
-<li>支持 <code>universe</code>、<code>backfill</code>、<code>all</code> 三种模式；数据库地址必填且错误输出会脱敏；</li>
+<li>支持 <code>universe</code>、<code>backfill</code>、<code>corporate-actions</code>、<code>all</code> 四种模式；数据库地址必填且错误输出会脱敏；</li>
 <li>支持 <code>run_id</code> 恢复、<code>stop_after</code> 分段、300 日限制、1..32 并发和 JSON/原子文件报告；</li>
 <li>最近完整交易日由严格日历计算，2026-08-30 运行时门禁日期为 2026-08-28；</li>
 <li>服务器新建 <code>gpt_market_phase2_job3</code>，从空库 Migration <code>0001 -&gt; 0002</code> 后执行 <code>all --stop-after 20</code>；</li>
 <li>Universe PRIMARY 为官方 5,551（BJ 339、SH 2,315、SZ 2,897），前 20 只行情 <code>20/20</code>，失败 0，墙钟 24.772 秒；</li>
 <li>使用同一 <code>run_id</code> 恢复后从 <code>next_index=20</code> 推进到 40，新增 20 只 <code>20/20</code>，失败 0，墙钟 9.708 秒；</li>
 <li>运行终态若为 <code>PARTIAL/FAILED</code>，CLI 返回非零，供 Scheduler/容器健康检查报警。</li>
+<li>最终增强快照运行 <code>7222f265-1ad2-4637-830e-ba5eddc5e648</code> 完成 <code>5,551/5,551</code>，失败 0，墙钟 1,362.295 秒；4 只停牌证券允许最后交易日早于 2026-08-28，但仍要求真实非空历史。</li>
+<li>最新 QFQ 日线 Provider 分布为腾讯 5,122、Sina 429；RAW、Factor、<code>FULL</code> 精度均为 5,551/5,551。</li>
+<li>最新 Revision Set 含日线 5,551、周线 5,551；月线 5,534，剩余 17 只当月新股没有完整自然月，系统不发布伪完整月 Bar。</li>
+<li>最新日线中 5,375 只保留 300 根；其余为真实上市历史不足 300 根的新股，全部非停牌证券最后交易日为 2026-08-28。</li>
+<li>验收中发现 PostgreSQL 返回上海零点后按 UTC <code>.date()</code> 会落到前一天，导致已覆盖证券被误判未覆盖。修复为 <code>astimezone(Asia/Shanghai).date()</code> 并增加真实 PostgreSQL 边界测试后，新建全市场任务 <code>5,551/5,551</code> 全部覆盖短路，墙钟 12.966 秒且没有再次调用行情 Provider。</li>
 </ul>
-<h2 id="8">8. 当前未完成<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<h2 id="8-corporate-action">8. Corporate Action 验收<a class="headerlink" href="#8-corporate-action" title="Permanent link">&para;</a></h2>
 <ul>
-<li>全市场 5,000+ 证券正式跑批及覆盖率/耗时验收（受控并发能力已具备）；</li>
-<li>日常增量调度，以及 2027 年交易日历发布后的升级复验；</li>
-<li>全市场覆盖率不低于 90% 的正式持久化验收；</li>
-<li>Corporate Action 原始事实 Provider；</li>
-<li>完整 Revision supersedes 链和批次运行观测；</li>
-<li>Phase 2 Job/Container/部署开关。</li>
+<li><code>EastmoneyCorporateActionProvider</code> 按除权日范围分页读取 <code>RPT_SHAREBONUS_DET</code>，标准化公告日、登记日、除权日、现金、送股、转增、方案进度和原始引用；</li>
+<li>市场事实与账户调整严格分离，不直接改变持仓；非“实施分配”方案标记 <code>effective_date_status=PLANNED</code>，不得冒充已实施；</li>
+<li>2025-01-01 起真实抓取 8,793 个逻辑事件：现金 8,033、现金加送转 700、送转 60；8,792 条已实施，1 条为已公告计划；</li>
+<li>首次规范化发布 8,793 条；同一事实再次运行 8,793 条全部 <code>unchanged</code>、新增 0，墙钟 7.877 秒；</li>
+<li>事实内容变化时追加新行并绑定 <code>supersedes_action_id</code>，语义内容 Hash 排除抓取时间等运行元数据，真实 PostgreSQL 已验证幂等和更正链。</li>
 </ul>
-<p>因此本记录只证明 Bar 数据层单股链路和 20 只真实样本通过，不把 Phase 2 标记为已完成。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
+<h2 id="9-worker">9. Worker 与调度<a class="headerlink" href="#9-worker" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>scripts/v3_phase2_scheduler.py</code> 按 <code>Asia/Shanghai</code> 每日定时执行完整 Job，支持 <code>--once</code> 验收和原子报告文件；</li>
+<li>PostgreSQL advisory lock 防止 Scheduler、人工任务或容器重启重叠执行；真实双连接竞争与释放后重获已通过；</li>
+<li>Compose Worker 位于独立 <code>v3-worker</code> Profile，启动前执行 <code>alembic upgrade head</code>，不会随现有 V1/V2 API 或仅启用 <code>v3</code> PostgreSQL Profile 自动启动；</li>
+<li>并发、历史长度、执行时刻、锁 Key 和报告路径均通过 <code>V3_PHASE2_*</code> 环境变量配置；</li>
+<li>服务器 <code>--once</code> 端到端执行 Universe → Backfill → Corporate Action：官方增强 Universe 5,551，Backfill 5,551/5,551，公司行动窗口 5,113 条全部 unchanged，整体墙钟 23.627 秒；原子报告文件通过 JSON 解析。持久化挂载目录须预先授予 UID 10001 写权限；</li>
+<li>当前日历只覆盖至 2026-12-31；2027 年前必须升级依赖并按交易所公告复验，越界时任务会明确失败。</li>
+</ul>
+<h2 id="10">10. 验收结论<a class="headerlink" href="#10" title="Permanent link">&para;</a></h2>
+<p>Phase 2 验收目标“全市场覆盖率不低于 90%、断点续跑、Universe LKG、优先 raw/factor、前复权-only 限制”已满足。实际 Universe 和日/周覆盖率为 100%，月线缺失仅来自尚无完整月的新股，并有明确原因。Phase 2 可以进入 Phase 3；生产 V3 仍须保持 Feature Flag 关闭，待后续 Phase 和最终部署验收完成后统一启用。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

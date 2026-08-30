@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="c15dad5177ef60319d0c3bffc1181c94d2253ffd4c4a4e7c77c30c257e46c946"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="6f4c2848335338604a21ef193e4d8f25fc5848aa5e081511df6ed651bca366d3"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,7 +16,7 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：c15dad5177ef</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：6f4c28483353</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-30（Asia/Shanghai）
 当前分支：<code>codex/phase2-market-data-foundation</code>
@@ -24,7 +24,7 @@
 状态对应提交：以本文件所在的 <code>origin/main</code> 最新提交为准</p>
 </blockquote>
 <h2 id="_1">当前结论<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
-<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1 已验收、合并 <code>main</code> 并建立标签 <code>v3-phase1-foundation-20260829</code>；用户已授权继续完成 Phase 2–11 全部 V3。当前在独立分支实施 Phase 2 全市场历史底座；继续保持 V1/V2 兼容，不修改其评分规则，线上仍以现有 V1/V2 + Phase2A 部署为运行基线。</p>
+<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1 已合并 <code>main</code> 并建立标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 已完成本地与服务器隔离技术验收，准备进入 Phase 3。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。</p>
 <h2 id="_2">已完成<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
 <ul>
 <li>V2/Phase2A 基线提交：<code>556a335</code>；</li>
@@ -59,29 +59,33 @@
 <li>Phase 2 日 K 单股链路已实现 RAW/QFQ 成对获取、Factor Revision、QFQ-only LIMITED、陈旧门禁、partial 隔离、交易日历驱动的周/月聚合及同事务发布；实现记录见 <code>docs/Phase2行情底座实施记录.md</code>。</li>
 <li>Phase 2 历史 Backfill 已实现不可变 Universe 绑定、批次 checkpoint、紧凑高水位/失败游标、失败目标重试、发布后崩溃恢复、已完成运行幂等返回和 <code>row_version</code> 并发冲突保护；真实 PostgreSQL 17 端到端重放保持 8 个序列零重复。</li>
 <li>Phase 2 严格交易日历已接入 <code>exchange_calendars:XSHG</code>，记录版本与覆盖边界，越界硬失败；已按上交所 2026 春节休市安排验证节后短周聚合，本地及服务器 Python 3.12 均通过。</li>
-<li>Phase 2 Backfill 已支持默认 4、上限 32 的受控并发；网络/发布并行但 checkpoint 单协调器串行，3 并发上限及真实 PostgreSQL 并发重放均通过。</li>
+<li>Phase 2 Backfill 已支持默认 16、上限 32 的受控并发；网络/发布并行但 checkpoint 单协调器串行，3 并发上限及真实 PostgreSQL 并发重放均通过。</li>
 <li>Phase 2 可执行行情 Job 已接线：官方 Universe PRIMARY、东方财富 SECONDARY，支持 Universe/Backfill/All、run ID 恢复、分段执行和结构化报告；异常扩张超过 LKG 5% 会拒绝。</li>
 <li>Universe/Bar 不可变 Hash 已统一成员排序、UTC datetime 和 DDL 数值精度，5,551 成员 PostgreSQL 存储 Hash 与重建 Hash 一致。</li>
 <li>东方财富历史 K 已增加连续失败熔断与冷却探测，熔断期间快速进入腾讯/Sina fallback，避免全市场任务产生上万次已知无效请求。</li>
+<li>Phase 2 官方 Universe 与东方财富状态组合 Provider 已验收：官方成员 5,551，东方财富只补充停牌/ST 状态并排除 354 条额外污染证券；最终停牌 4 只。</li>
+<li>Phase 2 全市场日 K 最终完成 5,551/5,551、失败 0；腾讯 5,122、Sina 429，全部具备 RAW/QFQ/Factor/FULL，周线 5,551，完整月线 5,534。</li>
+<li>覆盖检查已改为单次批量查询并按上海交易日比较；全市场已覆盖重放 12.966 秒完成且不再次调用行情 Provider。</li>
+<li>Corporate Action 已完成分页 Provider、标准化、语义 Hash、幂等和更正链；真实抓取 8,793 个逻辑事件，重复运行新增 0、unchanged 8,793。</li>
+<li>Bar/Factor/Corporate Action 均已建立不可变 <code>supersedes</code> 修订链，真实 PostgreSQL 已验证。</li>
+<li>Phase 2 Scheduler、独立 Compose <code>v3-worker</code> Profile、上海时区日调度、原子报告和 PostgreSQL advisory lock 已实现并通过配置、竞争锁和一次性路径验收。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>将已可执行的 Universe/Backfill Job 接入 Compose Worker/Scheduler，并补全持续运行观测；</li>
-<li>实现全市场 Raw Bar/Factor Revision、增量更新和本地周/月聚合持久化。</li>
-<li>接入可执行 Job 和结构化覆盖率报告后，执行全市场 5,000+ 正式跑批。</li>
+<li>收口 Phase 2 验收文档、提交与分支检查点；</li>
+<li>按《架构设计实施稿》进入 Phase 3：版本化 Full Market Features、Universe Query 与事实型 Market Regime。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 2 及后续所有 V3 实施阶段；</li>
+<li>Phase 3 及后续 V3 实施阶段；</li>
 <li>生产环境 V3 PostgreSQL 部署和正式 Migration；</li>
-<li>V3 API、Worker、Feature、Recall、Evidence Ingestion、AI Import 和 Portfolio 实现；</li>
+<li>V3 API、Feature、Recall、Evidence Ingestion、AI Import 和 Portfolio 实现；</li>
 <li>服务器 V3 部署。</li>
 </ul>
 <h2 id="unknown">阻塞与 UNKNOWN<a class="headerlink" href="#unknown" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Scheduler 技术实现仍待进入对应 Phase 后确认；</li>
 <li>当前日历版本覆盖至 2026-12-31；进入 2027 年前必须升级数据包并按交易所公告复验，越界时系统会显式失败；</li>
-<li>部分历史数据可能只有前复权序列，Point-in-Time 精度需在 Phase 2 实测；</li>
+<li>当前验收全市场数据均取得 RAW/QFQ/Factor/FULL；其他时间或上游只能返回 QFQ 时仍按设计降为 <code>LIMITED</code>；</li>
 <li>本状态不代表当前服务器部署版本已经包含 V3，服务器仍以现有部署事实为准。</li>
 </ul>
 <h2 id="_5">最近验证<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
@@ -90,7 +94,7 @@
 <li>AIResultBundle 已采用逻辑 <code>atomic_group</code>，不存在整包 <code>ALL_OR_NOTHING</code> 旧语义；</li>
 <li>Bundle 示例 JSON 已通过解析；</li>
 <li>当前文档整理没有修改行情、扫描、评分、Provider、缓存、MCP 或 Web API 业务逻辑。</li>
-<li>文档生成检查：29 组 Markdown/HTML 内容 Hash 同步（包含根 README、CONTRIBUTING 与 <code>docs</code>）；</li>
+<li>文档生成检查：32 组 Markdown/HTML 内容 Hash 同步（包含根 README、CONTRIBUTING 与 <code>docs</code>）；</li>
 <li>需求追踪检查：需求规格中的 49 项 P0/P1 与矩阵 49 项一一对应，无缺失、无重复、无额外编号；</li>
 <li>术语检查：正式文档不存在 <code>corporate_action_adjustments</code> 或整包 <code>ALL_OR_NOTHING</code> 旧设计；</li>
 <li>当前本地 <code>.venv</code> 使用 Python 3.13；Phase 1 应用镜像已在服务器使用 Python 3.12 构建通过。</li>
@@ -117,16 +121,21 @@
 <li>Backfill 6 目标并发测试确认配置 3 时最大活跃数为 3，两个批次 checkpoint 完整且成功态游标保持常量大小；服务器真实 PostgreSQL 默认并发发布和同 run 重放 <code>1 passed</code>。</li>
 <li>东方财富与官方 Universe 集合实测：主源 5,905、官方 5,551，主源多出的 354 条包含定转、旧代码及退市证券，官方无反向缺口；据此调整为官方 PRIMARY 并新增 5% 异常扩张门禁。</li>
 <li>Phase 2 Job 在全新 PostgreSQL 库从 <code>0001 -&gt; 0002</code> 冷启动：官方 5,551 发布成功，首段 20/20；同 run 恢复至 40/40，两个分段均 0 失败；数据库重建 Hash 等于存储 Hash。</li>
+<li>Phase 2 最终全市场任务：<code>5,551/5,551</code>、失败 0；发现并修复 UTC <code>.date()</code> 导致上海零点退一天的覆盖误判，边界测试与 12.966 秒全市场幂等重放通过。</li>
+<li>最新 Revision Set：日 RAW/QFQ 各 5,551、周 RAW/QFQ 各 5,551、月 RAW/QFQ 各 5,534；17 只当月新股无完整月，不发布 partial 月 Bar。</li>
+<li>Corporate Action 2025-01-01 起抓取 8,793 个逻辑事件，第三次同事实同步新增 0、unchanged 8,793；现金 8,033、现金加送转 700、送转 60。</li>
+<li>Scheduler <code>--once</code> 服务器端到端路径在 23.627 秒完成：Universe 5,551、Backfill 5,551/5,551、400 日公司行动窗口 5,113 条 unchanged，原子 JSON 报告有效；挂载目录 UID 10001 权限门禁已实测。</li>
+<li>当前全套本地回归：<code>137 passed, 16 skipped</code>；新增上海交易日、修订链、公司行动和 advisory lock 真实 PostgreSQL 项均在服务器通过。</li>
 <li>生产 <code>market-mcp</code> 在 Phase 1/2 隔离验收期间持续为 <code>healthy</code>；Phase 1 已合并，生产 V3 仍未启用。</li>
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
-<li>将已验收 CLI Job 接入隔离 Compose Worker/Scheduler；</li>
-<li>使用现有 run ID 继续执行 5,551 全市场覆盖率与恢复验收；</li>
-<li>接入 Corporate Action 原始事实，并建立交易日历年度升级门禁；</li>
-<li>用真实全市场任务验证覆盖率、修订、聚合和恢复能力。</li>
+<li>合并并标记 Phase 2 检查点；</li>
+<li>建立 Phase 3 Migration、Feature Domain/Repository 和可重放 Feature Run；</li>
+<li>实现收益、位置、趋势、波动、量价和质量等全市场轻量特征；</li>
+<li>实现白名单 Universe Query 与事实型 Market Regime，并做性能验收。</li>
 </ol>
-<p>当前 V3 回滚点为标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 未验收前不合并 <code>main</code>、不启用生产 V3。</p>
+<p>当前生产回滚点仍为标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 技术验收完成，但在后续 Phase 和最终生产部署前不启用 V3。</p>
 <h2 id="_7">接手关键文件<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
 <pre><code class="language-text">README.md
 docs/架构设计实施稿.md

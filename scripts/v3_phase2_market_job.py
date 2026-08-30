@@ -46,8 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--database-url", default=os.getenv("V3_DATABASE_URL"))
     parser.add_argument("--run-id", type=UUID)
-    parser.add_argument("--limit", type=int, default=300)
-    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--limit", type=int, default=int(os.getenv("V3_PHASE2_HISTORY_LIMIT", "300"))
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=int(os.getenv("V3_PHASE2_CONCURRENCY", "16"))
+    )
     parser.add_argument("--stop-after", type=int)
     parser.add_argument("--minimum-last-bar-date", type=date.fromisoformat)
     parser.add_argument("--corporate-since", type=date.fromisoformat)
