@@ -30,6 +30,7 @@ class DailyBarIngestionBundle:
     source_code: str
     raw_revision: BarSeriesRevision | None
     adjusted_revision: BarSeriesRevision
+    hfq_revision: BarSeriesRevision | None
     factor_revision: AdjustmentFactorRevision | None
     provider_errors: tuple[str, ...]
     partial_bars: tuple[MarketBar, ...]
@@ -157,10 +158,47 @@ class BuildDailyBarRevisionsService:
             precision=(PointInTimePrecision.FULL if factors_complete else PointInTimePrecision.LIMITED),
             precision_reason=(None if factors_complete else "raw/qfq dates did not align completely"),
         )
+        hfq_revision = None
+        if factors_complete and factor_revision is not None:
+            first_factor = factor_revision.factors[0].factor
+            factor_by_time = {
+                item.trading_time: item.factor / first_factor
+                for item in factor_revision.factors
+            }
+            hfq_bars = tuple(
+                bar.model_copy(
+                    update={
+                        "open": bar.open * factor_by_time[bar.bar_time],
+                        "high": bar.high * factor_by_time[bar.bar_time],
+                        "low": bar.low * factor_by_time[bar.bar_time],
+                        "close": bar.close * factor_by_time[bar.bar_time],
+                    }
+                )
+                for bar in raw_formal
+            )
+            hfq_fetched = raw.model_copy(
+                update={
+                    "source_code": "derived:hfq_from_raw_qfq",
+                    "upstream_source": f"{raw.upstream_source}+{qfq.upstream_source}",
+                    "adjust_type": AdjustType.HFQ,
+                    "fetch_time": max(raw.fetch_time, qfq.fetch_time),
+                    "bars": hfq_bars,
+                }
+            )
+            hfq_revision = self._build_bar_revision(
+                security_id,
+                hfq_fetched,
+                hfq_bars,
+                known_at=known_at,
+                raw_available=True,
+                factor_revision_id=factor_revision.factor_revision_id,
+                precision=PointInTimePrecision.FULL,
+            )
         return DailyBarIngestionBundle(
             source_code=qfq.source_code,
             raw_revision=raw_revision,
             adjusted_revision=adjusted_revision,
+            hfq_revision=hfq_revision,
             factor_revision=factor_revision,
             provider_errors=errors,
             partial_bars=tuple((*raw_partial, *qfq_partial)),
@@ -186,6 +224,7 @@ class BuildDailyBarRevisionsService:
             source_code=qfq.source_code,
             raw_revision=None,
             adjusted_revision=revision,
+            hfq_revision=None,
             factor_revision=None,
             provider_errors=errors,
             partial_bars=partial,

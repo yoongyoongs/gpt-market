@@ -84,9 +84,9 @@ async def test_factor_and_series_commit_as_one_bundle() -> None:
     result = await PublishBarBundleService(lambda: FakeUnitOfWork(store)).execute(await bundle())
 
     assert result.factor_created is True
-    assert result.series_created == 2
+    assert result.series_created == 3
     assert len(store.factors) == 1
-    assert len(store.series) == 2
+    assert len(store.series) == 3
     assert store.committed is True
 
 
@@ -111,11 +111,11 @@ async def test_republishing_same_bundle_is_idempotent() -> None:
     store.committed = False
     second = await service.execute(value)
 
-    assert first.series_created == 2
+    assert first.series_created == 3
     assert second.factor_created is False
     assert second.series_created == 0
     assert len(store.factors) == 1
-    assert len(store.series) == 2
+    assert len(store.series) == 3
 
 
 @pytest.mark.asyncio
@@ -132,8 +132,8 @@ async def test_new_bundle_links_previous_factor_and_series_revisions() -> None:
     await service.execute(second)
 
     assert store.factors[-1].supersedes_revision_id == store.factors[0].factor_revision_id
-    previous_by_key = {(item.period, item.adjust_type): item for item in store.series[:2]}
-    for revision in store.series[2:]:
+    previous_by_key = {(item.period, item.adjust_type): item for item in store.series[:3]}
+    for revision in store.series[3:]:
         assert revision.supersedes_revision_id == previous_by_key[
             (revision.period, revision.adjust_type)
         ].revision_id

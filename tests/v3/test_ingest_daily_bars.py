@@ -81,6 +81,10 @@ async def test_paired_raw_and_qfq_build_factor_bound_revisions() -> None:
     assert [round(item.factor, 6) for item in bundle.factor_revision.factors] == [0.5, 0.5, 1.0]
     assert bundle.adjusted_revision.factor_revision_id == bundle.factor_revision.factor_revision_id
     assert bundle.adjusted_revision.point_in_time_precision is PointInTimePrecision.FULL
+    assert bundle.hfq_revision is not None
+    assert bundle.hfq_revision.adjust_type is AdjustType.HFQ
+    assert [bar.close for bar in bundle.hfq_revision.bars] == [10.0, 11.0, 24.0]
+    assert bundle.hfq_revision.factor_revision_id == bundle.factor_revision.factor_revision_id
 
 
 @pytest.mark.asyncio
@@ -106,6 +110,7 @@ async def test_qfq_only_is_explicitly_limited_without_fabricated_factor() -> Non
 
     assert bundle.raw_revision is None
     assert bundle.factor_revision is None
+    assert bundle.hfq_revision is None
     assert bundle.adjusted_revision.raw_bar_available is False
     assert bundle.adjusted_revision.point_in_time_precision is PointInTimePrecision.LIMITED
     assert "RAW history was unavailable" in bundle.adjusted_revision.precision_reason

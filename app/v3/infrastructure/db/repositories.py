@@ -466,10 +466,14 @@ class SQLAlchemyBarRepository:
             select(
                 BarSeriesRevisionModel.revision_id,
                 BarSeriesRevisionModel.security_id,
+                BarSeriesRevisionModel.adjust_type,
                 BarSeriesRevisionModel.raw_bar_available,
                 func.row_number()
                 .over(
-                    partition_by=BarSeriesRevisionModel.security_id,
+                    partition_by=(
+                        BarSeriesRevisionModel.security_id,
+                        BarSeriesRevisionModel.adjust_type,
+                    ),
                     order_by=(
                         BarSeriesRevisionModel.known_at.desc(),
                         BarSeriesRevisionModel.revision_id.desc(),
@@ -480,7 +484,7 @@ class SQLAlchemyBarRepository:
             .where(
                 BarSeriesRevisionModel.security_id.in_(security_ids),
                 BarSeriesRevisionModel.period == "DAY",
-                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.adjust_type.in_(("QFQ", "HFQ")),
                 BarSeriesRevisionModel.status == "PUBLISHED",
             )
             .subquery()
@@ -489,13 +493,18 @@ class SQLAlchemyBarRepository:
             await self._session.execute(
                 select(
                     ranked.c.security_id,
+                    ranked.c.adjust_type,
                     ranked.c.raw_bar_available,
                     func.count(MarketBarModel.bar_time),
                     func.max(MarketBarModel.bar_time),
                 )
                 .join(MarketBarModel, MarketBarModel.revision_id == ranked.c.revision_id)
                 .where(ranked.c.revision_rank == 1)
-                .group_by(ranked.c.security_id, ranked.c.raw_bar_available)
+                .group_by(
+                    ranked.c.security_id,
+                    ranked.c.adjust_type,
+                    ranked.c.raw_bar_available,
+                )
             )
         ).all()
         required_dates = {
@@ -504,12 +513,19 @@ class SQLAlchemyBarRepository:
             )
             for target in targets
         }
+        valid_adjustments: dict[UUID, set[str]] = {}
+        for security_id, adjust_type, raw_available, count, last_bar_time in rows:
+            if (
+                raw_available
+                and count >= minimum_bars
+                and last_bar_time.astimezone(SHANGHAI).date()
+                >= required_dates[security_id]
+            ):
+                valid_adjustments.setdefault(security_id, set()).add(adjust_type)
         return {
             security_id
-            for security_id, raw_available, count, last_bar_time in rows
-            if raw_available
-            and count >= minimum_bars
-            and last_bar_time.astimezone(SHANGHAI).date() >= required_dates[security_id]
+            for security_id, adjustments in valid_adjustments.items()
+            if adjustments == {"QFQ", "HFQ"}
         }
 
 

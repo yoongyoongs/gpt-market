@@ -63,7 +63,8 @@ async def test_daily_coverage_compares_shanghai_trading_date() -> None:
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     security_id = uuid4()
-    revision_id = uuid4()
+    qfq_revision_id = uuid4()
+    hfq_revision_id = uuid4()
     trading_date = date(2026, 8, 28)
     bar_time = datetime.combine(trading_date, datetime.min.time(), tzinfo=SHANGHAI)
     known_at = bar_time + timedelta(hours=16)
@@ -83,14 +84,15 @@ async def test_daily_coverage_compares_shanghai_trading_date() -> None:
                 "INSERT INTO v3.bar_series_revisions "
                 "(revision_id, security_id, period, adjust_type, source, upstream_source, "
                 "raw_bar_available, point_in_time_precision, known_at, content_hash) "
-                "VALUES (:revision_id, :security_id, 'DAY', 'QFQ', 'fixture', 'fixture', "
+                "VALUES (:revision_id, :security_id, 'DAY', :adjust_type, 'fixture', 'fixture', "
                 "true, 'FULL', :known_at, :content_hash)"
             ),
             {
-                "revision_id": revision_id,
+                "revision_id": qfq_revision_id,
                 "security_id": security_id,
+                "adjust_type": "QFQ",
                 "known_at": known_at,
-                "content_hash": revision_id.hex * 2,
+                "content_hash": qfq_revision_id.hex * 2,
             },
         )
         await connection.execute(
@@ -100,7 +102,45 @@ async def test_daily_coverage_compares_shanghai_trading_date() -> None:
                 "event_time, fetch_time) VALUES "
                 "(:revision_id, :bar_time, 10, 11, 9, 10, 100, 1000, false, :bar_time, :known_at)"
             ),
-            {"revision_id": revision_id, "bar_time": bar_time, "known_at": known_at},
+            {
+                "revision_id": qfq_revision_id,
+                "bar_time": bar_time,
+                "known_at": known_at,
+            },
+        )
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        qfq_only_covered = await uow.bars.covered_daily_security_ids(
+            (target,), minimum_bars=1, minimum_last_bar_date=trading_date
+        )
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO v3.bar_series_revisions "
+                "(revision_id, security_id, period, adjust_type, source, upstream_source, "
+                "raw_bar_available, point_in_time_precision, known_at, content_hash) "
+                "VALUES (:revision_id, :security_id, 'DAY', 'HFQ', 'fixture', 'fixture', "
+                "true, 'FULL', :known_at, :content_hash)"
+            ),
+            {
+                "revision_id": hfq_revision_id,
+                "security_id": security_id,
+                "known_at": known_at,
+                "content_hash": hfq_revision_id.hex * 2,
+            },
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO v3.market_bars "
+                "(revision_id, bar_time, open, high, low, close, volume, amount, provisional, "
+                "event_time, fetch_time) VALUES "
+                "(:revision_id, :bar_time, 10, 11, 9, 10, 100, 1000, false, :bar_time, :known_at)"
+            ),
+            {
+                "revision_id": hfq_revision_id,
+                "bar_time": bar_time,
+                "known_at": known_at,
+            },
         )
 
     async with SQLAlchemyUnitOfWork(sessions) as uow:
@@ -112,6 +152,7 @@ async def test_daily_coverage_compares_shanghai_trading_date() -> None:
         )
     await engine.dispose()
 
+    assert qfq_only_covered == set()
     assert covered == {security_id}
     assert individually_covered is True
 
@@ -526,10 +567,10 @@ async def test_bar_bundle_repository_is_atomic_and_idempotent() -> None:
     await engine.dispose()
 
     assert first.factor_created is True
-    assert first.series_created == 2
+    assert first.series_created == 3
     assert second.factor_created is False
     assert second.series_created == 0
-    assert (factor_count, series_count, bar_count) == (1, 2, 6)
+    assert (factor_count, series_count, bar_count) == (1, 3, 9)
 
 
 @pytest.mark.asyncio
@@ -583,8 +624,8 @@ async def test_bar_bundle_appends_supersedes_revision_chain() -> None:
 
     assert len(factor_links) == 2
     assert factor_links[1].supersedes_revision_id == factor_links[0].factor_revision_id
-    assert len(series_links) == 4
-    for index in (0, 2):
+    assert len(series_links) == 6
+    for index in (0, 2, 4):
         assert series_links[index + 1].supersedes_revision_id == series_links[index].revision_id
 
 
@@ -661,7 +702,7 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
     assert third.status is IngestionRunStatus.COMPLETED
     assert provider.calls == 4
     assert tuple(run_counts) == ("COMPLETED", 2, 2, 2, 0)
-    assert series_count == 8
+    assert series_count == 18
 
 
 @pytest.mark.asyncio

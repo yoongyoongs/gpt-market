@@ -37,6 +37,7 @@ class PublishBarBundleService:
                 for revision in (
                     daily.raw_revision,
                     daily.adjusted_revision,
+                    daily.hfq_revision,
                     *(aggregate.revision for aggregate in aggregates),
                 )
                 if revision is not None
