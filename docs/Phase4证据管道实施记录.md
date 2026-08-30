@@ -2,7 +2,7 @@
 
 > 日期：2026-08-30（Asia/Shanghai）  
 > 分支：`codex/phase4-evidence-ingestion`  
-> 状态：Evidence 基础闭环、Fetch Run 恢复及 Conflict/Dedup 已完成；Core Provider、实体匹配和 READ API 待完成
+> 状态：Evidence 基础闭环、Fetch Run、Conflict/Dedup 和首批 Core Provider 已完成；实体匹配、Job 和 READ API 待完成
 
 ## 1. 当前范围
 
@@ -16,6 +16,8 @@
 - Fetch Run 游标 checkpoint、分段恢复、终态重放和 `row_version` 乐观锁；
 - 精确 Raw 去重、解析幂等、按 `known_at` Retrieval 和跨来源独立保留；
 - 规范 Payload 精确/近似重复关系、同 Claim 多值冲突集合和来源优先级临时选择。
+- 能力维度 Provider Registry、按源限流、429/5xx 重试和响应结构硬校验；
+- 巨潮官方公告、东方财富财务/业绩预告/业绩快报、中国政府网最新政策和东方财富基础财经新闻 Provider/Parser。
 
 ## 2. 关键不变量
 
@@ -49,15 +51,29 @@
 - Phase 4 Domain/PostgreSQL 专项 `13 passed`：Raw 去重、跨来源同内容保留、Parse/Link/Relation/Conflict 原子发布、时点 Retrieval、解析失败保留 Raw、重复跑批幂等和不可变触发器通过。
 - 两页真实数据库分段任务验证首段 `RUNNING + cursor`、恢复后 `COMPLETED`、终态重放不请求 Provider，陈旧 `row_version` checkpoint 被拒绝。
 - 多源真实数据库样例验证相同值建立 `EXACT_DUPLICATE`，不同值形成保留三方成员的 `OPEN` Conflict，并按来源优先级、置信度和 `known_at` 记录临时选择。
-- 配置真实 PostgreSQL 的完整回归 `169 passed, 5 skipped`；本轮 Ruff、`git diff --check` 通过。
+- 配置真实 PostgreSQL 的完整回归 `175 passed, 5 skipped`；本轮 Ruff、`git diff --check` 通过。
+
+首批 Core Source 真实联网探针（2026-08-30，均执行 Fetch 与前三条 Parse）：
+
+| Source | 实际入口 | 本批结果 | 首批耗时 |
+|---|---|---:|---:|
+| 巨潮公告 | `POST https://www.cninfo.com.cn/new/hisAnnouncement/query` | 10 条；总数 7,034；返回下一页 Cursor | 212.198 ms |
+| 东方财富财务 | `RPT_F10_FINANCE_MAINFINADATA` | 3 只样本 24 条 | 254.300 ms |
+| 东方财富业绩预告 | `RPT_PUBLIC_OP_NEWPREDICT` | 3 只样本 24 条 | 132.165 ms |
+| 东方财富业绩快报 | `RPT_FCI_PERFORMANCEE` | 3 只样本 13 条 | 206.769 ms |
+| 中国政府网政策 | `GET /zhengce/zuixin/ZUIXINZHENGCE.json` | 两日窗口合法空集；扩至 7 日取得 1 条 | 268.394 ms |
+| 东方财富要闻 | `GET https://finance.eastmoney.com/yaowen.html` | 两日窗口 246 条；首批 10 条 | 168.512 ms |
+
+探针已固化为 `scripts/probe_v3_evidence_providers.py`。政策两日窗口的 0 条是上游结构正常、按发布日期过滤后的业务空集，不将其写成 Provider 失败，也不伪造其他日期数据。
+
+- 真实 Provider → Raw → Parse → Link/Conflict → Fetch Run 的 PostgreSQL 17 验收：巨潮 `3/3`、财务 `20/20`、政策 `1/1`、新闻 `5/5`，共 29 条 Raw 和 29 条 Evidence，解析失败 0；分页源保持 `RUNNING + cursor`，耗尽源为 `COMPLETED`。新增 Provider 契约测试 `6 passed`。
 - 本轮文件 Ruff 和 `git diff --check` 通过；全仓仍保留既有 Legacy Ruff 告警，未扩大 V1/V2 修改范围。
 
 ## 5. 待完成
 
-1. 接入 Core 公告/交易所/巨潮、财务与业绩、已有 Vendor、基础新闻和重要国内政策 Provider；
-2. 实现 Provider/Parser Registry、限流、重试和 Provider 级失败隔离；
-3. 完成 Security/Industry/Market Entity Link 与低置信 Candidate 工作流；
-4. 完成 Decay-aware Retrieval、Coverage/UNKNOWN、READ API 和 Job；
-5. 真实多源样本验收、性能测试、文档收口、Phase 4 标签。
+1. 增加交易所公告备用源并实现 Registry 批次调度、Provider 级失败隔离和恢复入口；
+2. 完成 Security/Industry/Market 实体字典匹配与低置信 Candidate 工作流；
+3. 完成 Decay-aware Retrieval、Coverage/UNKNOWN、READ API 和 Job；
+4. 扩大真实多源样本验收、性能测试、文档收口、Phase 4 标签。
 
 本记录不表示 Phase 4 或整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 `0004`。
