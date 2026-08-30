@@ -166,13 +166,16 @@ class BuildDailyBarRevisionsService:
                 for item in factor_revision.factors
             }
             hfq_bars = tuple(
-                bar.model_copy(
-                    update={
-                        "open": bar.open * factor_by_time[bar.bar_time],
-                        "high": bar.high * factor_by_time[bar.bar_time],
-                        "low": bar.low * factor_by_time[bar.bar_time],
-                        "close": bar.close * factor_by_time[bar.bar_time],
-                    }
+                MarketBar(
+                    bar_time=bar.bar_time,
+                    open=bar.open * factor_by_time[bar.bar_time],
+                    high=bar.high * factor_by_time[bar.bar_time],
+                    low=bar.low * factor_by_time[bar.bar_time],
+                    close=bar.close * factor_by_time[bar.bar_time],
+                    volume=bar.volume,
+                    amount=bar.amount,
+                    provisional=bar.provisional,
+                    fetch_time=bar.fetch_time,
                 )
                 for bar in raw_formal
             )

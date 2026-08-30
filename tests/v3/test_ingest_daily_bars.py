@@ -88,6 +88,32 @@ async def test_paired_raw_and_qfq_build_factor_bound_revisions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hfq_normalizes_non_integer_factor_before_hashing() -> None:
+    class NonIntegerFactorProvider(FakeProvider):
+        async def fetch(self, code, period, adjust_type, limit):
+            fetched = await super().fetch(code, period, adjust_type, limit)
+            if adjust_type is AdjustType.QFQ:
+                bars = tuple(
+                    bar.model_copy(update={
+                        "open": round(bar.open * 0.673219, 6),
+                        "high": round(bar.high * 0.673219, 6),
+                        "low": round(bar.low * 0.673219, 6),
+                        "close": round(bar.close * 0.673219, 6),
+                    })
+                    for bar in fetched.bars
+                )
+                return fetched.model_copy(update={"bars": bars})
+            return fetched
+
+    bundle = await BuildDailyBarRevisionsService(
+        [NonIntegerFactorProvider("fixture")], clock=lambda: NOW
+    ).execute(uuid4(), "600000")
+
+    assert bundle.hfq_revision is not None
+    assert all(round(bar.close, 6) == bar.close for bar in bundle.hfq_revision.bars)
+
+
+@pytest.mark.asyncio
 async def test_raw_failure_prefers_later_paired_provider() -> None:
     first = FakeProvider("first", raw_error=RuntimeError("raw unavailable"))
     second = FakeProvider("second")

@@ -47,6 +47,7 @@ Universe Query 最大页长 200。字段、排序键和数值过滤只允许类�
 - V3 全部测试（启用真实 PostgreSQL）：`81 passed`；
 - 全项目测试（启用真实 PostgreSQL）：`154 passed, 5 skipped`；
 - 全新环境发现并补齐 SQLAlchemy async 所需的显式 `greenlet` 依赖。
+- 首次全市场冷启动预验收发现并修复两项数据层缺陷：非整比复权因子派生 HFQ 时先规范化 6 位价格再计算 Hash；空库官方源失败时，超过 5,700 成员的 Secondary 污染集合会被明确拒绝。
 
 ## 6. 待完成验收
 

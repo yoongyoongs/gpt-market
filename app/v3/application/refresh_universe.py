@@ -37,6 +37,7 @@ class RefreshUniverseService:
         providers: Sequence[UniverseProvider],
         *,
         minimum_members: int = 4500,
+        maximum_members: int = 5700,
         minimum_coverage: float = 0.9,
         minimum_retention: float = 0.9,
         maximum_growth: float = 1.05,
@@ -47,6 +48,7 @@ class RefreshUniverseService:
         self._uow_factory = uow_factory
         self._providers = tuple(providers)
         self._minimum_members = minimum_members
+        self._maximum_members = maximum_members
         self._minimum_coverage = minimum_coverage
         self._minimum_retention = minimum_retention
         self._maximum_growth = maximum_growth
@@ -116,6 +118,10 @@ class RefreshUniverseService:
         if member_count < self._minimum_members:
             raise UniverseCoverageError(
                 f"member count {member_count} is below minimum {self._minimum_members}"
+            )
+        if member_count > self._maximum_members:
+            raise UniverseCoverageError(
+                f"member count {member_count} exceeds cold-start maximum {self._maximum_members}"
             )
         if coverage < self._minimum_coverage:
             raise UniverseCoverageError(
