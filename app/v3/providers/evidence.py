@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.v3.contracts.base import V3Contract
 from app.v3.domain.evidence import (
@@ -20,6 +20,12 @@ class EvidenceFetchBatch(V3Contract):
     next_cursor: dict[str, object] | None = None
     exhausted: bool = True
     upstream_count: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_cursor(self) -> "EvidenceFetchBatch":
+        if not self.exhausted and not self.next_cursor:
+            raise ValueError("non-exhausted evidence batch requires next_cursor")
+        return self
 
 
 class ParsedEvidenceBundle(V3Contract):

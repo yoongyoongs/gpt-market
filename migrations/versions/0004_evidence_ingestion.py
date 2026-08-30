@@ -24,9 +24,13 @@ IMMUTABLE_TABLES = (
     "evidence_conflicts",
     "evidence_conflict_members",
 )
+EXTENDED_IMMUTABLE_TABLES = ("raw_documents", "evidence_records")
 
 
 def upgrade() -> None:
+    for table_name in EXTENDED_IMMUTABLE_TABLES:
+        op.execute(f"DROP TRIGGER IF EXISTS prevent_mutation ON {SCHEMA}.{table_name}")
+
     op.add_column("evidence_sources", sa.Column("upstream_source", sa.String(128)), schema=SCHEMA)
     op.add_column(
         "evidence_sources",
@@ -81,6 +85,7 @@ def upgrade() -> None:
 
     op.drop_constraint("uq_evidence_records_content_hash", "evidence_records", schema=SCHEMA, type_="unique")
     op.add_column("evidence_records", sa.Column("source_type", sa.String(32), server_default="VENDOR", nullable=False), schema=SCHEMA)
+    op.add_column("evidence_records", sa.Column("source_priority", sa.Integer(), server_default="100", nullable=False), schema=SCHEMA)
     op.add_column("evidence_records", sa.Column("claim_key", sa.String(256)), schema=SCHEMA)
     op.add_column(
         "evidence_records",
@@ -110,6 +115,12 @@ def upgrade() -> None:
         "ck_evidence_records_valid_source_type",
         "evidence_records",
         "source_type IN ('OFFICIAL','VENDOR','NEWS','OPINION')",
+        schema=SCHEMA,
+    )
+    op.create_check_constraint(
+        "ck_evidence_records_positive_source_priority",
+        "evidence_records",
+        "source_priority > 0",
         schema=SCHEMA,
     )
     op.create_check_constraint(
@@ -152,6 +163,7 @@ def upgrade() -> None:
         sa.Column("raw_inserted_count", sa.Integer(), nullable=False),
         sa.Column("duplicate_count", sa.Integer(), nullable=False),
         sa.Column("parsed_count", sa.Integer(), nullable=False),
+        sa.Column("evidence_count", sa.Integer(), nullable=False),
         sa.Column("failed_count", sa.Integer(), nullable=False),
         sa.Column("errors", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
@@ -163,6 +175,7 @@ def upgrade() -> None:
         sa.CheckConstraint("raw_inserted_count >= 0", name="ck_evidence_fetch_runs_nonnegative_inserted"),
         sa.CheckConstraint("duplicate_count >= 0", name="ck_evidence_fetch_runs_nonnegative_duplicates"),
         sa.CheckConstraint("parsed_count >= 0", name="ck_evidence_fetch_runs_nonnegative_parsed"),
+        sa.CheckConstraint("evidence_count >= 0", name="ck_evidence_fetch_runs_nonnegative_evidence"),
         sa.CheckConstraint("failed_count >= 0", name="ck_evidence_fetch_runs_nonnegative_failed"),
         sa.CheckConstraint(
             "status IN ('RUNNING','PARTIAL','COMPLETED','FAILED')",
@@ -305,6 +318,11 @@ def upgrade() -> None:
             f"CREATE TRIGGER prevent_mutation BEFORE UPDATE OR DELETE ON {SCHEMA}.{table_name} "
             f"FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.prevent_mutation()"
         )
+    for table_name in EXTENDED_IMMUTABLE_TABLES:
+        op.execute(
+            f"CREATE TRIGGER prevent_mutation BEFORE UPDATE OR DELETE ON {SCHEMA}.{table_name} "
+            f"FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.prevent_mutation()"
+        )
 
 
 def downgrade() -> None:
@@ -328,6 +346,7 @@ def downgrade() -> None:
         "ck_evidence_records_nonnegative_decay_rate",
         "ck_evidence_records_valid_decay_model",
         "ck_evidence_records_valid_source_type",
+        "ck_evidence_records_positive_source_priority",
     ):
         op.drop_constraint(name, "evidence_records", schema=SCHEMA, type_="check")
     op.drop_constraint(
@@ -338,7 +357,7 @@ def downgrade() -> None:
     )
     for column in (
         "supersedes_evidence_id", "untrusted", "availability", "decay_rate", "decay_model",
-        "normalized_payload", "claim_key", "source_type",
+        "normalized_payload", "claim_key", "source_priority", "source_type",
     ):
         op.drop_column("evidence_records", column, schema=SCHEMA)
     op.create_unique_constraint("uq_evidence_records_content_hash", "evidence_records", ["content_hash"], schema=SCHEMA)

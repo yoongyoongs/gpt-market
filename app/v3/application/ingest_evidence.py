@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import Field
 
 from app.v3.contracts.base import V3Contract
+from app.v3.application.analyze_evidence import AnalyzeEvidenceService
 from app.v3.domain.evidence import ParseAttempt, ParseStatus, RawDocument
 from app.v3.providers.evidence import EvidenceParser, EvidenceProvider
 from app.v3.repositories.protocols import UnitOfWork
@@ -30,11 +31,13 @@ class EvidenceIngestionResult(V3Contract):
     fetched_count: int = Field(ge=0)
     raw_inserted_count: int = Field(ge=0)
     duplicate_count: int = Field(ge=0)
-    parsed_count: int = Field(ge=0)
+    parsed_document_count: int = Field(ge=0)
+    evidence_count: int = Field(ge=0)
     failed_count: int = Field(ge=0)
     errors: dict[str, str]
     next_cursor: dict[str, object] | None = None
     exhausted: bool
+    upstream_count: int | None = Field(default=None, ge=0)
 
 
 class IngestEvidenceBatchService:
@@ -42,10 +45,12 @@ class IngestEvidenceBatchService:
         self,
         uow_factory: Callable[[], UnitOfWork],
         *,
+        analyzer: AnalyzeEvidenceService | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock
+        self._analyzer = analyzer or AnalyzeEvidenceService(uow_factory)
 
     async def execute(
         self,
@@ -69,7 +74,8 @@ class IngestEvidenceBatchService:
         )
         inserted_count = 0
         duplicate_count = 0
-        parsed_count = 0
+        parsed_document_count = 0
+        evidence_count = 0
         errors: dict[str, str] = {}
         for fetched in batch.documents:
             raw = RawDocument.build(
@@ -95,7 +101,8 @@ class IngestEvidenceBatchService:
             started_at = self._clock()
             try:
                 parsed = parser.parse(raw, source)
-                self._validate_parser_output(raw, parsed.records, parsed.links)
+                self._validate_parser_output(raw, source, parsed.records, parsed.links)
+                analysis = await self._analyzer.execute(parsed.records)
                 completed_at = self._clock()
                 attempt = ParseAttempt.build(
                     raw_document_id=raw.raw_document_id,
@@ -109,10 +116,15 @@ class IngestEvidenceBatchService:
                 )
                 async with self._uow_factory() as uow:
                     published = await uow.evidence.publish_parse(
-                        attempt, parsed.records, parsed.links
+                        attempt,
+                        parsed.records,
+                        parsed.links,
+                        analysis.relations,
+                        analysis.conflicts,
                     )
                     if published:
-                        parsed_count += len(parsed.records)
+                        parsed_document_count += 1
+                        evidence_count += len(parsed.records)
                         await uow.commit()
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
@@ -136,19 +148,25 @@ class IngestEvidenceBatchService:
             fetched_count=len(batch.documents),
             raw_inserted_count=inserted_count,
             duplicate_count=duplicate_count,
-            parsed_count=parsed_count,
+            parsed_document_count=parsed_document_count,
+            evidence_count=evidence_count,
             failed_count=len(errors),
             errors=errors,
             next_cursor=batch.next_cursor,
             exhausted=batch.exhausted,
+            upstream_count=batch.upstream_count,
         )
 
     @staticmethod
-    def _validate_parser_output(raw, records, links) -> None:
+    def _validate_parser_output(raw, source, records, links) -> None:
         record_ids = set()
         for record in records:
             if record.raw_document_id != raw.raw_document_id:
                 raise ValueError("parser output references a different raw document")
+            if record.source != source.code or record.source_type is not source.source_type:
+                raise ValueError("parser output source identity does not match the provider")
+            if record.source_priority != source.priority:
+                raise ValueError("parser output source priority does not match the provider")
             record_ids.add(record.evidence_id)
         if len(record_ids) != len(records):
             raise ValueError("parser output contains duplicate evidence IDs")

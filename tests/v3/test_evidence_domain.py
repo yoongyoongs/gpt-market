@@ -11,12 +11,16 @@ from app.v3.domain.evidence import (
     EntityLink,
     EntityLinkStatus,
     EvidenceConflict,
+    EvidenceFetchRun,
+    EvidenceRelation,
+    EvidenceRelationType,
     EvidenceSourceType,
     FetchedDocument,
     NormalizedEvidence,
     ParseAttempt,
     ParseStatus,
     RawDocument,
+    FetchRunStatus,
 )
 
 
@@ -28,6 +32,7 @@ def evidence(**updates) -> NormalizedEvidence:
         "raw_document_id": uuid4(),
         "evidence_type": EvidenceType.VENDOR_DATA,
         "source_type": EvidenceSourceType.VENDOR,
+        "source_priority": 50,
         "subject_type": "SECURITY",
         "subject_id": "SH:600519",
         "claim_key": "financial:2026Q2:revenue",
@@ -127,4 +132,56 @@ def test_conflict_requires_distinct_members_and_selected_member() -> None:
             claim_key="financial:2026Q2:revenue",
             selected_evidence_id=uuid4(),
             member_ids=(first, second),
+        )
+
+
+def test_fetch_run_checkpoint_and_terminal_status_are_validated() -> None:
+    run = EvidenceFetchRun(
+        evidence_source_id=uuid4(),
+        started_at=NOW,
+    )
+    checkpoint = run.checkpoint(
+        cursor={"page": 2},
+        expected_count=3,
+        fetched_count=2,
+        raw_inserted_count=2,
+        duplicate_count=0,
+        parsed_count=1,
+        evidence_count=2,
+        failed_count=1,
+        errors={"document-2": "fixture failure"},
+    )
+    assert checkpoint.status is FetchRunStatus.RUNNING
+    assert checkpoint.row_version == 2
+    finished = checkpoint.finish(completed_at=NOW + timedelta(seconds=2), exhausted=True)
+    assert finished.status is FetchRunStatus.PARTIAL
+    assert finished.row_version == 3
+
+
+def test_fetch_run_rejects_impossible_counts() -> None:
+    with pytest.raises(ValidationError, match="raw counts cannot exceed"):
+        EvidenceFetchRun(
+            evidence_source_id=uuid4(),
+            started_at=NOW,
+            fetched_count=1,
+            raw_inserted_count=2,
+        )
+
+
+def test_evidence_relation_is_content_addressed_and_requires_distinct_records() -> None:
+    first, second = uuid4(), uuid4()
+    relation = EvidenceRelation.build(
+        from_evidence_id=first,
+        to_evidence_id=second,
+        relation_type=EvidenceRelationType.NEAR_DUPLICATE,
+        similarity=0.95,
+        reason="fixture similarity",
+    )
+    assert len(relation.content_hash) == 64
+    with pytest.raises(ValidationError, match="distinct records"):
+        EvidenceRelation.build(
+            from_evidence_id=first,
+            to_evidence_id=first,
+            relation_type=EvidenceRelationType.EXACT_DUPLICATE,
+            similarity=1,
         )

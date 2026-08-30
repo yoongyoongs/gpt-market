@@ -34,14 +34,18 @@ from app.v3.domain.features import (
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
+    EvidenceConflict,
     EvidenceAvailability,
+    EvidenceFetchRun,
+    EvidenceRelation,
     EvidenceSource,
     EvidenceSourceType,
+    FetchRunStatus,
     NormalizedEvidence,
     ParseAttempt,
     RawDocument,
 )
-from app.v3.domain.hashing import canonical_json
+from app.v3.domain.hashing import canonical_hash, canonical_json
 from app.v3.infrastructure.db.models import (
     AgentTaskModel,
     AdjustmentFactorModel,
@@ -64,6 +68,10 @@ from app.v3.infrastructure.db.models import (
     EvidenceRecordModel,
     RawDocumentParseAttemptModel,
     EvidenceEntityLinkModel,
+    EvidenceFetchRunModel,
+    EvidenceRelationModel,
+    EvidenceConflictModel,
+    EvidenceConflictMemberModel,
 )
 
 
@@ -155,6 +163,57 @@ class SQLAlchemyEvidenceRepository:
         )
         return (await self._session.execute(statement)).scalar_one()
 
+    async def add_fetch_run(self, run: EvidenceFetchRun) -> None:
+        self._session.add(EvidenceFetchRunModel(
+            fetch_run_id=run.fetch_run_id,
+            evidence_source_id=run.evidence_source_id,
+            status=run.status.value,
+            window_start=run.window_start,
+            window_end=run.window_end,
+            cursor=run.cursor,
+            expected_count=run.expected_count,
+            fetched_count=run.fetched_count,
+            raw_inserted_count=run.raw_inserted_count,
+            duplicate_count=run.duplicate_count,
+            parsed_count=run.parsed_count,
+            evidence_count=run.evidence_count,
+            failed_count=run.failed_count,
+            errors=run.errors,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            row_version=run.row_version,
+        ))
+
+    async def get_fetch_run(self, fetch_run_id: UUID) -> EvidenceFetchRun | None:
+        model = await self._session.get(EvidenceFetchRunModel, fetch_run_id)
+        return None if model is None else self._fetch_run(model)
+
+    async def save_fetch_run(
+        self, run: EvidenceFetchRun, *, expected_version: int
+    ) -> bool:
+        result = await self._session.execute(
+            update(EvidenceFetchRunModel)
+            .where(
+                EvidenceFetchRunModel.fetch_run_id == run.fetch_run_id,
+                EvidenceFetchRunModel.row_version == expected_version,
+            )
+            .values(
+                status=run.status.value,
+                cursor=run.cursor,
+                expected_count=run.expected_count,
+                fetched_count=run.fetched_count,
+                raw_inserted_count=run.raw_inserted_count,
+                duplicate_count=run.duplicate_count,
+                parsed_count=run.parsed_count,
+                evidence_count=run.evidence_count,
+                failed_count=run.failed_count,
+                errors=run.errors,
+                completed_at=run.completed_at,
+                row_version=run.row_version,
+            )
+        )
+        return result.rowcount == 1
+
     async def add_raw_if_absent(self, document: RawDocument) -> bool:
         inserted = (
             await self._session.execute(
@@ -207,6 +266,8 @@ class SQLAlchemyEvidenceRepository:
         attempt: ParseAttempt,
         records: tuple[NormalizedEvidence, ...],
         links: tuple[EntityLink, ...],
+        relations: tuple[EvidenceRelation, ...] = (),
+        conflicts: tuple[EvidenceConflict, ...] = (),
     ) -> bool:
         attempt_inserted = (
             await self._session.execute(
@@ -266,6 +327,61 @@ class SQLAlchemyEvidenceRepository:
             ).scalar_one_or_none()
             if inserted is None:
                 raise RuntimeError("new parse attempt produced a duplicate entity link")
+        for relation in relations:
+            await self._session.execute(
+                insert(EvidenceRelationModel)
+                .values(
+                    relation_id=relation.relation_id,
+                    from_evidence_id=relation.from_evidence_id,
+                    to_evidence_id=relation.to_evidence_id,
+                    relation_type=relation.relation_type.value,
+                    similarity=relation.similarity,
+                    reason=relation.reason,
+                    content_hash=relation.content_hash,
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_evidence_relations_pair_type"
+                )
+            )
+        for conflict in conflicts:
+            inserted_conflict = (
+                await self._session.execute(
+                    insert(EvidenceConflictModel)
+                    .values(
+                        conflict_id=conflict.conflict_id,
+                        subject_type=conflict.subject_type,
+                        subject_id=conflict.subject_id,
+                        claim_key=conflict.claim_key,
+                        status=conflict.status.value,
+                        selected_evidence_id=conflict.selected_evidence_id,
+                        resolution=conflict.resolution,
+                        content_hash=conflict.content_hash,
+                    )
+                    .on_conflict_do_nothing(
+                        constraint="uq_evidence_conflicts_claim_content"
+                    )
+                    .returning(EvidenceConflictModel.conflict_id)
+                )
+            ).scalar_one_or_none()
+            if inserted_conflict is None:
+                continue
+            member_models = (
+                await self._session.execute(
+                    select(EvidenceRecordModel).where(
+                        EvidenceRecordModel.evidence_id.in_(conflict.member_ids)
+                    )
+                )
+            ).scalars().all()
+            if len(member_models) != len(conflict.member_ids):
+                raise RuntimeError("conflict references unavailable evidence")
+            for member in member_models:
+                self._session.add(EvidenceConflictMemberModel(
+                    conflict_id=conflict.conflict_id,
+                    evidence_id=member.evidence_id,
+                    value_hash=canonical_hash(member.normalized_payload),
+                    source_priority=member.source_priority,
+                    confidence=member.confidence,
+                ))
         return True
 
     async def records_for_claim(
@@ -330,12 +446,35 @@ class SQLAlchemyEvidenceRepository:
         )
 
     @staticmethod
+    def _fetch_run(model: EvidenceFetchRunModel) -> EvidenceFetchRun:
+        return EvidenceFetchRun(
+            fetch_run_id=model.fetch_run_id,
+            evidence_source_id=model.evidence_source_id,
+            status=FetchRunStatus(model.status),
+            window_start=model.window_start,
+            window_end=model.window_end,
+            cursor=model.cursor,
+            expected_count=model.expected_count,
+            fetched_count=model.fetched_count,
+            raw_inserted_count=model.raw_inserted_count,
+            duplicate_count=model.duplicate_count,
+            parsed_count=model.parsed_count,
+            evidence_count=model.evidence_count,
+            failed_count=model.failed_count,
+            errors=model.errors,
+            started_at=model.started_at,
+            completed_at=model.completed_at,
+            row_version=model.row_version,
+        )
+
+    @staticmethod
     def _record_values(record: NormalizedEvidence) -> dict[str, object]:
         return {
             "evidence_id": record.evidence_id,
             "raw_document_id": record.raw_document_id,
             "evidence_type": record.evidence_type.value,
             "source_type": record.source_type.value,
+            "source_priority": record.source_priority,
             "subject_type": record.subject_type,
             "subject_id": record.subject_id,
             "claim_key": record.claim_key,
@@ -367,6 +506,7 @@ class SQLAlchemyEvidenceRepository:
             raw_document_id=model.raw_document_id,
             evidence_type=EvidenceType(model.evidence_type),
             source_type=EvidenceSourceType(model.source_type),
+            source_priority=model.source_priority,
             subject_type=model.subject_type,
             subject_id=model.subject_id,
             claim_key=model.claim_key,

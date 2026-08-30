@@ -100,6 +100,7 @@ class EvidenceRecordModel(Base):
             "source_type IN ('OFFICIAL','VENDOR','NEWS','OPINION')",
             name="valid_source_type",
         ),
+        CheckConstraint("source_priority > 0", name="positive_source_priority"),
         CheckConstraint(
             "decay_model IN ('NONE','LINEAR','EXPONENTIAL','FIXED_EXPIRY')",
             name="valid_decay_model",
@@ -128,6 +129,7 @@ class EvidenceRecordModel(Base):
     )
     evidence_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, server_default="VENDOR")
+    source_priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="100")
     subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subject_id: Mapped[str] = mapped_column(String(64), nullable=False)
     claim_key: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -163,6 +165,7 @@ class EvidenceFetchRunModel(Base):
         CheckConstraint("raw_inserted_count >= 0", name="nonnegative_inserted"),
         CheckConstraint("duplicate_count >= 0", name="nonnegative_duplicates"),
         CheckConstraint("parsed_count >= 0", name="nonnegative_parsed"),
+        CheckConstraint("evidence_count >= 0", name="nonnegative_evidence"),
         CheckConstraint("failed_count >= 0", name="nonnegative_failed"),
         CheckConstraint(
             "status IN ('RUNNING','PARTIAL','COMPLETED','FAILED')",
@@ -186,6 +189,7 @@ class EvidenceFetchRunModel(Base):
     raw_inserted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     parsed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     errors: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

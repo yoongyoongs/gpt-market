@@ -2,7 +2,7 @@
 
 > 日期：2026-08-30（Asia/Shanghai）  
 > 分支：`codex/phase4-evidence-ingestion`  
-> 状态：Evidence 基础模型与 Raw→Parse 最小闭环完成；Core Provider、Conflict/Dedup 和 READ API 待完成
+> 状态：Evidence 基础闭环、Fetch Run 恢复及 Conflict/Dedup 已完成；Core Provider、实体匹配和 READ API 待完成
 
 ## 1. 当前范围
 
@@ -13,7 +13,9 @@
 - Fetch Run、Raw Document、不可变 Parse Attempt、Entity Link、Evidence Relation、Conflict Set/Member 数据结构；
 - Evidence 来源类型、衰减、失效、时点和 Untrusted Data 领域约束；
 - Raw 先提交、后解析的批次服务；
-- 精确 Raw 去重、解析幂等、按 `known_at` Retrieval 和跨来源独立保留。
+- Fetch Run 游标 checkpoint、分段恢复、终态重放和 `row_version` 乐观锁；
+- 精确 Raw 去重、解析幂等、按 `known_at` Retrieval 和跨来源独立保留；
+- 规范 Payload 精确/近似重复关系、同 Claim 多值冲突集合和来源优先级临时选择。
 
 ## 2. 关键不变量
 
@@ -25,6 +27,8 @@
 - Retrieval 必须满足 `known_at <= as_of`，并排除已失效、撤回或被替代的 Evidence。
 - Linear/Exponential Decay 必须有明确 Rate；Fixed Expiry 必须有 `expire_at`，衰减在读取时计算，不回写历史 Evidence。
 - 低置信实体关联可以保存为 Candidate，不能自动冒充 Confirmed Link。
+- Fetch Run 只有 `RUNNING` 可写 checkpoint；上游异常必须落为 `FAILED`，未耗尽批次必须返回可恢复 Cursor。
+- 重复和冲突 Evidence 均不得被覆盖或删除；临时选择只记录解释，不把低优先级来源从证据链中移除。
 
 ## 3. 数据库变更
 
@@ -37,24 +41,23 @@
 - `evidence_conflicts`；
 - `evidence_conflict_members`。
 
-扩展 `evidence_sources/raw_documents/evidence_records`，增加来源能力、Raw Payload、规范引用、Claim Key、Normalized Payload、Source Type、Decay、Availability、Supersedes 和检索索引。原有 Raw/Evidence 全局 Content Hash 唯一约束改为带来源/Raw/Parser 身份的约束，既支持精确去重，也保留多源事实。
+扩展 `evidence_sources/raw_documents/evidence_records`，增加来源能力、Raw Payload、规范引用、Claim Key、Normalized Payload、Source Type、Source Priority、Decay、Availability、Supersedes 和检索索引。Fetch Run 同时保存 Raw、Parse 和 Evidence 数量及失败摘要。原有 Raw/Evidence 全局 Content Hash 唯一约束改为带来源/Raw/Parser 身份的约束，既支持精确去重，也保留多源事实。
 
 ## 4. 当前验收
 
-- 全新 PostgreSQL 17 从 base 升级至 `0004_evidence_ingestion` 成功，共 29 张 V3 表；新增 5 张不可变事实表的 UPDATE/DELETE 触发器共 10 个事件绑定。
-- `0004 -> 0003 -> 0004` Downgrade/Upgrade 通过；降级后 6 张新增表和 Raw 扩展列均清除。
-- 真实 PostgreSQL 集成 `2 passed`：Raw 去重、跨来源同内容保留、Parse/Link 原子发布、时点 Retrieval、解析失败保留 Raw、重复跑批幂等和不可变触发器通过。
-- Phase 4 Domain/Migration 专项 `8 passed`；本地完整回归 `150 passed, 19 skipped`。
+- PostgreSQL 17 `0003 -> 0004 -> 0003 -> 0004` 双往返通过；Migration 回填期间临时移除旧 Raw/Evidence 不可变触发器并在同一事务恢复，运行期约束不放松。
+- Phase 4 Domain/PostgreSQL 专项 `13 passed`：Raw 去重、跨来源同内容保留、Parse/Link/Relation/Conflict 原子发布、时点 Retrieval、解析失败保留 Raw、重复跑批幂等和不可变触发器通过。
+- 两页真实数据库分段任务验证首段 `RUNNING + cursor`、恢复后 `COMPLETED`、终态重放不请求 Provider，陈旧 `row_version` checkpoint 被拒绝。
+- 多源真实数据库样例验证相同值建立 `EXACT_DUPLICATE`，不同值形成保留三方成员的 `OPEN` Conflict，并按来源优先级、置信度和 `known_at` 记录临时选择。
+- 配置真实 PostgreSQL 的完整回归 `169 passed, 5 skipped`；本轮 Ruff、`git diff --check` 通过。
 - 本轮文件 Ruff 和 `git diff --check` 通过；全仓仍保留既有 Legacy Ruff 告警，未扩大 V1/V2 修改范围。
 
 ## 5. 待完成
 
-1. 增加 Fetch Run checkpoint、重试、限流和 Provider 级失败隔离；
-2. 接入 Core 公告/交易所/巨潮、财务与业绩、已有 Vendor、基础新闻和重要国内政策 Provider；
-3. 实现 Parser Registry、规范化策略、精确/近似 Dedup Relation；
-4. 实现 Security/Industry/Market Entity Link 与低置信 Candidate 工作流；
-5. 实现同 Claim 多源 Conflict Detection、来源优先级和不可变 Conflict Set；
-6. 实现 Decay-aware Retrieval、Coverage/UNKNOWN、READ API 和 Job；
-7. 真实多源样本验收、性能测试、文档收口、Phase 4 标签。
+1. 接入 Core 公告/交易所/巨潮、财务与业绩、已有 Vendor、基础新闻和重要国内政策 Provider；
+2. 实现 Provider/Parser Registry、限流、重试和 Provider 级失败隔离；
+3. 完成 Security/Industry/Market Entity Link 与低置信 Candidate 工作流；
+4. 完成 Decay-aware Retrieval、Coverage/UNKNOWN、READ API 和 Job；
+5. 真实多源样本验收、性能测试、文档收口、Phase 4 标签。
 
 本记录不表示 Phase 4 或整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 `0004`。

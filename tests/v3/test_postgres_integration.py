@@ -202,12 +202,15 @@ async def test_phase1_schema_and_immutable_raw_document(connection) -> None:
     await connection.execute(
         text(
             "INSERT INTO v3.raw_documents "
-            "(raw_document_id, evidence_source_id, raw_reference, fetch_time, known_at, content_hash) "
-            "VALUES (:id, :source_id, 'fixture', :fetch_time, :known_at, :content_hash)"
+            "(raw_document_id, evidence_source_id, raw_reference, document_key, "
+            "normalized_reference, fetch_time, known_at, content_hash) "
+            "VALUES (:id, :source_id, 'fixture', :document_key, 'https://example.com/fixture', "
+            ":fetch_time, :known_at, :content_hash)"
         ),
         {
             "id": document_id,
             "source_id": source_id,
+            "document_key": f"fixture-{document_id}",
             "fetch_time": now,
             "known_at": now,
             "content_hash": document_id.hex + document_id.hex,

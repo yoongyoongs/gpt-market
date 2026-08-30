@@ -20,6 +20,9 @@ from app.v3.domain.market_data import (
 from app.v3.domain.features import FeaturePage, FeatureQuery, FeatureRun, MarketRegimeSnapshot, SecurityFeature
 from app.v3.domain.evidence import (
     EntityLink,
+    EvidenceConflict,
+    EvidenceFetchRun,
+    EvidenceRelation,
     EvidenceSource,
     NormalizedEvidence,
     ParseAttempt,
@@ -89,6 +92,12 @@ class FeatureRepository(Protocol):
 class EvidenceRepository(Protocol):
     async def upsert_source(self, source: EvidenceSource) -> UUID: ...
 
+    async def add_fetch_run(self, run: EvidenceFetchRun) -> None: ...
+
+    async def get_fetch_run(self, fetch_run_id: UUID) -> EvidenceFetchRun | None: ...
+
+    async def save_fetch_run(self, run: EvidenceFetchRun, *, expected_version: int) -> bool: ...
+
     async def add_raw_if_absent(self, document: RawDocument) -> bool: ...
 
     async def get_raw(self, raw_document_id: UUID) -> RawDocument | None: ...
@@ -102,6 +111,8 @@ class EvidenceRepository(Protocol):
         attempt: ParseAttempt,
         records: tuple[NormalizedEvidence, ...],
         links: tuple[EntityLink, ...],
+        relations: tuple[EvidenceRelation, ...] = (),
+        conflicts: tuple[EvidenceConflict, ...] = (),
     ) -> bool: ...
 
     async def records_for_claim(

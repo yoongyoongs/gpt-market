@@ -11,12 +11,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.application.ingest_evidence import IngestEvidenceBatchService, normalize_reference
+from app.v3.application.run_evidence_ingestion import RunEvidenceIngestionService
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
     EntityLinkStatus,
     EvidenceSource,
     EvidenceSourceType,
+    EvidenceFetchRun,
+    FetchRunStatus,
     FetchedDocument,
     NormalizedEvidence,
     ParseAttempt,
@@ -44,6 +47,22 @@ class FixtureProvider:
         return None
 
 
+class PagedFixtureProvider(FixtureProvider):
+    def __init__(self, source: EvidenceSource, documents: tuple[FetchedDocument, ...]) -> None:
+        super().__init__(source, documents)
+        self.calls = 0
+
+    async def fetch(self, **kwargs) -> EvidenceFetchBatch:
+        self.calls += 1
+        page = int((kwargs.get("cursor") or {}).get("page", 0))
+        return EvidenceFetchBatch(
+            documents=(self.documents[page],),
+            next_cursor={"page": 1} if page == 0 else None,
+            exhausted=page == 1,
+            upstream_count=len(self.documents),
+        )
+
+
 class FixtureParser:
     code = "fixture"
     version = "fixture-v1"
@@ -51,7 +70,9 @@ class FixtureParser:
     def parse(self, raw: RawDocument, source: EvidenceSource) -> ParsedEvidenceBundle:
         if raw.payload_text == "invalid":
             raise ValueError("fixture parse failure")
-        record = make_evidence(raw)
+        record = make_evidence(
+            raw, source=source.code, source_priority=source.priority
+        )
         link = EntityLink.build(
             evidence_id=record.evidence_id,
             entity_type="SECURITY",
@@ -63,17 +84,61 @@ class FixtureParser:
         return ParsedEvidenceBundle(records=(record,), links=(link,))
 
 
+class ClaimParser:
+    code = "claim-fixture"
+    version = "fixture-v1"
+
+    def __init__(self, *, claim_key: str, value: float) -> None:
+        self.claim_key = claim_key
+        self.value = value
+
+    def parse(self, raw: RawDocument, source: EvidenceSource) -> ParsedEvidenceBundle:
+        evidence_type = (
+            EvidenceType.OFFICIAL_DISCLOSURE
+            if source.source_type is EvidenceSourceType.OFFICIAL
+            else EvidenceType.VENDOR_DATA
+        )
+        record = NormalizedEvidence.build(
+            raw_document_id=raw.raw_document_id,
+            evidence_type=evidence_type,
+            source_type=source.source_type,
+            source_priority=source.priority,
+            subject_type="SECURITY",
+            subject_id="SH:600519",
+            claim_key=self.claim_key,
+            source=source.code,
+            upstream_source=source.upstream_source,
+            payload={"profit": self.value},
+            normalized_payload={"profit": self.value, "currency": "CNY"},
+            event_time=NOW - timedelta(days=1),
+            publish_time=NOW,
+            fetch_time=NOW,
+            known_at=NOW,
+            confidence=source.reliability,
+            relevance=0.9,
+            decay_model=DecayModel.NONE,
+            parser_version=self.version,
+        )
+        return ParsedEvidenceBundle(records=(record,))
+
+
 def make_evidence(
-    raw: RawDocument, *, known_at: datetime = NOW, subject_id: str = "SH:600519"
+    raw: RawDocument,
+    *,
+    known_at: datetime = NOW,
+    subject_id: str = "SH:600519",
+    source: str = "fixture-official",
+    source_priority: int = 1,
 ) -> NormalizedEvidence:
     return NormalizedEvidence.build(
         raw_document_id=raw.raw_document_id,
         evidence_type=EvidenceType.OFFICIAL_DISCLOSURE,
         source_type=EvidenceSourceType.OFFICIAL,
+        source_priority=source_priority,
         subject_type="SECURITY",
         subject_id=subject_id,
         claim_key="disclosure:fixture-1",
-        source="fixture-official",
+        source=source,
         upstream_source="fixture-exchange",
         payload={"title": "fixture disclosure"},
         normalized_payload={"title": "fixture disclosure", "category": "ANNOUNCEMENT"},
@@ -125,7 +190,12 @@ async def test_evidence_raw_parse_retrieve_dedup_and_immutability() -> None:
         assert await uow.evidence.add_raw_if_absent(raw) is False
         await uow.commit()
 
-    record = make_evidence(raw, subject_id=subject_id)
+    record = make_evidence(
+        raw,
+        subject_id=subject_id,
+        source=source.code,
+        source_priority=source.priority,
+    )
     link = EntityLink.build(
         evidence_id=record.evidence_id,
         entity_type="SECURITY",
@@ -230,11 +300,12 @@ async def test_ingestion_service_commits_raw_before_parse_and_replays_idempotent
     replay = await service.execute(provider=provider, parser=FixtureParser())
     assert first.fetched_count == 2
     assert first.raw_inserted_count == 2
-    assert first.parsed_count == 1
+    assert first.parsed_document_count == 1
+    assert first.evidence_count == 1
     assert first.failed_count == 1
     assert replay.raw_inserted_count == 0
     assert replay.duplicate_count == 2
-    assert replay.parsed_count == 0
+    assert replay.parsed_document_count == 0
     assert normalize_reference(documents[0].raw_reference) == "https://example.invalid/path?a=1&b=2"
 
     async with engine.connect() as connection:
@@ -250,4 +321,142 @@ async def test_ingestion_service_commits_raw_before_parse_and_replays_idempotent
         ), {"code": source.code})
     assert raw_count == 2
     assert dict(attempts.all()) == {"FAILED": 1, "SUCCESS": 1}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_run_segments_resume_terminal_replay_and_optimistic_lock() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = uuid4().hex
+    source = EvidenceSource(
+        code=f"fixture-fetch-run-{suffix}",
+        source_type=EvidenceSourceType.OFFICIAL,
+        upstream_source="fixture-exchange",
+        capabilities={"types": ["OFFICIAL_DISCLOSURE"]},
+        priority=1,
+        parser_version="fixture-v1",
+        reliability=1,
+    )
+    documents = tuple(
+        FetchedDocument(
+            document_key=f"page-{index}-{suffix}",
+            raw_reference=f"https://example.invalid/{suffix}/{index}",
+            mime_type="application/json",
+            payload_text='{"title":"fixture disclosure","code":"600519"}',
+            fetch_time=NOW,
+            known_at=NOW,
+        )
+        for index in range(2)
+    )
+    provider = PagedFixtureProvider(source, documents)
+    service = RunEvidenceIngestionService(
+        lambda: SQLAlchemyUnitOfWork(sessions), clock=lambda: NOW
+    )
+    first = await service.execute(
+        provider=provider, parser=FixtureParser(), max_batches=1
+    )
+    assert first.status is FetchRunStatus.RUNNING
+    assert first.cursor == {"page": 1}
+    assert first.fetched_count == first.parsed_count == first.evidence_count == 1
+    completed = await service.execute(
+        provider=provider,
+        parser=FixtureParser(),
+        fetch_run_id=first.fetch_run_id,
+    )
+    assert completed.status is FetchRunStatus.COMPLETED
+    assert completed.fetched_count == completed.parsed_count == completed.evidence_count == 2
+    calls = provider.calls
+    replay = await service.execute(
+        provider=provider,
+        parser=FixtureParser(),
+        fetch_run_id=first.fetch_run_id,
+    )
+    assert replay == completed
+    assert provider.calls == calls
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        source_id = await uow.evidence.upsert_source(source)
+        concurrent = EvidenceFetchRun(evidence_source_id=source_id, started_at=NOW)
+        await uow.evidence.add_fetch_run(concurrent)
+        await uow.commit()
+    first_update = concurrent.checkpoint(
+        cursor={"page": 1}, expected_count=2, fetched_count=1,
+        raw_inserted_count=1, duplicate_count=0, parsed_count=1,
+        evidence_count=1, failed_count=0, errors={},
+    )
+    second_update = concurrent.checkpoint(
+        cursor={"page": 9}, expected_count=2, fetched_count=1,
+        raw_inserted_count=1, duplicate_count=0, parsed_count=1,
+        evidence_count=1, failed_count=0, errors={},
+    )
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.evidence.save_fetch_run(first_update, expected_version=1) is True
+        await uow.commit()
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.evidence.save_fetch_run(second_update, expected_version=1) is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_multisource_exact_duplicate_and_conflict_are_append_only() -> None:
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = uuid4().hex
+    claim_key = f"financial:{suffix}:profit"
+    service = IngestEvidenceBatchService(
+        lambda: SQLAlchemyUnitOfWork(sessions), clock=lambda: NOW
+    )
+    definitions = (
+        (EvidenceSourceType.OFFICIAL, 1, 1.0, 100.0),
+        (EvidenceSourceType.VENDOR, 50, 0.8, 100.0),
+        (EvidenceSourceType.VENDOR, 60, 0.7, 80.0),
+    )
+    for index, (source_type, priority, reliability, value) in enumerate(definitions):
+        source = EvidenceSource(
+            code=f"fixture-claim-{index}-{suffix}",
+            source_type=source_type,
+            upstream_source=f"fixture-upstream-{index}",
+            capabilities={"types": ["FINANCIAL"]},
+            priority=priority,
+            parser_version="fixture-v1",
+            reliability=reliability,
+        )
+        document = FetchedDocument(
+            document_key=f"claim-{index}-{suffix}",
+            raw_reference=f"https://example.invalid/claim/{suffix}/{index}",
+            mime_type="application/json",
+            payload_text=f'{{"profit":{value}}}',
+            fetch_time=NOW,
+            known_at=NOW,
+        )
+        result = await service.execute(
+            provider=FixtureProvider(source, (document,)),
+            parser=ClaimParser(claim_key=claim_key, value=value),
+        )
+        assert result.failed_count == 0
+
+    async with engine.connect() as connection:
+        record_count = await connection.scalar(text(
+            "SELECT count(*) FROM v3.evidence_records WHERE claim_key=:claim_key"
+        ), {"claim_key": claim_key})
+        relation_types = await connection.execute(text(
+            "SELECT relation_type, count(*) FROM v3.evidence_relations r "
+            "JOIN v3.evidence_records e ON e.evidence_id=r.from_evidence_id "
+            "WHERE e.claim_key=:claim_key GROUP BY relation_type"
+        ), {"claim_key": claim_key})
+        conflict = (await connection.execute(text(
+            "SELECT c.conflict_id, e.source_priority FROM v3.evidence_conflicts c "
+            "JOIN v3.evidence_records e ON e.evidence_id=c.selected_evidence_id "
+            "WHERE c.claim_key=:claim_key"
+        ), {"claim_key": claim_key})).one()
+        member_count = await connection.scalar(text(
+            "SELECT count(*) FROM v3.evidence_conflict_members WHERE conflict_id=:id"
+        ), {"id": conflict[0]})
+    assert record_count == 3
+    assert dict(relation_types.all()) == {"EXACT_DUPLICATE": 1}
+    assert conflict[1] == 1
+    assert member_count == 3
     await engine.dispose()
