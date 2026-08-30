@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="8550e0ea54f95340f9a53904d4037093b3982e4585a17d1843ee574efec2e8c1"><title>Phase 5 多通道召回实施记录</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="13bd9d10e236bc1d76bcda87e6f649f653faeff115c89df242e51d5638af9ad9"><title>Phase 5 多通道召回实施记录</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -12,11 +12,11 @@
 <li><a href="#4">4. 待完成</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase5多通道召回实施记录.md · 内容哈希：8550e0ea54f9</div><h1 id="phase-5">Phase 5 多通道召回实施记录<a class="headerlink" href="#phase-5" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase5多通道召回实施记录.md · 内容哈希：13bd9d10e236</div><h1 id="phase-5">Phase 5 多通道召回实施记录<a class="headerlink" href="#phase-5" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>日期：2026-08-31（Asia/Shanghai）
 分支：<code>codex/phase5-multi-recall</code>
-状态：数据基础、首批 Feature Channel、Run/Raw/Observation 和 READ 已完成；Evidence Channel 与全市场验收开发中</p>
+状态：12 个首批 Channel、Run/Raw/Observation 和 READ 已完成；观察成熟与全市场验收开发中</p>
 </blockquote>
 <h2 id="1">1. 范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
 <p>Phase 5 按《架构设计实施稿》实现 Multi-Recall、Raw Opportunity、未来表现观察和 Recall Miss 基础，不修改 V1/V2 评分，不增加自动交易，也不建立统一 Final Score 或 Recall 权限墙。</p>
@@ -32,6 +32,7 @@
 <li>原子发布、确定性通道内排名、Raw 命中并集和全 Universe T+3/5/10 PENDING Observation；</li>
 <li><code>GET /api/v3/recalls</code> 与 <code>GET /api/v3/raw-opportunities</code> 稳定 Cursor READ；</li>
 <li><code>scripts/v3_phase5_recall.py</code> 最新/指定 Feature Run 执行与幂等重放。</li>
+<li>财务改善、业绩拐点和催化事件 3 个 Evidence Channel：分别只比较同报告期跨年财务、明确同比字段和近 30 日官方公告事件词，并返回 Evidence ID。</li>
 </ul>
 <h2 id="2">2. 不变量<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
 <ul>
@@ -51,11 +52,12 @@
 <li>成熟 Feature Job 探针 9 个通道中 6 个成功，周线/指数/行业输入缺失的 3 个通道明确 <code>UNAVAILABLE</code>；同输入连续执行返回同一 Recall Run；</li>
 <li>未来 <code>as_of</code> Feature 被 Job 在写 Channel 前拒绝，不能伪造已知未来；</li>
 <li>全新真实 PostgreSQL 的完整回归 <code>197 passed, 5 skipped</code>；2 条既有依赖/异步资源警告未由本阶段引入；</li>
+<li>12 通道真实 Job 探针成功发布：2 股夹具中 6 个 Feature 通道成功，周线/指数/行业及三类 Evidence 因确实缺输入明确 <code>UNAVAILABLE</code>，Coverage <code>0.5</code>；</li>
+<li>Evidence Channel 专项验证跨年同报告期、预告/快报同比、官方催化词和普通公告不命中；第三个全新 PostgreSQL 库完整回归 <code>199 passed, 5 skipped</code>；</li>
 <li>相关文件 Ruff 和 <code>git diff --check</code> 通过。</li>
 </ul>
 <h2 id="4">4. 待完成<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
 <ol>
-<li>财务改善、业绩拐点和催化事件 Evidence Channel；</li>
 <li>未命中证券回归、真实全市场覆盖和性能验收；</li>
 <li>Recall Miss 成熟 Job 的 Phase 5 基础接口与 Phase 10 边界复核；</li>
 <li>文档收口、合并与 Phase 5 稳定标签。</li>

@@ -7,6 +7,7 @@ from pydantic import Field
 
 from app.v3.contracts.base import V3Contract
 from app.v3.domain.recall import RecallChannel, RecallFeatureView
+from app.v3.domain.evidence import SecurityEvidenceView
 
 
 class RecallChannelUnavailable(RuntimeError):
@@ -30,4 +31,8 @@ class ChannelEvaluation(V3Contract):
 class RecallChannelEvaluator(Protocol):
     channel: RecallChannel
 
-    def evaluate(self, features: tuple[RecallFeatureView, ...]) -> ChannelEvaluation: ...
+    def evaluate(
+        self,
+        features: tuple[RecallFeatureView, ...],
+        evidence: tuple[SecurityEvidenceView, ...],
+    ) -> ChannelEvaluation: ...

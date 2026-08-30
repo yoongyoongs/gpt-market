@@ -47,6 +47,10 @@ class RunMultiRecallService:
         async with self._uow_factory() as uow:
             feature_run = await uow.features.get_run(feature_run_id)
             features = await uow.features.features_for_run(feature_run_id)
+            evidence = await uow.evidence.for_securities(
+                tuple(item.security_id for item in features),
+                as_of=feature_run.as_of if feature_run is not None else self._clock(),
+            )
         if feature_run is None:
             raise ValueError("published feature run does not exist")
         if len(features) != feature_run.successful_count:
@@ -63,7 +67,7 @@ class RunMultiRecallService:
         errors = {}
         for evaluator in self._channels:
             try:
-                evaluations.append((evaluator, evaluator.evaluate(features)))
+                evaluations.append((evaluator, evaluator.evaluate(features, evidence)))
             except Exception as exc:
                 errors[evaluator.channel.code] = f"{type(exc).__name__}: {exc}"
 

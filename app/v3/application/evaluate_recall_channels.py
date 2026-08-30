@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.v3.domain.recall import RecallChannel, RecallFeatureView
+from app.v3.domain.evidence import SecurityEvidenceView
 from app.v3.providers.recall import (
     ChannelEvaluation,
     RecallCandidate,
@@ -46,7 +47,11 @@ class FeatureRecallChannel:
         self._predicate = predicate
         self._strength = strength
 
-    def evaluate(self, features: tuple[RecallFeatureView, ...]) -> ChannelEvaluation:
+    def evaluate(
+        self,
+        features: tuple[RecallFeatureView, ...],
+        evidence: tuple[SecurityEvidenceView, ...] = (),
+    ) -> ChannelEvaluation:
         candidates = []
         evaluated = 0
         unavailable = 0

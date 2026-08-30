@@ -31,7 +31,7 @@ class FailingChannel:
         description="验证单通道失败隔离",
     )
 
-    def evaluate(self, _features):
+    def evaluate(self, _features, _evidence):
         raise RuntimeError("fixture channel failed")
 
 
@@ -70,6 +70,7 @@ class Uow:
     def __init__(self, features, recalls):
         self.features = features
         self.recalls = recalls
+        self.evidence = Evidence()
 
     async def __aenter__(self):
         return self
@@ -79,6 +80,11 @@ class Uow:
 
     async def commit(self):
         return None
+
+
+class Evidence:
+    async def for_securities(self, _security_ids, *, as_of):
+        return ()
 
 
 def published_feature_run(feature_run_id, count):

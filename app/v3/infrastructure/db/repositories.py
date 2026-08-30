@@ -48,6 +48,7 @@ from app.v3.domain.evidence import (
     NormalizedEvidence,
     ParseAttempt,
     RawDocument,
+    SecurityEvidenceView,
 )
 from app.v3.domain.recall import (
     PerformanceObservation,
@@ -566,6 +567,72 @@ class SQLAlchemyEvidenceRepository:
         return EvidenceRepositoryPage(
             views=tuple(result),
             coverage_counts={EvidenceType(kind): count for kind, count in coverage_rows},
+        )
+
+    async def for_securities(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[SecurityEvidenceView, ...]:
+        if not security_ids:
+            return ()
+        securities = (
+            await self._session.execute(
+                select(SecurityModel.security_id, SecurityModel.market, SecurityModel.code)
+                .where(SecurityModel.security_id.in_(security_ids))
+            )
+        ).all()
+        subject_to_security = {
+            f"{market}:{code}": security_id for security_id, market, code in securities
+        }
+        subjects = tuple(subject_to_security)
+        if not subjects:
+            return ()
+        base_filters = (
+            EvidenceRecordModel.known_at <= as_of,
+            EvidenceRecordModel.availability == EvidenceAvailability.AVAILABLE.value,
+            or_(EvidenceRecordModel.expire_at.is_(None), EvidenceRecordModel.expire_at >= as_of),
+        )
+        direct = (
+            await self._session.execute(
+                select(EvidenceRecordModel)
+                .where(
+                    EvidenceRecordModel.subject_type == "SECURITY",
+                    EvidenceRecordModel.subject_id.in_(subjects),
+                    *base_filters,
+                )
+            )
+        ).scalars().all()
+        linked = (
+            await self._session.execute(
+                select(EvidenceEntityLinkModel.entity_id, EvidenceRecordModel)
+                .join(
+                    EvidenceRecordModel,
+                    EvidenceRecordModel.evidence_id == EvidenceEntityLinkModel.evidence_id,
+                )
+                .where(
+                    EvidenceEntityLinkModel.entity_type == "SECURITY",
+                    EvidenceEntityLinkModel.entity_id.in_(subjects),
+                    EvidenceEntityLinkModel.status == "CONFIRMED",
+                    *base_filters,
+                )
+            )
+        ).all()
+        found = {}
+        for model in direct:
+            security_id = subject_to_security[model.subject_id]
+            found[(security_id, model.evidence_id)] = self._record(model)
+        for subject_id, model in linked:
+            security_id = subject_to_security[subject_id]
+            found[(security_id, model.evidence_id)] = self._record(model)
+        return tuple(
+            SecurityEvidenceView(
+                security_id=security_id,
+                record=record,
+                effective_relevance=record.effective_relevance(as_of),
+            )
+            for (security_id, _), record in sorted(
+                found.items(), key=lambda item: (str(item[0][0]), item[1].known_at, str(item[0][1]))
+            )
+            if record.effective_relevance(as_of) > 0
         )
 
     @staticmethod

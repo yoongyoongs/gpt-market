@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.config import get_settings
 from app.v3.application.evaluate_recall_channels import feature_recall_channels
+from app.v3.application.evaluate_evidence_recall_channels import evidence_recall_channels
 from app.v3.application.run_multi_recall import RunMultiRecallService
 from app.v3.container import V3Container
 from app.v3.infrastructure.providers.exchange_calendar import ExchangeCalendarsAShareCalendar
@@ -27,7 +28,7 @@ async def run(args: argparse.Namespace) -> int:
         service = RunMultiRecallService(
             container.uow,
             ExchangeCalendarsAShareCalendar(),
-            channels=feature_recall_channels(),
+            channels=(*feature_recall_channels(), *evidence_recall_channels()),
         )
         result = await service.execute(
             feature_run_id=feature_run_id,

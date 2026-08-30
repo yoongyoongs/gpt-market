@@ -499,3 +499,9 @@ class EvidenceReadPage(V3Contract):
     as_of: datetime
     items: tuple[EvidenceReadItem, ...]
     coverage: tuple[EvidenceTypeCoverage, ...]
+
+
+class SecurityEvidenceView(V3Contract):
+    security_id: UUID
+    record: NormalizedEvidence
+    effective_relevance: float = Field(ge=0, le=1)

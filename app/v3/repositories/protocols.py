@@ -29,6 +29,7 @@ from app.v3.domain.evidence import (
     NormalizedEvidence,
     ParseAttempt,
     RawDocument,
+    SecurityEvidenceView,
 )
 from app.v3.domain.recall import (
     PerformanceObservation,
@@ -177,6 +178,10 @@ class EvidenceRepository(Protocol):
     async def retrieve_view(
         self, *, query: EvidenceReadQuery
     ) -> EvidenceRepositoryPage: ...
+
+    async def for_securities(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[SecurityEvidenceView, ...]: ...
 
 
 class CorporateActionRepository(Protocol):

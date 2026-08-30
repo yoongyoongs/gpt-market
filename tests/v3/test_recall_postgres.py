@@ -46,7 +46,7 @@ class AllRowsChannel:
         description="真实数据库原子发布验收通道",
     )
 
-    def evaluate(self, features):
+    def evaluate(self, features, _evidence):
         return ChannelEvaluation(
             evaluated_count=len(features), unavailable_count=0,
             candidates=tuple(RecallCandidate(
