@@ -29,6 +29,33 @@ class ObservationStatus(StrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class RecallFeatureView(V3Contract):
+    feature_run_id: UUID
+    security_id: UUID
+    as_of: datetime
+    close: float = Field(gt=0)
+    return_3d: float | None = None
+    return_5d: float | None = None
+    return_20d: float | None = None
+    position_60d: float | None = Field(default=None, ge=0, le=1)
+    ma20_slope: float | None = None
+    breakout_20d: bool | None = None
+    pullback_20d: bool | None = None
+    volume_ratio_5d: float | None = Field(default=None, ge=0)
+    volume_expansion: bool | None = None
+    relative_index_strength: float | None = None
+    relative_industry_strength: float | None = None
+    coverage: float = Field(ge=0, le=1)
+    stale: bool
+    features: dict[str, Any] = Field(default_factory=dict)
+    source_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: datetime) -> datetime:
+        return require_aware(value, "as_of")
+
+
 class RecallChannel(V3Contract):
     channel_id: UUID = Field(default_factory=uuid4)
     code: str = Field(min_length=1, max_length=64)
@@ -78,6 +105,11 @@ class RecallRun(V3Contract):
     def validate_times(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
 
+    @field_validator("coverage")
+    @classmethod
+    def normalize_coverage(cls, value: float) -> float:
+        return round(value, 7)
+
     @model_validator(mode="after")
     def validate_run(self) -> "RecallRun":
         if self.known_at < self.as_of:
@@ -91,7 +123,7 @@ class RecallRun(V3Contract):
         return self
 
     def computed_content_hash(self) -> str:
-        payload = self.model_dump(exclude={"recall_run_id", "content_hash"})
+        payload = self.model_dump(exclude={"recall_run_id", "known_at", "content_hash"})
         return canonical_hash(_float_fields(payload, "coverage"))
 
     @classmethod
@@ -99,8 +131,10 @@ class RecallRun(V3Contract):
         payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
             exclude={"content_hash"}
         )
+        payload["coverage"] = round(float(payload["coverage"]), 7)
         content_hash = canonical_hash(_float_fields({
-            key: value for key, value in payload.items() if key != "recall_run_id"
+            key: value for key, value in payload.items()
+            if key not in {"recall_run_id", "known_at"}
         }, "coverage"))
         return cls(**payload, content_hash=content_hash)
 
@@ -117,11 +151,18 @@ class RecallResult(V3Contract):
     coverage: float = Field(ge=0, le=1)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("strength", "coverage")
+    @classmethod
+    def normalize_metrics(cls, value: float) -> float:
+        return round(value, 7)
+
     @classmethod
     def build(cls, **values: Any) -> "RecallResult":
         payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
             exclude={"content_hash"}
         )
+        payload["strength"] = round(float(payload["strength"]), 7)
+        payload["coverage"] = round(float(payload["coverage"]), 7)
         hash_payload = {key: value for key, value in payload.items() if key != "recall_result_id"}
         return cls(**payload, content_hash=canonical_hash(
             _float_fields(hash_payload, "strength", "coverage")
@@ -208,6 +249,16 @@ class PerformanceObservation(V3Contract):
     def validate_times(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
 
+    @field_validator("baseline_price", "future_price")
+    @classmethod
+    def normalize_prices(cls, value: float | None) -> float | None:
+        return None if value is None else round(value, 6)
+
+    @field_validator("raw_return", "benchmark_return", "excess_return")
+    @classmethod
+    def normalize_returns(cls, value: float | None) -> float | None:
+        return None if value is None else round(value, 10)
+
     @model_validator(mode="after")
     def validate_observation(self) -> "PerformanceObservation":
         if self.matures_at <= self.as_of or self.known_at < self.as_of:
@@ -236,6 +287,12 @@ class PerformanceObservation(V3Contract):
         payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
             exclude={"content_hash"}
         )
+        for field in ("baseline_price", "future_price"):
+            if payload.get(field) is not None:
+                payload[field] = round(float(payload[field]), 6)
+        for field in ("raw_return", "benchmark_return", "excess_return"):
+            if payload.get(field) is not None:
+                payload[field] = round(float(payload[field]), 10)
         content_hash = canonical_hash(_float_fields({
             key: value for key, value in payload.items() if key != "observation_id"
         }, "baseline_price", "future_price", "raw_return", "benchmark_return", "excess_return"))
@@ -282,3 +339,43 @@ class RecallMissEvaluation(V3Contract):
             key: value for key, value in payload.items() if key != "evaluation_id"
         })
         return cls(**payload, content_hash=content_hash)
+
+
+class RecallReadItem(V3Contract):
+    recall_result_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    channel_code: str
+    channel_version: str
+    channel_rank: int
+    strength: float
+    reasons: tuple[str, ...]
+    matched_features: dict[str, Any]
+    coverage: float
+
+
+class RecallReadPage(V3Contract):
+    run: RecallRun
+    items: tuple[RecallReadItem, ...]
+    next_cursor: str | None = None
+
+
+class RawOpportunityReadItem(V3Contract):
+    raw_opportunity_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    as_of: datetime
+    known_at: datetime
+    recall_result_ids: tuple[UUID, ...]
+    channel_codes: tuple[str, ...]
+    reason_summary: dict[str, tuple[str, ...]]
+
+
+class RawOpportunityReadPage(V3Contract):
+    run: RecallRun
+    items: tuple[RawOpportunityReadItem, ...]
+    next_cursor: str | None = None

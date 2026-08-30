@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -112,3 +113,45 @@ async def evidence_for_subject(
         limit=limit,
     )
     return await ReadEvidenceService(_uow).execute(query)
+
+
+@router.get("/recalls")
+async def recall_results(
+    recall_run_id: UUID | None = None,
+    channel: str | None = Query(default=None, min_length=1, max_length=64),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    try:
+        async with _uow() as uow:
+            page = await uow.recalls.read_results(
+                recall_run_id=recall_run_id,
+                channel_code=channel,
+                limit=limit,
+                cursor=cursor,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if page is None:
+        raise HTTPException(status_code=404, detail="published recall run not found")
+    return page
+
+
+@router.get("/raw-opportunities")
+async def raw_opportunities(
+    recall_run_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    try:
+        async with _uow() as uow:
+            page = await uow.recalls.read_raw(
+                recall_run_id=recall_run_id,
+                limit=limit,
+                cursor=cursor,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if page is None:
+        raise HTTPException(status_code=404, detail="published recall run not found")
+    return page

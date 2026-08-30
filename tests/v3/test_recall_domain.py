@@ -75,6 +75,19 @@ def test_recall_run_requires_complete_channel_counts() -> None:
         )
 
 
+def test_recall_run_identity_is_stable_across_replay_time() -> None:
+    values = {
+        "feature_run_id": uuid4(), "strategy_version": "v1",
+        "channel_set_hash": canonical_hash(["one"]), "as_of": NOW,
+        "status": RecallRunStatus.PUBLISHED, "expected_channel_count": 1,
+        "successful_channel_count": 1, "failed_channel_count": 0,
+        "security_count": 1, "hit_security_count": 1, "coverage": 1,
+    }
+    first = RecallRun.build(**values, known_at=NOW)
+    replay = RecallRun.build(**values, known_at=NOW + timedelta(minutes=5))
+    assert first.content_hash == replay.content_hash
+
+
 def test_pending_observation_cannot_leak_future_results() -> None:
     values = {
         "recall_run_id": uuid4(), "security_id": uuid4(),

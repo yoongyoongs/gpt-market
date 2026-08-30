@@ -30,6 +30,16 @@ from app.v3.domain.evidence import (
     ParseAttempt,
     RawDocument,
 )
+from app.v3.domain.recall import (
+    PerformanceObservation,
+    RawOpportunity,
+    RecallChannel,
+    RecallFeatureView,
+    RecallResult,
+    RecallReadPage,
+    RecallRun,
+    RawOpportunityReadPage,
+)
 
 
 class AgentTaskRepository(Protocol):
@@ -89,6 +99,45 @@ class FeatureRepository(Protocol):
     async def latest_regime(self) -> MarketRegimeSnapshot | None: ...
 
     async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None: ...
+
+    async def get_run(self, feature_run_id: UUID) -> FeatureRun | None: ...
+
+    async def latest_run(self) -> FeatureRun | None: ...
+
+    async def features_for_run(self, feature_run_id: UUID) -> tuple[RecallFeatureView, ...]: ...
+
+
+class RecallRepository(Protocol):
+    async def resolve_channels(
+        self, channels: tuple[RecallChannel, ...]
+    ) -> dict[str, UUID]: ...
+
+    async def publish(
+        self,
+        run: RecallRun,
+        results: tuple[RecallResult, ...],
+        raw_opportunities: tuple[RawOpportunity, ...],
+        observations: tuple[PerformanceObservation, ...],
+    ) -> bool: ...
+
+    async def get_run_by_content_hash(self, content_hash: str) -> RecallRun | None: ...
+
+    async def read_results(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        channel_code: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallReadPage | None: ...
+
+    async def read_raw(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RawOpportunityReadPage | None: ...
 
 
 class EvidenceRepository(Protocol):
@@ -155,6 +204,7 @@ class UnitOfWork(Protocol):
     ingestion_runs: IngestionRunRepository
     features: FeatureRepository
     evidence: EvidenceRepository
+    recalls: RecallRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

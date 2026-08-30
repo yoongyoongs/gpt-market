@@ -15,3 +15,5 @@ def test_v3_openapi_exposes_feature_and_regime_reads() -> None:
     assert "/api/v3/universe/features" in paths
     assert "/api/v3/market-regime" in paths
     assert "/api/v3/evidence/{subject_type}/{subject_id}" in paths
+    assert "/api/v3/recalls" in paths
+    assert "/api/v3/raw-opportunities" in paths
