@@ -18,6 +18,13 @@ from app.v3.domain.market_data import (
     UniverseSnapshot,
 )
 from app.v3.domain.features import FeaturePage, FeatureQuery, FeatureRun, MarketRegimeSnapshot, SecurityFeature
+from app.v3.domain.evidence import (
+    EntityLink,
+    EvidenceSource,
+    NormalizedEvidence,
+    ParseAttempt,
+    RawDocument,
+)
 
 
 class AgentTaskRepository(Protocol):
@@ -79,6 +86,33 @@ class FeatureRepository(Protocol):
     async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None: ...
 
 
+class EvidenceRepository(Protocol):
+    async def upsert_source(self, source: EvidenceSource) -> UUID: ...
+
+    async def add_raw_if_absent(self, document: RawDocument) -> bool: ...
+
+    async def get_raw(self, raw_document_id: UUID) -> RawDocument | None: ...
+
+    async def find_raw(
+        self, *, evidence_source_id: UUID, document_key: str, content_hash: str
+    ) -> RawDocument | None: ...
+
+    async def publish_parse(
+        self,
+        attempt: ParseAttempt,
+        records: tuple[NormalizedEvidence, ...],
+        links: tuple[EntityLink, ...],
+    ) -> bool: ...
+
+    async def records_for_claim(
+        self, *, subject_type: str, subject_id: str, claim_key: str, as_of: datetime
+    ) -> tuple[NormalizedEvidence, ...]: ...
+
+    async def retrieve(
+        self, *, subject_type: str, subject_id: str, as_of: datetime, limit: int
+    ) -> tuple[NormalizedEvidence, ...]: ...
+
+
 class CorporateActionRepository(Protocol):
     async def latest_by_source_references(
         self, source: str, references: tuple[str, ...]
@@ -103,6 +137,7 @@ class UnitOfWork(Protocol):
     corporate_actions: CorporateActionRepository
     ingestion_runs: IngestionRunRepository
     features: FeatureRepository
+    evidence: EvidenceRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

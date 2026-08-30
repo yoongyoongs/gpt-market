@@ -2,7 +2,7 @@
 
 只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
 
-V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1 正式状态基础、Phase 2 全市场历史行情底座和 Phase 3 全市场 Feature Run、Universe Query、事实型 Market Regime 已完成技术验收；Phase 4 至 Phase 11 尚待开发。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 2 验收记录](docs/Phase2行情底座实施记录.md) 与 [Phase 3 实施记录](docs/Phase3全市场特征实施记录.md)。
+V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1 正式状态基础、Phase 2 全市场历史行情底座和 Phase 3 全市场 Feature Run、Universe Query、事实型 Market Regime 已完成技术验收；Phase 4 Evidence Ingestion 正在开发，Phase 5 至 Phase 11 尚未开始。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 3 实施记录](docs/Phase3全市场特征实施记录.md) 与 [Phase 4 实施记录](docs/Phase4证据管道实施记录.md)。
 
 ## 接手开发必读
 

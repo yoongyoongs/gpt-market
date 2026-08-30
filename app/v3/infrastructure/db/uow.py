@@ -11,6 +11,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyCorporateActionRepository,
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyFeatureRepository,
+    SQLAlchemyEvidenceRepository,
     SQLAlchemyUniverseRepository,
 )
 
@@ -31,6 +32,7 @@ class SQLAlchemyUnitOfWork:
         self.corporate_actions = SQLAlchemyCorporateActionRepository(self._session)
         self.ingestion_runs = SQLAlchemyIngestionRunRepository(self._session)
         self.features = SQLAlchemyFeatureRepository(self._session)
+        self.evidence = SQLAlchemyEvidenceRepository(self._session)
         return self
 
     async def __aexit__(

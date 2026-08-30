@@ -16,7 +16,7 @@ def test_alembic_environment_loads_without_database_credentials() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
     assert Path(scripts.dir).resolve() == ROOT / "migrations"
-    assert scripts.get_heads() == ["0003_full_market_features"]
+    assert scripts.get_heads() == ["0004_evidence_ingestion"]
 
 
 def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
@@ -24,6 +24,12 @@ def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
         "v3.evidence_sources",
         "v3.raw_documents",
         "v3.evidence_records",
+        "v3.evidence_fetch_runs",
+        "v3.raw_document_parse_attempts",
+        "v3.evidence_entity_links",
+        "v3.evidence_relations",
+        "v3.evidence_conflicts",
+        "v3.evidence_conflict_members",
         "v3.task_profiles",
         "v3.expected_runs",
         "v3.task_runs",

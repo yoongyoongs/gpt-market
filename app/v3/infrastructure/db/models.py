@@ -31,11 +31,26 @@ V3_SCHEMA = "v3"
 
 class EvidenceSourceModel(Base):
     __tablename__ = "evidence_sources"
-    __table_args__ = (UniqueConstraint("code", name="uq_evidence_sources_code"), {"schema": V3_SCHEMA})
+    __table_args__ = (
+        CheckConstraint("priority > 0", name="positive_priority"),
+        CheckConstraint(
+            "rate_limit_per_minute IS NULL OR rate_limit_per_minute > 0",
+            name="positive_rate_limit",
+        ),
+        CheckConstraint("reliability >= 0 AND reliability <= 1", name="reliability_range"),
+        UniqueConstraint("code", name="uq_evidence_sources_code"),
+        {"schema": V3_SCHEMA},
+    )
 
     evidence_source_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    upstream_source: Mapped[str | None] = mapped_column(String(128))
+    capabilities: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="100")
+    rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False, server_default="v1")
+    reliability: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, server_default="0.5000")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -44,7 +59,13 @@ class RawDocumentModel(Base):
     __tablename__ = "raw_documents"
     __table_args__ = (
         CheckConstraint("known_at >= fetch_time", name="known_after_fetch"),
-        UniqueConstraint("content_hash", name="uq_raw_documents_content_hash"),
+        CheckConstraint("payload_size >= 0", name="nonnegative_payload_size"),
+        UniqueConstraint(
+            "evidence_source_id", "document_key", "content_hash",
+            name="uq_raw_documents_source_document_content",
+        ),
+        Index("ix_raw_documents_source_document", "evidence_source_id", "document_key", "fetch_time"),
+        Index("ix_raw_documents_content_hash", "content_hash"),
         {"schema": V3_SCHEMA},
     )
 
@@ -52,9 +73,16 @@ class RawDocumentModel(Base):
     evidence_source_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey(f"{V3_SCHEMA}.evidence_sources.evidence_source_id"), nullable=False
     )
+    document_key: Mapped[str] = mapped_column(String(256), nullable=False)
     raw_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_reference: Mapped[str] = mapped_column(Text, nullable=False)
     storage_path: Mapped[str | None] = mapped_column(Text)
     mime_type: Mapped[str | None] = mapped_column(String(128))
+    payload_text: Mapped[str | None] = mapped_column(Text)
+    payload_size: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    encoding: Mapped[str | None] = mapped_column(String(32))
+    response_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    untrusted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     fetch_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -68,8 +96,29 @@ class EvidenceRecordModel(Base):
         CheckConstraint("known_at >= fetch_time", name="known_after_fetch"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
         CheckConstraint("relevance >= 0 AND relevance <= 1", name="relevance_range"),
-        UniqueConstraint("content_hash", name="uq_evidence_records_content_hash"),
+        CheckConstraint(
+            "source_type IN ('OFFICIAL','VENDOR','NEWS','OPINION')",
+            name="valid_source_type",
+        ),
+        CheckConstraint(
+            "decay_model IN ('NONE','LINEAR','EXPONENTIAL','FIXED_EXPIRY')",
+            name="valid_decay_model",
+        ),
+        CheckConstraint("decay_rate IS NULL OR decay_rate >= 0", name="nonnegative_decay_rate"),
+        CheckConstraint(
+            "availability IN ('AVAILABLE','EXPIRED','RETRACTED','SUPERSEDED')",
+            name="valid_availability",
+        ),
+        UniqueConstraint(
+            "raw_document_id", "parser_version", "content_hash",
+            name="uq_evidence_records_raw_parser_content",
+        ),
         Index("ix_evidence_records_subject", "subject_type", "subject_id", "known_at"),
+        Index("ix_evidence_records_claim", "subject_type", "subject_id", "claim_key", "known_at"),
+        Index(
+            "ix_evidence_records_retrieval",
+            "subject_type", "subject_id", "availability", "expire_at", "known_at",
+        ),
         {"schema": V3_SCHEMA},
     )
 
@@ -78,11 +127,14 @@ class EvidenceRecordModel(Base):
         ForeignKey(f"{V3_SCHEMA}.raw_documents.raw_document_id")
     )
     evidence_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, server_default="VENDOR")
     subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subject_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    claim_key: Mapped[str] = mapped_column(String(256), nullable=False)
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     upstream_source: Mapped[str | None] = mapped_column(String(256))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    normalized_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     event_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fetch_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -90,9 +142,187 @@ class EvidenceRecordModel(Base):
     confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     relevance: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     expire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decay_model: Mapped[str] = mapped_column(String(32), nullable=False, server_default="NONE")
+    decay_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 8))
+    availability: Mapped[str] = mapped_column(String(32), nullable=False, server_default="AVAILABLE")
+    untrusted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     conflict_state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="NONE")
     parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    supersedes_evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id")
+    )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EvidenceFetchRunModel(Base):
+    __tablename__ = "evidence_fetch_runs"
+    __table_args__ = (
+        CheckConstraint("expected_count >= 0", name="nonnegative_expected"),
+        CheckConstraint("fetched_count >= 0", name="nonnegative_fetched"),
+        CheckConstraint("raw_inserted_count >= 0", name="nonnegative_inserted"),
+        CheckConstraint("duplicate_count >= 0", name="nonnegative_duplicates"),
+        CheckConstraint("parsed_count >= 0", name="nonnegative_parsed"),
+        CheckConstraint("failed_count >= 0", name="nonnegative_failed"),
+        CheckConstraint(
+            "status IN ('RUNNING','PARTIAL','COMPLETED','FAILED')",
+            name="valid_status",
+        ),
+        CheckConstraint("completed_at IS NULL OR completed_at >= started_at", name="valid_completion"),
+        Index("ix_evidence_fetch_runs_source_started", "evidence_source_id", "started_at"),
+        {"schema": V3_SCHEMA},
+    )
+
+    fetch_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    evidence_source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_sources.evidence_source_id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cursor: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    expected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fetched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_inserted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parsed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RawDocumentParseAttemptModel(Base):
+    __tablename__ = "raw_document_parse_attempts"
+    __table_args__ = (
+        CheckConstraint("status IN ('SUCCESS','FAILED','SKIPPED')", name="valid_status"),
+        CheckConstraint("output_count >= 0", name="nonnegative_output"),
+        CheckConstraint("completed_at >= started_at", name="valid_completion"),
+        UniqueConstraint(
+            "raw_document_id", "parser_code", "parser_version",
+            name="uq_raw_document_parse_attempts_document_parser",
+        ),
+        {"schema": V3_SCHEMA},
+    )
+
+    parse_attempt_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.raw_documents.raw_document_id"), nullable=False
+    )
+    parser_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    output_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EvidenceEntityLinkModel(Base):
+    __tablename__ = "evidence_entity_links"
+    __table_args__ = (
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+        CheckConstraint("status IN ('CONFIRMED','CANDIDATE','REJECTED')", name="valid_status"),
+        UniqueConstraint(
+            "evidence_id", "entity_type", "entity_id",
+            name="uq_evidence_entity_links_evidence_entity",
+        ),
+        Index("ix_evidence_entity_links_entity", "entity_type", "entity_id", "status"),
+        {"schema": V3_SCHEMA},
+    )
+
+    entity_link_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    match_basis: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EvidenceRelationModel(Base):
+    __tablename__ = "evidence_relations"
+    __table_args__ = (
+        CheckConstraint("from_evidence_id <> to_evidence_id", name="distinct_records"),
+        CheckConstraint(
+            "similarity IS NULL OR (similarity >= 0 AND similarity <= 1)",
+            name="similarity_range",
+        ),
+        CheckConstraint(
+            "relation_type IN ('EXACT_DUPLICATE','NEAR_DUPLICATE','SUPERSEDES','CORRECTS','SUPPORTS')",
+            name="valid_type",
+        ),
+        UniqueConstraint(
+            "from_evidence_id", "to_evidence_id", "relation_type",
+            name="uq_evidence_relations_pair_type",
+        ),
+        {"schema": V3_SCHEMA},
+    )
+
+    relation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    from_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id"), nullable=False
+    )
+    to_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id"), nullable=False
+    )
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    similarity: Mapped[Decimal | None] = mapped_column(Numeric(6, 5))
+    reason: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EvidenceConflictModel(Base):
+    __tablename__ = "evidence_conflicts"
+    __table_args__ = (
+        CheckConstraint("status IN ('OPEN','RESOLVED','ACKNOWLEDGED')", name="valid_status"),
+        UniqueConstraint(
+            "subject_type", "subject_id", "claim_key", "content_hash",
+            name="uq_evidence_conflicts_claim_content",
+        ),
+        Index("ix_evidence_conflicts_subject", "subject_type", "subject_id", "status"),
+        {"schema": V3_SCHEMA},
+    )
+
+    conflict_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    claim_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    selected_evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id")
+    )
+    resolution: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EvidenceConflictMemberModel(Base):
+    __tablename__ = "evidence_conflict_members"
+    __table_args__ = (
+        CheckConstraint("source_priority > 0", name="positive_priority"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+        {"schema": V3_SCHEMA},
+    )
+
+    conflict_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_conflicts.conflict_id"), primary_key=True
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id"), primary_key=True
+    )
+    value_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
