@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="593c12de23883adacb2722e3875e069673ee7c1a793d40d520a8e81d73724771"><title>Phase 4 证据管道实施记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 当前范围</a></li>
+<li><a href="#2">2. 关键不变量</a></li>
+<li><a href="#3">3. 数据库变更</a></li>
+<li><a href="#4">4. 当前验收</a></li>
+<li><a href="#5">5. 验收结论与边界</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase4证据管道实施记录.md · 内容哈希：593c12de2388</div><h1 id="phase-4">Phase 4 证据管道实施记录<a class="headerlink" href="#phase-4" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>日期：2026-08-31（Asia/Shanghai）
+分支：<code>codex/phase4-evidence-ingestion</code>
+状态：Phase 4 Core Evidence Ingestion 技术验收完成；Extended 按后续迭代接入</p>
+</blockquote>
+<h2 id="1">1. 当前范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>本里程碑按《架构设计实施稿》启动 Phase 4，不修改 V1/V2 评分，不增加自动交易：</p>
+<ul>
+<li><code>0004_evidence_ingestion</code> Migration；</li>
+<li>Evidence Source 能力、优先级、限流、解析版本和可靠性配置；</li>
+<li>Fetch Run、Raw Document、不可变 Parse Attempt、Entity Link、Evidence Relation、Conflict Set/Member 数据结构；</li>
+<li>Evidence 来源类型、衰减、失效、时点和 Untrusted Data 领域约束；</li>
+<li>Raw 先提交、后解析的批次服务；</li>
+<li>Fetch Run 游标 checkpoint、分段恢复、终态重放和 <code>row_version</code> 乐观锁；</li>
+<li>精确 Raw 去重、解析幂等、按 <code>known_at</code> Retrieval 和跨来源独立保留；</li>
+<li>规范 Payload 精确/近似重复关系、同 Claim 多值冲突集合和来源优先级临时选择。</li>
+<li>能力维度 Provider Registry、按源限流、429/5xx 重试和响应结构硬校验；</li>
+<li>巨潮官方公告、东方财富财务/业绩预告/业绩快报、中国政府网最新政策和东方财富基础财经新闻 Provider/Parser。</li>
+<li>上交所官方公告备用源、公告跨源语义 Claim Key 与 A 股代码入口过滤；</li>
+<li>Registry fallback/全源采集、单源失败隔离、分段 <code>--resume</code> 和结构化 Job 报告。</li>
+<li>基于 Published Universe 的 Security 字典、显式 Industry 字典和 Market 别名匹配；歧义实体只落 <code>CANDIDATE</code>。</li>
+<li><code>GET /api/v3/evidence/{subject_type}/{subject_id}</code> 时点读取，支持类型/来源/有效相关性过滤、Candidate 开关、冲突状态和逐类型 <code>AVAILABLE/UNKNOWN</code> Coverage。</li>
+</ul>
+<h2 id="2">2. 关键不变量<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Raw 原文写入并提交成功前不得发布解析 Evidence；解析失败仍保留 Raw 和不可变失败 Attempt。</li>
+<li>Raw、Parse Attempt、Evidence、Entity Link、Relation 和 Conflict 事实均 append-only；解析状态不通过 UPDATE Raw 冒充。</li>
+<li>相同内容来自不同来源时保留各自 Raw 与 Evidence，不用全局 Content Hash 唯一约束抹掉来源链。</li>
+<li>Opinion Source 只能产生 <code>OPINION</code>，不能升级为 FACT；<code>OFFICIAL_DISCLOSURE</code> 必须来自 OFFICIAL Source。</li>
+<li>外部文本默认 <code>untrusted=true</code>；本阶段只作为数据保存，不能进入 Agent Instruction。</li>
+<li>Retrieval 必须满足 <code>known_at &lt;= as_of</code>，并排除已失效、撤回或被替代的 Evidence。</li>
+<li>Linear/Exponential Decay 必须有明确 Rate；Fixed Expiry 必须有 <code>expire_at</code>，衰减在读取时计算，不回写历史 Evidence。</li>
+<li>低置信实体关联可以保存为 Candidate，不能自动冒充 Confirmed Link。</li>
+<li>Fetch Run 只有 <code>RUNNING</code> 可写 checkpoint；上游异常必须落为 <code>FAILED</code>，未耗尽批次必须返回可恢复 Cursor。</li>
+<li>重复和冲突 Evidence 均不得被覆盖或删除；临时选择只记录解释，不把低优先级来源从证据链中移除。</li>
+</ul>
+<h2 id="3">3. 数据库变更<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<p>新增表：</p>
+<ul>
+<li><code>evidence_fetch_runs</code>；</li>
+<li><code>raw_document_parse_attempts</code>；</li>
+<li><code>evidence_entity_links</code>；</li>
+<li><code>evidence_relations</code>；</li>
+<li><code>evidence_conflicts</code>；</li>
+<li><code>evidence_conflict_members</code>。</li>
+</ul>
+<p>扩展 <code>evidence_sources/raw_documents/evidence_records</code>，增加来源能力、Raw Payload、规范引用、Claim Key、Normalized Payload、Source Type、Source Priority、Decay、Availability、Supersedes 和检索索引。Fetch Run 同时保存 Raw、Parse 和 Evidence 数量及失败摘要。原有 Raw/Evidence 全局 Content Hash 唯一约束改为带来源/Raw/Parser 身份的约束，既支持精确去重，也保留多源事实。</p>
+<h2 id="4">4. 当前验收<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>PostgreSQL 17 <code>0003 -&gt; 0004 -&gt; 0003 -&gt; 0004</code> 双往返通过；Migration 回填期间临时移除旧 Raw/Evidence 不可变触发器并在同一事务恢复，运行期约束不放松。</li>
+<li>Phase 4 Domain/PostgreSQL 专项 <code>13 passed</code>：Raw 去重、跨来源同内容保留、Parse/Link/Relation/Conflict 原子发布、时点 Retrieval、解析失败保留 Raw、重复跑批幂等和不可变触发器通过。</li>
+<li>两页真实数据库分段任务验证首段 <code>RUNNING + cursor</code>、恢复后 <code>COMPLETED</code>、终态重放不请求 Provider，陈旧 <code>row_version</code> checkpoint 被拒绝。</li>
+<li>多源真实数据库样例验证相同值建立 <code>EXACT_DUPLICATE</code>，不同值形成保留三方成员的 <code>OPEN</code> Conflict，并按来源优先级、置信度和 <code>known_at</code> 记录临时选择。</li>
+<li>配置真实 PostgreSQL 的完整回归 <code>186 passed, 5 skipped</code>；本轮改动 Ruff、<code>git diff --check</code> 通过。</li>
+</ul>
+<p>首批 Core Source 真实联网探针（2026-08-30，均执行 Fetch 与前三条 Parse）：</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>实际入口</th>
+<th style="text-align: right;">本批结果</th>
+<th style="text-align: right;">首批耗时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>巨潮公告</td>
+<td><code>POST https://www.cninfo.com.cn/new/hisAnnouncement/query</code></td>
+<td style="text-align: right;">首页 5 条 A 股公告；上游全品种 7,039；返回下一页 Cursor</td>
+<td style="text-align: right;">173.658 ms</td>
+</tr>
+<tr>
+<td>上交所公告</td>
+<td><code>GET https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do</code></td>
+<td style="text-align: right;">首批 18 个附件；2 日窗口 1,931 组；返回下一页 Cursor</td>
+<td style="text-align: right;">277.053 ms</td>
+</tr>
+<tr>
+<td>东方财富财务</td>
+<td><code>RPT_F10_FINANCE_MAINFINADATA</code></td>
+<td style="text-align: right;">3 只样本 24 条</td>
+<td style="text-align: right;">254.300 ms</td>
+</tr>
+<tr>
+<td>东方财富业绩预告</td>
+<td><code>RPT_PUBLIC_OP_NEWPREDICT</code></td>
+<td style="text-align: right;">3 只样本 24 条</td>
+<td style="text-align: right;">132.165 ms</td>
+</tr>
+<tr>
+<td>东方财富业绩快报</td>
+<td><code>RPT_FCI_PERFORMANCEE</code></td>
+<td style="text-align: right;">3 只样本 13 条</td>
+<td style="text-align: right;">206.769 ms</td>
+</tr>
+<tr>
+<td>中国政府网政策</td>
+<td><code>GET /zhengce/zuixin/ZUIXINZHENGCE.json</code></td>
+<td style="text-align: right;">两日窗口合法空集；扩至 7 日取得 1 条</td>
+<td style="text-align: right;">268.394 ms</td>
+</tr>
+<tr>
+<td>东方财富要闻</td>
+<td><code>GET https://finance.eastmoney.com/yaowen.html</code></td>
+<td style="text-align: right;">两日窗口 246 条；首批 10 条</td>
+<td style="text-align: right;">168.512 ms</td>
+</tr>
+</tbody>
+</table>
+<p>探针已固化为 <code>scripts/probe_v3_evidence_providers.py</code>。政策两日窗口的 0 条是上游结构正常、按发布日期过滤后的业务空集，不将其写成 Provider 失败，也不伪造其他日期数据。</p>
+<ul>
+<li>真实 Provider → Raw → Parse → Link/Conflict → Fetch Run 的 PostgreSQL 17 验收：巨潮 <code>3/3</code>、财务 <code>20/20</code>、政策 <code>1/1</code>、新闻 <code>5/5</code>，共 29 条 Raw 和 29 条 Evidence，解析失败 0；分页源保持 <code>RUNNING + cursor</code>，耗尽源为 <code>COMPLETED</code>。</li>
+<li><code>scripts/v3_phase4_evidence.py --collect-all --max-batches 1</code> 已在 3 只真实证券隔离 Universe 上通过：公告巨潮/上交所双源、财务 24、业绩快报 13、业绩预告 24、政策和新闻均独立报告；已有 Raw 重放显示明确 <code>duplicate_count</code>，未重复发布。</li>
+<li>Registry 专项覆盖主源 <code>FAILED</code>、主源 <code>PARTIAL</code> 后备用接管、异常能力隔离、无 Provider <code>UNAVAILABLE</code> 和互补来源全源采集。</li>
+<li>实体匹配专项覆盖唯一代码/名称、显式行业词、市场别名、数字边界、同名歧义和外部注入文本仅作数据；解析器明确 Link 优先于目录补充 Link。</li>
+<li>真实 PostgreSQL 验证 MARKET 主题 Evidence 可经 <code>CONFIRMED</code> Link 被 Security 查询读取，<code>CANDIDATE</code> 默认隐藏且仅在显式参数下返回，类型/来源过滤有效。</li>
+<li>Decay-aware READ 连续 100 次实测返回 50 条：平均 <code>7.438 ms</code>、P95 <code>10.385 ms</code>、最大 <code>11.195 ms</code>；数据库按有效相关性排序/过滤并独立聚合 Coverage，衰减为 0 的记录不冒充可用。</li>
+<li>当前完整回归 <code>186 passed, 5 skipped</code>，2 条既有依赖/异步资源警告未由本阶段引入。</li>
+<li>本轮文件 Ruff 和 <code>git diff --check</code> 通过；全仓仍保留既有 Legacy Ruff 告警，未扩大 V1/V2 修改范围。</li>
+</ul>
+<h2 id="5">5. 验收结论与边界<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<p>Phase 4 Core 满足实施稿验收要点：Core Source 闭环可运行；Official/Vendor/News/Opinion 类型不混淆；冲突成员全部保留；外部文本保持 Untrusted Data，不能进入 Instruction；Extended 不阻塞 Phase 5。</p>
+<p>当前行业分类权威源尚未进入 V3，匹配器只接受显式 Industry Catalog；目录为空时行业 Coverage 保持 <code>UNKNOWN</code>，不从新闻词语或 Feature 猜测行业。Prompt 中的标签、预算和 Instruction 隔离属于 Phase 6 Context Builder，Phase 4 没有把外部正文送入 Prompt 的路径。</p>
+<p>本记录只表示 Phase 4 技术验收完成，不表示整个 V3 完成。生产 V3 仍关闭，生产数据库尚未执行 <code>0004</code>。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

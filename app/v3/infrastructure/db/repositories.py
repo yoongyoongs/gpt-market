@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
+from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.audit import AuditEvent
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
@@ -30,7 +31,25 @@ from app.v3.domain.features import (
     FeaturePage, FeatureQuery, FeatureRun, FeatureRunStatus, FeatureSortField,
     MarketRegimeSnapshot, SecurityFeature,
 )
-from app.v3.domain.hashing import canonical_json
+from app.v3.domain.evidence import (
+    DecayModel,
+    EntityLink,
+    EvidenceConflict,
+    EvidenceAvailability,
+    EvidenceFetchRun,
+    EvidenceMatchType,
+    EvidenceReadQuery,
+    EvidenceRepositoryPage,
+    EvidenceRepositoryView,
+    EvidenceRelation,
+    EvidenceSource,
+    EvidenceSourceType,
+    FetchRunStatus,
+    NormalizedEvidence,
+    ParseAttempt,
+    RawDocument,
+)
+from app.v3.domain.hashing import canonical_hash, canonical_json
 from app.v3.infrastructure.db.models import (
     AgentTaskModel,
     AdjustmentFactorModel,
@@ -48,6 +67,15 @@ from app.v3.infrastructure.db.models import (
     FeatureRunModel,
     SecurityFeatureModel,
     MarketRegimeSnapshotModel,
+    EvidenceSourceModel,
+    RawDocumentModel,
+    EvidenceRecordModel,
+    RawDocumentParseAttemptModel,
+    EvidenceEntityLinkModel,
+    EvidenceFetchRunModel,
+    EvidenceRelationModel,
+    EvidenceConflictModel,
+    EvidenceConflictMemberModel,
 )
 
 
@@ -100,6 +128,532 @@ class SQLAlchemyAuditRepository:
                 event_time=event.event_time,
                 metadata_payload=event.metadata,
             )
+        )
+
+
+class SQLAlchemyEvidenceRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def upsert_source(self, source: EvidenceSource) -> UUID:
+        statement = (
+            insert(EvidenceSourceModel)
+            .values(
+                evidence_source_id=source.evidence_source_id,
+                code=source.code,
+                source_type=source.source_type.value,
+                upstream_source=source.upstream_source,
+                capabilities=source.capabilities,
+                priority=source.priority,
+                rate_limit_per_minute=source.rate_limit_per_minute,
+                parser_version=source.parser_version,
+                reliability=source.reliability,
+                enabled=source.enabled,
+            )
+            .on_conflict_do_update(
+                index_elements=[EvidenceSourceModel.code],
+                set_={
+                    "source_type": source.source_type.value,
+                    "upstream_source": source.upstream_source,
+                    "capabilities": source.capabilities,
+                    "priority": source.priority,
+                    "rate_limit_per_minute": source.rate_limit_per_minute,
+                    "parser_version": source.parser_version,
+                    "reliability": source.reliability,
+                    "enabled": source.enabled,
+                },
+            )
+            .returning(EvidenceSourceModel.evidence_source_id)
+        )
+        return (await self._session.execute(statement)).scalar_one()
+
+    async def add_fetch_run(self, run: EvidenceFetchRun) -> None:
+        self._session.add(EvidenceFetchRunModel(
+            fetch_run_id=run.fetch_run_id,
+            evidence_source_id=run.evidence_source_id,
+            status=run.status.value,
+            window_start=run.window_start,
+            window_end=run.window_end,
+            cursor=run.cursor,
+            expected_count=run.expected_count,
+            fetched_count=run.fetched_count,
+            raw_inserted_count=run.raw_inserted_count,
+            duplicate_count=run.duplicate_count,
+            parsed_count=run.parsed_count,
+            evidence_count=run.evidence_count,
+            failed_count=run.failed_count,
+            errors=run.errors,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            row_version=run.row_version,
+        ))
+
+    async def get_fetch_run(self, fetch_run_id: UUID) -> EvidenceFetchRun | None:
+        model = await self._session.get(EvidenceFetchRunModel, fetch_run_id)
+        return None if model is None else self._fetch_run(model)
+
+    async def save_fetch_run(
+        self, run: EvidenceFetchRun, *, expected_version: int
+    ) -> bool:
+        result = await self._session.execute(
+            update(EvidenceFetchRunModel)
+            .where(
+                EvidenceFetchRunModel.fetch_run_id == run.fetch_run_id,
+                EvidenceFetchRunModel.row_version == expected_version,
+            )
+            .values(
+                status=run.status.value,
+                cursor=run.cursor,
+                expected_count=run.expected_count,
+                fetched_count=run.fetched_count,
+                raw_inserted_count=run.raw_inserted_count,
+                duplicate_count=run.duplicate_count,
+                parsed_count=run.parsed_count,
+                evidence_count=run.evidence_count,
+                failed_count=run.failed_count,
+                errors=run.errors,
+                completed_at=run.completed_at,
+                row_version=run.row_version,
+            )
+        )
+        return result.rowcount == 1
+
+    async def add_raw_if_absent(self, document: RawDocument) -> bool:
+        inserted = (
+            await self._session.execute(
+                insert(RawDocumentModel)
+                .values(
+                    raw_document_id=document.raw_document_id,
+                    evidence_source_id=document.evidence_source_id,
+                    document_key=document.document_key,
+                    raw_reference=document.raw_reference,
+                    normalized_reference=document.normalized_reference,
+                    storage_path=document.storage_path,
+                    mime_type=document.mime_type,
+                    payload_text=document.payload_text,
+                    payload_size=document.payload_size,
+                    encoding=document.encoding,
+                    response_metadata=document.response_metadata,
+                    untrusted=document.untrusted,
+                    fetch_time=document.fetch_time,
+                    known_at=document.known_at,
+                    content_hash=document.content_hash,
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_raw_documents_source_document_content"
+                )
+                .returning(RawDocumentModel.raw_document_id)
+            )
+        ).scalar_one_or_none()
+        return inserted is not None
+
+    async def get_raw(self, raw_document_id: UUID) -> RawDocument | None:
+        model = await self._session.get(RawDocumentModel, raw_document_id)
+        return None if model is None else self._raw(model)
+
+    async def find_raw(
+        self, *, evidence_source_id: UUID, document_key: str, content_hash: str
+    ) -> RawDocument | None:
+        model = (
+            await self._session.execute(
+                select(RawDocumentModel).where(
+                    RawDocumentModel.evidence_source_id == evidence_source_id,
+                    RawDocumentModel.document_key == document_key,
+                    RawDocumentModel.content_hash == content_hash,
+                )
+            )
+        ).scalar_one_or_none()
+        return None if model is None else self._raw(model)
+
+    async def publish_parse(
+        self,
+        attempt: ParseAttempt,
+        records: tuple[NormalizedEvidence, ...],
+        links: tuple[EntityLink, ...],
+        relations: tuple[EvidenceRelation, ...] = (),
+        conflicts: tuple[EvidenceConflict, ...] = (),
+    ) -> bool:
+        attempt_inserted = (
+            await self._session.execute(
+                insert(RawDocumentParseAttemptModel)
+                .values(
+                    parse_attempt_id=attempt.parse_attempt_id,
+                    raw_document_id=attempt.raw_document_id,
+                    parser_code=attempt.parser_code,
+                    parser_version=attempt.parser_version,
+                    status=attempt.status.value,
+                    output_count=attempt.output_count,
+                    error=attempt.error,
+                    started_at=attempt.started_at,
+                    completed_at=attempt.completed_at,
+                    content_hash=attempt.content_hash,
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_raw_document_parse_attempts_document_parser"
+                )
+                .returning(RawDocumentParseAttemptModel.parse_attempt_id)
+            )
+        ).scalar_one_or_none()
+        if attempt_inserted is None:
+            return False
+        for record in records:
+            inserted = (
+                await self._session.execute(
+                    insert(EvidenceRecordModel)
+                    .values(**self._record_values(record))
+                    .on_conflict_do_nothing(
+                        constraint="uq_evidence_records_raw_parser_content"
+                    )
+                    .returning(EvidenceRecordModel.evidence_id)
+                )
+            ).scalar_one_or_none()
+            if inserted is None:
+                raise RuntimeError("new parse attempt produced an existing evidence identity")
+        for link in links:
+            inserted = (
+                await self._session.execute(
+                    insert(EvidenceEntityLinkModel)
+                    .values(
+                        entity_link_id=link.entity_link_id,
+                        evidence_id=link.evidence_id,
+                        entity_type=link.entity_type,
+                        entity_id=link.entity_id,
+                        match_basis=link.match_basis,
+                        confidence=link.confidence,
+                        status=link.status.value,
+                        content_hash=link.content_hash,
+                    )
+                    .on_conflict_do_nothing(
+                        constraint="uq_evidence_entity_links_evidence_entity"
+                    )
+                    .returning(EvidenceEntityLinkModel.entity_link_id)
+                )
+            ).scalar_one_or_none()
+            if inserted is None:
+                raise RuntimeError("new parse attempt produced a duplicate entity link")
+        for relation in relations:
+            await self._session.execute(
+                insert(EvidenceRelationModel)
+                .values(
+                    relation_id=relation.relation_id,
+                    from_evidence_id=relation.from_evidence_id,
+                    to_evidence_id=relation.to_evidence_id,
+                    relation_type=relation.relation_type.value,
+                    similarity=relation.similarity,
+                    reason=relation.reason,
+                    content_hash=relation.content_hash,
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_evidence_relations_pair_type"
+                )
+            )
+        for conflict in conflicts:
+            inserted_conflict = (
+                await self._session.execute(
+                    insert(EvidenceConflictModel)
+                    .values(
+                        conflict_id=conflict.conflict_id,
+                        subject_type=conflict.subject_type,
+                        subject_id=conflict.subject_id,
+                        claim_key=conflict.claim_key,
+                        status=conflict.status.value,
+                        selected_evidence_id=conflict.selected_evidence_id,
+                        resolution=conflict.resolution,
+                        content_hash=conflict.content_hash,
+                    )
+                    .on_conflict_do_nothing(
+                        constraint="uq_evidence_conflicts_claim_content"
+                    )
+                    .returning(EvidenceConflictModel.conflict_id)
+                )
+            ).scalar_one_or_none()
+            if inserted_conflict is None:
+                continue
+            member_models = (
+                await self._session.execute(
+                    select(EvidenceRecordModel).where(
+                        EvidenceRecordModel.evidence_id.in_(conflict.member_ids)
+                    )
+                )
+            ).scalars().all()
+            if len(member_models) != len(conflict.member_ids):
+                raise RuntimeError("conflict references unavailable evidence")
+            for member in member_models:
+                self._session.add(EvidenceConflictMemberModel(
+                    conflict_id=conflict.conflict_id,
+                    evidence_id=member.evidence_id,
+                    value_hash=canonical_hash(member.normalized_payload),
+                    source_priority=member.source_priority,
+                    confidence=member.confidence,
+                ))
+        return True
+
+    async def records_for_claim(
+        self, *, subject_type: str, subject_id: str, claim_key: str, as_of: datetime
+    ) -> tuple[NormalizedEvidence, ...]:
+        models = (
+            await self._session.execute(
+                select(EvidenceRecordModel)
+                .where(
+                    EvidenceRecordModel.subject_type == subject_type,
+                    EvidenceRecordModel.subject_id == subject_id,
+                    EvidenceRecordModel.claim_key == claim_key,
+                    EvidenceRecordModel.known_at <= as_of,
+                )
+                .order_by(EvidenceRecordModel.known_at.desc(), EvidenceRecordModel.evidence_id)
+            )
+        ).scalars().all()
+        return tuple(self._record(model) for model in models)
+
+    async def retrieve(
+        self, *, subject_type: str, subject_id: str, as_of: datetime, limit: int
+    ) -> tuple[NormalizedEvidence, ...]:
+        models = (
+            await self._session.execute(
+                select(EvidenceRecordModel)
+                .where(
+                    EvidenceRecordModel.subject_type == subject_type,
+                    EvidenceRecordModel.subject_id == subject_id,
+                    EvidenceRecordModel.known_at <= as_of,
+                    EvidenceRecordModel.availability == EvidenceAvailability.AVAILABLE.value,
+                    or_(EvidenceRecordModel.expire_at.is_(None), EvidenceRecordModel.expire_at >= as_of),
+                )
+                .order_by(
+                    EvidenceRecordModel.relevance.desc(),
+                    EvidenceRecordModel.confidence.desc(),
+                    EvidenceRecordModel.known_at.desc(),
+                    EvidenceRecordModel.evidence_id,
+                )
+                .limit(limit)
+            )
+        ).scalars().all()
+        return tuple(self._record(model) for model in models)
+
+    async def retrieve_view(
+        self, *, query: EvidenceReadQuery
+    ) -> EvidenceRepositoryPage:
+        confirmed_link = exists().where(
+            EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+            EvidenceEntityLinkModel.entity_type == query.subject_type,
+            EvidenceEntityLinkModel.entity_id == query.subject_id,
+            EvidenceEntityLinkModel.status == "CONFIRMED",
+        )
+        candidate_link = exists().where(
+            EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+            EvidenceEntityLinkModel.entity_type == query.subject_type,
+            EvidenceEntityLinkModel.entity_id == query.subject_id,
+            EvidenceEntityLinkModel.status == "CANDIDATE",
+        )
+        direct = and_(
+            EvidenceRecordModel.subject_type == query.subject_type,
+            EvidenceRecordModel.subject_id == query.subject_id,
+        )
+        conflict_status = (
+            select(EvidenceConflictModel.status)
+            .join(
+                EvidenceConflictMemberModel,
+                EvidenceConflictMemberModel.conflict_id == EvidenceConflictModel.conflict_id,
+            )
+            .where(EvidenceConflictMemberModel.evidence_id == EvidenceRecordModel.evidence_id)
+            .order_by(EvidenceConflictModel.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        match_type = (
+            select(EvidenceEntityLinkModel.status)
+            .where(
+                EvidenceEntityLinkModel.evidence_id == EvidenceRecordModel.evidence_id,
+                EvidenceEntityLinkModel.entity_type == query.subject_type,
+                EvidenceEntityLinkModel.entity_id == query.subject_id,
+                EvidenceEntityLinkModel.status.in_(("CONFIRMED", "CANDIDATE")),
+            )
+            .order_by(EvidenceEntityLinkModel.confidence.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        relevance_age_days = func.greatest(
+            0.0,
+            func.extract(
+                "epoch",
+                query.as_of - func.coalesce(
+                    EvidenceRecordModel.event_time,
+                    EvidenceRecordModel.publish_time,
+                    EvidenceRecordModel.known_at,
+                ),
+            ) / 86400.0,
+        )
+        effective_relevance = case(
+            (
+                EvidenceRecordModel.decay_model == DecayModel.LINEAR.value,
+                func.greatest(
+                    0.0,
+                    EvidenceRecordModel.relevance * (
+                        1 - func.coalesce(EvidenceRecordModel.decay_rate, 0) * relevance_age_days
+                    ),
+                ),
+            ),
+            (
+                EvidenceRecordModel.decay_model == DecayModel.EXPONENTIAL.value,
+                EvidenceRecordModel.relevance * func.exp(
+                    -func.coalesce(EvidenceRecordModel.decay_rate, 0) * relevance_age_days
+                ),
+            ),
+            else_=EvidenceRecordModel.relevance,
+        )
+        filters = [
+            or_(direct, confirmed_link, candidate_link if query.include_candidates else False),
+            EvidenceRecordModel.known_at <= query.as_of,
+            EvidenceRecordModel.availability == EvidenceAvailability.AVAILABLE.value,
+            or_(EvidenceRecordModel.expire_at.is_(None), EvidenceRecordModel.expire_at >= query.as_of),
+            effective_relevance > 0,
+            effective_relevance >= query.min_effective_relevance,
+        ]
+        if query.evidence_types:
+            filters.append(EvidenceRecordModel.evidence_type.in_(tuple(query.evidence_types)))
+        if query.source_types:
+            filters.append(EvidenceRecordModel.source_type.in_(tuple(query.source_types)))
+        rows = (
+            await self._session.execute(
+                select(EvidenceRecordModel, match_type, conflict_status)
+                .where(*filters)
+                .order_by(
+                    effective_relevance.desc(),
+                    EvidenceRecordModel.source_priority,
+                    EvidenceRecordModel.known_at.desc(),
+                    EvidenceRecordModel.evidence_id,
+                )
+                .limit(query.limit)
+            )
+        ).all()
+        result = []
+        for model, link_status, current_conflict_status in rows:
+            if model.subject_type == query.subject_type and model.subject_id == query.subject_id:
+                matched_by = EvidenceMatchType.DIRECT
+            elif link_status == "CONFIRMED":
+                matched_by = EvidenceMatchType.CONFIRMED_LINK
+            else:
+                matched_by = EvidenceMatchType.CANDIDATE_LINK
+            result.append(EvidenceRepositoryView(
+                record=self._record(model),
+                match_type=matched_by,
+                conflict_status=current_conflict_status or "NONE",
+            ))
+        coverage_rows = (
+            await self._session.execute(
+                select(EvidenceRecordModel.evidence_type, func.count())
+                .where(*filters)
+                .group_by(EvidenceRecordModel.evidence_type)
+            )
+        ).all()
+        return EvidenceRepositoryPage(
+            views=tuple(result),
+            coverage_counts={EvidenceType(kind): count for kind, count in coverage_rows},
+        )
+
+    @staticmethod
+    def _raw(model: RawDocumentModel) -> RawDocument:
+        return RawDocument(
+            raw_document_id=model.raw_document_id,
+            evidence_source_id=model.evidence_source_id,
+            document_key=model.document_key,
+            raw_reference=model.raw_reference,
+            normalized_reference=model.normalized_reference,
+            storage_path=model.storage_path,
+            mime_type=model.mime_type,
+            payload_text=model.payload_text,
+            payload_size=model.payload_size,
+            encoding=model.encoding,
+            response_metadata=model.response_metadata,
+            untrusted=model.untrusted,
+            fetch_time=model.fetch_time,
+            known_at=model.known_at,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _fetch_run(model: EvidenceFetchRunModel) -> EvidenceFetchRun:
+        return EvidenceFetchRun(
+            fetch_run_id=model.fetch_run_id,
+            evidence_source_id=model.evidence_source_id,
+            status=FetchRunStatus(model.status),
+            window_start=model.window_start,
+            window_end=model.window_end,
+            cursor=model.cursor,
+            expected_count=model.expected_count,
+            fetched_count=model.fetched_count,
+            raw_inserted_count=model.raw_inserted_count,
+            duplicate_count=model.duplicate_count,
+            parsed_count=model.parsed_count,
+            evidence_count=model.evidence_count,
+            failed_count=model.failed_count,
+            errors=model.errors,
+            started_at=model.started_at,
+            completed_at=model.completed_at,
+            row_version=model.row_version,
+        )
+
+    @staticmethod
+    def _record_values(record: NormalizedEvidence) -> dict[str, object]:
+        return {
+            "evidence_id": record.evidence_id,
+            "raw_document_id": record.raw_document_id,
+            "evidence_type": record.evidence_type.value,
+            "source_type": record.source_type.value,
+            "source_priority": record.source_priority,
+            "subject_type": record.subject_type,
+            "subject_id": record.subject_id,
+            "claim_key": record.claim_key,
+            "source": record.source,
+            "upstream_source": record.upstream_source,
+            "payload": record.payload,
+            "normalized_payload": record.normalized_payload,
+            "event_time": record.event_time,
+            "publish_time": record.publish_time,
+            "fetch_time": record.fetch_time,
+            "known_at": record.known_at,
+            "confidence": record.confidence,
+            "relevance": record.relevance,
+            "expire_at": record.expire_at,
+            "decay_model": record.decay_model.value,
+            "decay_rate": record.decay_rate,
+            "availability": record.availability.value,
+            "untrusted": record.untrusted,
+            "conflict_state": record.conflict_state,
+            "parser_version": record.parser_version,
+            "supersedes_evidence_id": record.supersedes_evidence_id,
+            "content_hash": record.content_hash,
+        }
+
+    @staticmethod
+    def _record(model: EvidenceRecordModel) -> NormalizedEvidence:
+        return NormalizedEvidence(
+            evidence_id=model.evidence_id,
+            raw_document_id=model.raw_document_id,
+            evidence_type=EvidenceType(model.evidence_type),
+            source_type=EvidenceSourceType(model.source_type),
+            source_priority=model.source_priority,
+            subject_type=model.subject_type,
+            subject_id=model.subject_id,
+            claim_key=model.claim_key,
+            source=model.source,
+            upstream_source=model.upstream_source,
+            payload=model.payload,
+            normalized_payload=model.normalized_payload,
+            event_time=model.event_time,
+            publish_time=model.publish_time,
+            fetch_time=model.fetch_time,
+            known_at=model.known_at,
+            confidence=float(model.confidence),
+            relevance=float(model.relevance),
+            expire_at=model.expire_at,
+            decay_model=DecayModel(model.decay_model),
+            decay_rate=None if model.decay_rate is None else float(model.decay_rate),
+            availability=EvidenceAvailability(model.availability),
+            untrusted=model.untrusted,
+            conflict_state=model.conflict_state,
+            parser_version=model.parser_version,
+            supersedes_evidence_id=model.supersedes_evidence_id,
+            content_hash=model.content_hash,
         )
 
 

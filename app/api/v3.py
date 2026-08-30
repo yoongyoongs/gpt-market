@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.container import container
 from app.v3.domain.features import FeatureQuery, FeatureSortField
+from app.v3.application.read_evidence import ReadEvidenceService
+from app.v3.contracts.evidence import EvidenceType
+from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
@@ -73,3 +78,37 @@ async def market_regime():
     if snapshot is None:
         raise HTTPException(status_code=404, detail="published market regime not found")
     return snapshot
+
+
+def _enum_values(value: str | None, enum_type):
+    if not value:
+        return ()
+    try:
+        return tuple(enum_type(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in enum_type)
+        raise HTTPException(status_code=422, detail=f"allowed values: {allowed}") from exc
+
+
+@router.get("/evidence/{subject_type}/{subject_id}")
+async def evidence_for_subject(
+    subject_type: str,
+    subject_id: str,
+    as_of: datetime | None = None,
+    evidence_types: str | None = None,
+    source_types: str | None = None,
+    min_effective_relevance: float = Query(default=0, ge=0, le=1),
+    include_candidates: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    query = EvidenceReadQuery(
+        subject_type=subject_type.upper(),
+        subject_id=subject_id,
+        as_of=as_of or datetime.now(timezone.utc),
+        evidence_types=_enum_values(evidence_types, EvidenceType),
+        source_types=_enum_values(source_types, EvidenceSourceType),
+        min_effective_relevance=min_effective_relevance,
+        include_candidates=include_candidates,
+        limit=limit,
+    )
+    return await ReadEvidenceService(_uow).execute(query)
