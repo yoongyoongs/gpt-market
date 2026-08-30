@@ -28,8 +28,10 @@ class DynamicProvider(FakeProvider):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.failed_codes: set[str] = set()
+        self.calls = 0
 
     async def fetch(self, code, period, adjust_type, limit):
+        self.calls += 1
         if code in self.failed_codes and adjust_type.value == "QFQ":
             raise RuntimeError(f"{code} unavailable")
         return result(self.code, adjust_type).model_copy(update={"code": code})
@@ -79,6 +81,9 @@ class FakeBarRepository:
 
     async def has_daily_coverage(self, security_id, **kwargs):
         return security_id in self.store.coverage
+
+    async def covered_daily_security_ids(self, targets, **kwargs):
+        return {target.security_id for target in targets if target.security_id in self.store.coverage}
 
 
 class FakeRunRepository:

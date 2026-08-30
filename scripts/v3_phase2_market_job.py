@@ -27,7 +27,11 @@ from app.v3.infrastructure.providers.bars import (
     SinaHistoricalBarProvider,
 )
 from app.v3.infrastructure.providers.exchange_calendar import ExchangeCalendarsAShareCalendar
-from app.v3.infrastructure.providers.universe import ExchangeUniverseProvider, LegacyUniverseProvider
+from app.v3.infrastructure.providers.universe import (
+    ExchangeUniverseProvider,
+    LegacyUniverseProvider,
+    OfficialUniverseWithVendorStatusProvider,
+)
 from app.v3.jobs.market_data import latest_completed_session
 
 
@@ -102,9 +106,13 @@ async def execute(args: argparse.Namespace) -> dict:
     try:
         await database.check_connection()
         if args.mode in {"universe", "all"}:
+            vendor_universe = LegacyUniverseProvider(eastmoney)
             refreshed = await RefreshUniverseService(
                 uow_factory,
-                (exchanges, LegacyUniverseProvider(eastmoney)),
+                (
+                    OfficialUniverseWithVendorStatusProvider(exchanges, vendor_universe),
+                    vendor_universe,
+                ),
             ).execute()
             report["universe"] = {
                 "snapshot_id": str(refreshed.snapshot.snapshot_id),

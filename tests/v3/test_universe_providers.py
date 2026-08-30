@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from app.v3.infrastructure.providers.universe import ExchangeUniverseProvider, _plain_text
+import pytest
+
+from app.v3.domain.market_data import Market, SecurityMember
+from app.v3.infrastructure.providers.universe import (
+    ExchangeUniverseProvider,
+    OfficialUniverseWithVendorStatusProvider,
+    _plain_text,
+)
+from tests.v3.test_refresh_universe import FakeProvider, fetched
 
 
 def test_szse_html_name_is_parsed_without_markup() -> None:
@@ -50,3 +58,40 @@ def test_exchange_provider_parses_current_bse_codes() -> None:
     assert [(item.market.value, item.code, item.name) for item in members] == [
         ("BJ", "920000", "安徽凤凰")
     ]
+
+
+@pytest.mark.asyncio
+async def test_official_membership_is_enriched_without_vendor_extras() -> None:
+    official = fetched("official", 2)
+    first = official.members[0]
+    vendor_members = (
+        first.model_copy(update={"suspended": True, "trading_status": "SUSPENDED"}),
+        SecurityMember(code="999999", market=Market.SH, name="非官方额外证券"),
+    )
+    vendor = fetched("vendor", 2).model_copy(update={"members": vendor_members})
+    provider = OfficialUniverseWithVendorStatusProvider(
+        FakeProvider("official", result=official),
+        FakeProvider("vendor", result=vendor),
+    )
+
+    result = await provider.fetch_snapshot()
+
+    assert result.source_code == provider.code
+    assert len(result.members) == len(official.members)
+    assert result.members[0].code == first.code
+    assert result.members[0].suspended is True
+    assert all(member.code != "999999" for member in result.members)
+
+
+@pytest.mark.asyncio
+async def test_official_membership_survives_vendor_status_failure() -> None:
+    official = fetched("official", 2)
+    provider = OfficialUniverseWithVendorStatusProvider(
+        FakeProvider("official", result=official),
+        FakeProvider("vendor", error=RuntimeError("down")),
+    )
+
+    result = await provider.fetch_snapshot()
+
+    assert result.source_code == provider.code
+    assert result.members == official.members

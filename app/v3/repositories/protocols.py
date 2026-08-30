@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 from types import TracebackType
 from typing import Protocol
+from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
@@ -36,8 +38,16 @@ class BarRepository(Protocol):
     async def publish_series_revision(self, revision: BarSeriesRevision) -> bool: ...
 
     async def has_daily_coverage(
-        self, security_id, *, minimum_bars: int, minimum_last_bar_date
+        self, security_id: UUID, *, minimum_bars: int, minimum_last_bar_date: date
     ) -> bool: ...
+
+    async def covered_daily_security_ids(
+        self,
+        targets: tuple[BarIngestionTarget, ...],
+        *,
+        minimum_bars: int,
+        minimum_last_bar_date: date,
+    ) -> set[UUID]: ...
 
 
 class IngestionRunRepository(Protocol):

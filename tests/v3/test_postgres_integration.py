@@ -481,9 +481,10 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
     def uow_factory() -> SQLAlchemyUnitOfWork:
         return SQLAlchemyUnitOfWork(sessions)
     publisher = PublishBarBundleService(uow_factory)
+    provider = DynamicProvider("integration")
     runner = BackfillDailyBarsService(
         uow_factory,
-        BuildDailyBarRevisionsService([DynamicProvider("integration")], clock=lambda: NOW),
+        BuildDailyBarRevisionsService([provider], clock=lambda: NOW),
         AggregateDailyBarsService(AlwaysOpenCalendar(), clock=lambda: NOW),
         publisher,
         clock=lambda: now,
@@ -493,6 +494,7 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
         run_id=first.run_id,
         minimum_last_bar_date=(NOW - timedelta(days=10)).date(),
     )
+    third = await runner.execute(minimum_last_bar_date=(NOW - timedelta(days=10)).date())
 
     async with engine.connect() as connection:
         run_counts = (
@@ -518,5 +520,7 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
 
     assert first.status is IngestionRunStatus.COMPLETED
     assert second.status is IngestionRunStatus.COMPLETED
+    assert third.status is IngestionRunStatus.COMPLETED
+    assert provider.calls == 4
     assert tuple(run_counts) == ("COMPLETED", 2, 2, 2, 0)
     assert series_count == 8

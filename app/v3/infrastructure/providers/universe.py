@@ -70,6 +70,55 @@ class LegacyUniverseProvider:
         return None
 
 
+class OfficialUniverseWithVendorStatusProvider:
+    code = "official_exchanges_enriched"
+
+    def __init__(self, official, vendor_status) -> None:
+        self._official = official
+        self._vendor_status = vendor_status
+
+    async def fetch_snapshot(self) -> UniverseFetchResult:
+        official, vendor = await asyncio.gather(
+            self._official.fetch_snapshot(),
+            self._vendor_status.fetch_snapshot(),
+            return_exceptions=True,
+        )
+        if isinstance(official, BaseException):
+            raise official
+        if isinstance(vendor, BaseException):
+            return official.model_copy(update={"source_code": self.code})
+        vendor_by_key = {(member.market, member.code): member for member in vendor.members}
+        members = tuple(
+            self._enrich(member, vendor_by_key.get((member.market, member.code)))
+            for member in official.members
+        )
+        return official.model_copy(
+            update={
+                "source_code": self.code,
+                "fetch_time": max(official.fetch_time, vendor.fetch_time),
+                "members": members,
+            }
+        )
+
+    @staticmethod
+    def _enrich(official: SecurityMember, vendor: SecurityMember | None) -> SecurityMember:
+        if vendor is None:
+            return official
+        return official.model_copy(
+            update={
+                "trading_status": vendor.trading_status,
+                "is_st": vendor.is_st,
+                "suspended": vendor.suspended,
+                "delisting_risk": vendor.delisting_risk,
+                "raw_reference": {
+                    **official.raw_reference,
+                    "status_source": "eastmoney",
+                    "status_reference": vendor.raw_reference,
+                },
+            }
+        )
+
+
 class ExchangeUniverseProvider:
     code = "official_exchanges"
     sse_url = "https://query.sse.com.cn/sseQuery/commonQuery.do"

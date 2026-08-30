@@ -58,6 +58,7 @@ class BackfillDailyBarsService:
             and not failures
         ):
             return run
+        covered = await self._published_coverage(targets, minimum_last_bar_date)
         pending = [*sorted(int(index) for index in failures), *range(next_index, len(targets))]
         if stop_after is not None:
             pending = pending[:stop_after]
@@ -66,7 +67,13 @@ class BackfillDailyBarsService:
             batch = pending[offset : offset + concurrency]
             results = await asyncio.gather(
                 *(
-                    self._process_target(index, targets[index], limit, minimum_last_bar_date)
+                    (
+                        self._skip_target(index, targets[index])
+                        if targets[index].security_id in covered
+                        else self._process_target(
+                            index, targets[index], limit, minimum_last_bar_date
+                        )
+                    )
                     for index in batch
                 )
             )
@@ -121,22 +128,21 @@ class BackfillDailyBarsService:
         minimum_last_bar_date: date,
     ) -> tuple[int, dict[str, str]]:
         try:
-            if not await self._already_published(target, minimum_last_bar_date):
-                daily = await self._builder.execute(
-                    target.security_id,
-                    target.code,
-                    limit=limit,
-                    minimum_last_bar_date=(None if target.suspended else minimum_last_bar_date),
-                )
-                aggregates = []
-                for source in filter(None, (daily.raw_revision, daily.adjusted_revision)):
-                    aggregates.extend(
-                        (
-                            self._aggregator.execute(source, BarPeriod.WEEK),
-                            self._aggregator.execute(source, BarPeriod.MONTH),
-                        )
+            daily = await self._builder.execute(
+                target.security_id,
+                target.code,
+                limit=limit,
+                minimum_last_bar_date=(None if target.suspended else minimum_last_bar_date),
+            )
+            aggregates = []
+            for source in filter(None, (daily.raw_revision, daily.adjusted_revision)):
+                aggregates.extend(
+                    (
+                        self._aggregator.execute(source, BarPeriod.WEEK),
+                        self._aggregator.execute(source, BarPeriod.MONTH),
                     )
-                await self._publisher.execute(daily, aggregates)
+                )
+            await self._publisher.execute(daily, aggregates)
             return index, {"status": "SUCCESS", "code": target.code}
         except Exception as exc:
             return index, {
@@ -145,6 +151,12 @@ class BackfillDailyBarsService:
                 "error_type": type(exc).__name__,
                 "error": str(exc)[:500],
             }
+
+    @staticmethod
+    async def _skip_target(
+        index: int, target: BarIngestionTarget
+    ) -> tuple[int, dict[str, str]]:
+        return index, {"status": "SUCCESS", "code": target.code, "coverage_skip": "true"}
 
     async def _load_or_create(
         self, run_id: UUID | None
@@ -183,15 +195,16 @@ class BackfillDailyBarsService:
             await uow.commit()
         return run, targets
 
-    async def _already_published(
-        self, target: BarIngestionTarget, minimum_last_bar_date: date
-    ) -> bool:
-        required_date = date(1900, 1, 1) if target.suspended else minimum_last_bar_date
+    async def _published_coverage(
+        self,
+        targets: tuple[BarIngestionTarget, ...],
+        minimum_last_bar_date: date,
+    ) -> set[UUID]:
         async with self._uow_factory() as uow:
-            return await uow.bars.has_daily_coverage(
-                target.security_id,
+            return await uow.bars.covered_daily_security_ids(
+                targets,
                 minimum_bars=1,
-                minimum_last_bar_date=required_date,
+                minimum_last_bar_date=minimum_last_bar_date,
             )
 
     async def _checkpoint(

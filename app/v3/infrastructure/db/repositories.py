@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -362,7 +363,7 @@ class SQLAlchemyBarRepository:
         return True
 
     async def has_daily_coverage(
-        self, security_id, *, minimum_bars: int, minimum_last_bar_date
+        self, security_id: UUID, *, minimum_bars: int, minimum_last_bar_date: date
     ) -> bool:
         row = (
             await self._session.execute(
@@ -395,6 +396,66 @@ class SQLAlchemyBarRepository:
             and count >= minimum_bars
             and last_bar_time.date() >= minimum_last_bar_date
         )
+
+    async def covered_daily_security_ids(
+        self,
+        targets: tuple[BarIngestionTarget, ...],
+        *,
+        minimum_bars: int,
+        minimum_last_bar_date: date,
+    ) -> set[UUID]:
+        if not targets:
+            return set()
+        security_ids = [target.security_id for target in targets]
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id,
+                BarSeriesRevisionModel.security_id,
+                BarSeriesRevisionModel.raw_bar_available,
+                func.row_number()
+                .over(
+                    partition_by=BarSeriesRevisionModel.security_id,
+                    order_by=(
+                        BarSeriesRevisionModel.known_at.desc(),
+                        BarSeriesRevisionModel.revision_id.desc(),
+                    ),
+                )
+                .label("revision_rank"),
+            )
+            .where(
+                BarSeriesRevisionModel.security_id.in_(security_ids),
+                BarSeriesRevisionModel.period == "DAY",
+                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.status == "PUBLISHED",
+            )
+            .subquery()
+        )
+        rows = (
+            await self._session.execute(
+                select(
+                    ranked.c.security_id,
+                    ranked.c.raw_bar_available,
+                    func.count(MarketBarModel.bar_time),
+                    func.max(MarketBarModel.bar_time),
+                )
+                .join(MarketBarModel, MarketBarModel.revision_id == ranked.c.revision_id)
+                .where(ranked.c.revision_rank == 1)
+                .group_by(ranked.c.security_id, ranked.c.raw_bar_available)
+            )
+        ).all()
+        required_dates = {
+            target.security_id: (
+                date(1900, 1, 1) if target.suspended else minimum_last_bar_date
+            )
+            for target in targets
+        }
+        return {
+            security_id
+            for security_id, raw_available, count, last_bar_time in rows
+            if raw_available
+            and count >= minimum_bars
+            and last_bar_time.date() >= required_dates[security_id]
+        }
 
 
 class SQLAlchemyIngestionRunRepository:
