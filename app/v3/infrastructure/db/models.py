@@ -843,6 +843,173 @@ class MarketRegimeSnapshotModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class RecallChannelModel(Base):
+    __tablename__ = "recall_channels"
+    __table_args__ = (
+        UniqueConstraint("code", "version", name="uq_recall_channels_code_version"),
+        UniqueConstraint("content_hash", name="uq_recall_channels_content_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    channel_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RecallRunModel(Base):
+    __tablename__ = "recall_runs"
+    __table_args__ = (
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        CheckConstraint("status IN ('PUBLISHED','FAILED')", name="valid_status"),
+        CheckConstraint(
+            "expected_channel_count >= 1 AND successful_channel_count >= 0 "
+            "AND failed_channel_count >= 0 AND successful_channel_count + failed_channel_count = expected_channel_count",
+            name="valid_channel_counts",
+        ),
+        CheckConstraint(
+            "security_count >= 0 AND hit_security_count >= 0 AND hit_security_count <= security_count",
+            name="valid_security_counts",
+        ),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("content_hash", name="uq_recall_runs_content_hash"),
+        Index("ix_recall_runs_as_of", "as_of", "status"),
+        {"schema": V3_SCHEMA},
+    )
+
+    recall_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.feature_runs.feature_run_id"), nullable=False)
+    regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.market_regime_snapshots.regime_snapshot_id"))
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_channel_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    successful_channel_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed_channel_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    security_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    hit_security_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    errors: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RecallResultModel(Base):
+    __tablename__ = "recall_results"
+    __table_args__ = (
+        CheckConstraint("channel_rank >= 1", name="positive_rank"),
+        CheckConstraint("strength >= 0 AND strength <= 1", name="strength_range"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("recall_run_id", "channel_id", "security_id", name="uq_recall_results_run_channel_security"),
+        UniqueConstraint("content_hash", name="uq_recall_results_content_hash"),
+        Index("ix_recall_results_run_channel_rank", "recall_run_id", "channel_id", "channel_rank"),
+        Index("ix_recall_results_run_security", "recall_run_id", "security_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    recall_result_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    recall_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.recall_runs.recall_run_id"), nullable=False)
+    channel_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.recall_channels.channel_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    channel_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    strength: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    matched_features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RawOpportunityModel(Base):
+    __tablename__ = "raw_opportunities"
+    __table_args__ = (
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        UniqueConstraint("recall_run_id", "security_id", name="uq_raw_opportunities_run_security"),
+        UniqueConstraint("content_hash", name="uq_raw_opportunities_content_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    raw_opportunity_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    recall_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.recall_runs.recall_run_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recall_result_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    channel_codes: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    reason_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PerformanceObservationModel(Base):
+    __tablename__ = "performance_observations"
+    __table_args__ = (
+        CheckConstraint("horizon_sessions IN (3,5,10)", name="valid_horizon"),
+        CheckConstraint("status IN ('PENDING','MATURED','UNAVAILABLE')", name="valid_status"),
+        CheckConstraint("matures_at > as_of", name="future_maturity"),
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        CheckConstraint("baseline_price > 0 AND (future_price IS NULL OR future_price > 0)", name="positive_prices"),
+        CheckConstraint(
+            "(status = 'PENDING' AND future_price IS NULL AND raw_return IS NULL AND excess_return IS NULL) OR "
+            "(status = 'MATURED' AND future_price IS NOT NULL AND raw_return IS NOT NULL) OR status = 'UNAVAILABLE'",
+            name="status_payload",
+        ),
+        UniqueConstraint("recall_run_id", "security_id", "horizon_sessions", name="uq_performance_observations_run_security_horizon"),
+        UniqueConstraint("content_hash", name="uq_performance_observations_content_hash"),
+        Index("ix_performance_observations_maturity", "status", "matures_at"),
+        {"schema": V3_SCHEMA},
+    )
+
+    observation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    recall_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.recall_runs.recall_run_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    horizon_sessions: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    matures_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    baseline_price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    future_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    raw_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    benchmark_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    excess_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RecallMissEvaluationModel(Base):
+    __tablename__ = "recall_miss_evaluations"
+    __table_args__ = (
+        CheckConstraint("known_at >= evaluated_at", name="known_after_evaluated"),
+        CheckConstraint(
+            "(is_exceptional AND NOT was_recalled AND miss_type IS NOT NULL) OR "
+            "((NOT is_exceptional OR was_recalled) AND miss_type IS NULL)",
+            name="miss_type_consistency",
+        ),
+        UniqueConstraint("observation_id", "threshold_version", name="uq_recall_miss_observation_threshold"),
+        UniqueConstraint("content_hash", name="uq_recall_miss_evaluations_content_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    evaluation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    observation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.performance_observations.observation_id"), nullable=False)
+    threshold_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    threshold_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    was_recalled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_exceptional: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    miss_type: Mapped[str | None] = mapped_column(String(64))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class CorporateActionModel(Base):
     __tablename__ = "corporate_actions"
     __table_args__ = (
