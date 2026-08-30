@@ -28,6 +28,7 @@ services:
     container_name: gpt-market-postgres
     profiles:
       - v3
+      - v3-worker
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gpt_market}
@@ -43,6 +44,24 @@ services:
       - no-new-privileges:true
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  v3-market-worker:
+    build: .
+    container_name: gpt-market-v3-worker
+    profiles:
+      - v3-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-lc", "alembic upgrade head && python -m scripts.v3_phase2_scheduler"]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
   postgres_data:

@@ -94,3 +94,31 @@ https://当前隧道地址/gpt/{secret}/live
 ```
 
 Web 与 MCP 只在最外层包装不同，业务 `data` 来自相同 Pydantic 模型、Service、缓存和序列化函数。路径 secret 属于敏感信息，不得写入公开文档、截图或 Git；长期使用时还应关闭或脱敏 Nginx 对 `/gpt/` 的 access log。
+
+## V3 PostgreSQL 与 Worker
+
+V3 默认关闭，不影响现有 V1/V2。只有对应 Phase 已验收并明确批准启用时，才在服务器 `.env` 设置 `V3_ENABLED=true` 和真实 `V3_DATABASE_URL`。数据库密码只保存在服务器，不提交 Git。
+
+只启动 V3 PostgreSQL：
+
+```bash
+docker compose --profile v3 up -d postgres
+docker compose run --rm market-mcp alembic upgrade head
+```
+
+Phase 2 Worker 使用独立 Profile，不会随 API 或仅启用 `v3` Profile 自动启动：
+
+```bash
+docker compose --profile v3-worker up -d postgres v3-market-worker
+docker compose logs --tail=100 v3-market-worker
+```
+
+默认按上海时区每日 18:30 执行 Universe、日 K 增量/周月聚合和公司行动同步。可通过 `V3_PHASE2_SCHEDULE_AT`、`V3_PHASE2_CONCURRENCY`、`V3_PHASE2_HISTORY_LIMIT` 和 `V3_PHASE2_LOCK_KEY` 配置；PostgreSQL advisory lock 会拒绝重叠任务。
+
+默认报告写入容器 `/tmp`，用于日志与当次诊断。若改为宿主持久化挂载，目录必须允许非 root 容器用户 UID 10001 写入：
+
+```bash
+install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
+```
+
+2027 年前必须升级 `exchange-calendars` 并重新核对交易所休市安排；当前版本越过 2026-12-31 会明确失败，不会按普通工作日静默运行。
