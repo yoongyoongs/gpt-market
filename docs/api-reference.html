@@ -1,12 +1,15 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="aef3ce64054344f4c063d091681629baebf515e5a381e6de461d4e72f1ada740"><title>API 与 MCP 工具参考</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="55601ee2c7562fc87791145640be676d9ba5a38b304f52031e7d040467040841"><title>API 与 MCP 工具参考</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
 </style></head>
 <body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
 <ul>
-<li><a href="#1">1. 基础地址和认证</a></li>
+<li><a href="#1">1. 基础地址和认证</a><ul>
+<li><a href="#v3-phase-3-readfeature-flag">V3 Phase 3 READ（Feature Flag）</a></li>
+</ul>
+</li>
 <li><a href="#2-mcp-tools">2. MCP tools</a></li>
 <li><a href="#3-gpt-web">3. GPT Web 路由</a><ul>
 <li><a href="#live-refresh-html-adapter">Live Refresh HTML Adapter</a></li>
@@ -24,7 +27,7 @@
 <li><a href="#12">12. 调用示例</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/api-reference.md · 内容哈希：aef3ce640543</div><h1 id="api-mcp">API 与 MCP 工具参考<a class="headerlink" href="#api-mcp" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/api-reference.md · 内容哈希：55601ee2c756</div><h1 id="api-mcp">API 与 MCP 工具参考<a class="headerlink" href="#api-mcp" title="Permanent link">&para;</a></h1>
 <p>本文描述当前 1.0.0 接口。业务字段以 <code>app/models.py</code> 为唯一 schema 来源。</p>
 <h2 id="1">1. 基础地址和认证<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
 <table>
@@ -64,6 +67,31 @@
 </tbody>
 </table>
 <p>生产环境应在 Nginx 或防火墙限制 REST 调试端点，不应依赖其公开可访问性。</p>
+<h3 id="v3-phase-3-readfeature-flag">V3 Phase 3 READ（Feature Flag）<a class="headerlink" href="#v3-phase-3-readfeature-flag" title="Permanent link">&para;</a></h3>
+<p>以下端点仅在 <code>V3_ENABLED=true</code> 且 PostgreSQL 已迁移至 <code>0003_full_market_features</code> 时可用；禁用时返回 HTTP 503：</p>
+<table>
+<thead>
+<tr>
+<th>路由</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/v3/universe/features</code></td>
+<td>查询最新或指定 Published Feature Run</td>
+</tr>
+<tr>
+<td><code>GET /api/v3/universe/query</code></td>
+<td>上述接口的兼容别名</td>
+</tr>
+<tr>
+<td><code>GET /api/v3/market-regime</code></td>
+<td>读取最新 Published Run 对应的事实型 Regime</td>
+</tr>
+</tbody>
+</table>
+<p>Feature Query 参数包括 <code>feature_run_id</code>、<code>market</code>、<code>stale</code>、<code>sort_by</code>、<code>descending</code>、<code>min_value</code>、<code>max_value</code>、逗号分隔的 <code>fields</code>、<code>limit</code> 和 <code>cursor</code>。默认 50、最大 200；字段和排序键使用白名单，下一页必须原样沿用排序参数。当前部署仍默认关闭 V3，这些接口不代表 V3 已在生产启用。</p>
 <h2 id="2-mcp-tools">2. MCP tools<a class="headerlink" href="#2-mcp-tools" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

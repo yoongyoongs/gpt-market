@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from types import TracebackType
 from typing import Protocol
 from uuid import UUID
@@ -17,6 +17,7 @@ from app.v3.domain.market_data import (
     MarketDataIngestionRun,
     UniverseSnapshot,
 )
+from app.v3.domain.features import FeaturePage, FeatureQuery, FeatureRun, MarketRegimeSnapshot, SecurityFeature
 
 
 class AgentTaskRepository(Protocol):
@@ -58,6 +59,25 @@ class BarRepository(Protocol):
         minimum_last_bar_date: date,
     ) -> set[UUID]: ...
 
+    async def latest_daily_revisions(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[BarSeriesRevision, ...]: ...
+
+
+class FeatureRepository(Protocol):
+    async def publish(
+        self,
+        run: FeatureRun,
+        features: tuple[SecurityFeature, ...],
+        regime: MarketRegimeSnapshot,
+    ) -> bool: ...
+
+    async def query(self, query: FeatureQuery) -> FeaturePage | None: ...
+
+    async def latest_regime(self) -> MarketRegimeSnapshot | None: ...
+
+    async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None: ...
+
 
 class CorporateActionRepository(Protocol):
     async def latest_by_source_references(
@@ -82,6 +102,7 @@ class UnitOfWork(Protocol):
     bars: BarRepository
     corporate_actions: CorporateActionRepository
     ingestion_runs: IngestionRunRepository
+    features: FeatureRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

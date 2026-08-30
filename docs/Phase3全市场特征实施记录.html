@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="3544cf6abb84c08d43f58eeab6f3460cbb8d270bdd063e395e626dc3570f19c8"><title>Phase 3 全市场特征实施记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 实施范围</a></li>
+<li><a href="#2">2. 计算口径</a></li>
+<li><a href="#3">3. 发布与重放</a></li>
+<li><a href="#4">4. 查询接口</a></li>
+<li><a href="#5">5. 当前验收</a></li>
+<li><a href="#6">6. 待完成验收</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase3全市场特征实施记录.md · 内容哈希：3544cf6abb84</div><h1 id="phase-3">Phase 3 全市场特征实施记录<a class="headerlink" href="#phase-3" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>日期：2026-08-30（Asia/Shanghai）<br>
+分支：<code>codex/phase3-full-market-features</code><br>
+状态：核心实现与 PostgreSQL 集成验收完成；5,551 只全市场性能验收待执行</p>
+</blockquote>
+<h2 id="1">1. 实施范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>本阶段按《架构设计实施稿》实现事实层能力，不修改 V1/V2 评分，不增加自动交易：</p>
+<ul>
+<li><code>0003_full_market_features</code> Migration；</li>
+<li>不可变 <code>feature_runs</code>、<code>security_features</code>、<code>market_regime_snapshots</code>；</li>
+<li>绑定 Universe Snapshot、QFQ DAY Revision、Factor Revision 和输入 Hash 的可重放 Feature Run；</li>
+<li>收益、位置、均线、斜率、ATR、波动率、区间、突破/回踩、成交额、量比、量能扩张、相对强度和质量字段；</li>
+<li>白名单字段选择、过滤、排序和稳定 Cursor；</li>
+<li>事实型 Market Regime 与显式 UNKNOWN；</li>
+<li>独立 Feature Job 和 V3 READ API。</li>
+</ul>
+<h2 id="2">2. 计算口径<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>所有全市场特征只读取同一条截至 <code>as_of</code> 已发布的 QFQ DAY Revision，不混用其他周期或复权口径。</li>
+<li><code>return_Nd</code> 需要至少 <code>N+1</code> 根完整日 K；数据不足返回 <code>null</code> 并写入 <code>missing_fields</code>。</li>
+<li><code>position_Nd</code> 使用窗口内最高价/最低价；ATR 使用 14 日 True Range；20 日波动率按日收益标准差年化（250 交易日）。</li>
+<li>突破使用当前收盘价与此前 20 根最高价比较；回踩要求 MA20 上行且收盘价位于 MA20 上下 3% 内。</li>
+<li>行业或指数基准未绑定时，相对强度保持 <code>null</code>，不得编造。</li>
+<li>Regime 中缺少指数、板块、涨跌停或市值风格事实时保存 <code>UNKNOWN + reason</code>，不输出总分或买卖硬开关。</li>
+</ul>
+<h2 id="3">3. 发布与重放<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<p>Feature 先按批读取和计算，最后在单事务内写入 PUBLISHED Run、全部 Security Feature 和对应 Regime。失败不会留下可查询的半成品。Run 内容 Hash 由 Universe Snapshot、<code>as_of</code>、Feature Version、Revision Set Hash、覆盖和错误摘要决定；相同输入重复运行返回既有 Run。</p>
+<p>每条 Security Feature 保存 <code>series_revision_id</code>、<code>factor_revision_id</code>、<code>input_hash</code>、<code>content_hash</code>、质量、缺失字段、stale 和来源错误。三张 Phase 3 表均由数据库触发器禁止 UPDATE/DELETE。</p>
+<h2 id="4">4. 查询接口<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>GET /api/v3/universe/features</code>；</li>
+<li>兼容别名：<code>GET /api/v3/universe/query</code>；</li>
+<li><code>GET /api/v3/market-regime</code>。</li>
+</ul>
+<p>Universe Query 最大页长 200。字段、排序键和数值过滤只允许类型化白名单；Cursor 绑定排序字段，并使用“排序值 + security_id”保证稳定翻页。V3 Feature Flag 关闭时明确返回 HTTP 503。</p>
+<h2 id="5">5. 当前验收<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>空 PostgreSQL 17 从 base 升级到 <code>0003_full_market_features (head)</code> 成功；</li>
+<li>2 只证券、每只 260 根 QFQ 日 K 的真实数据库链路通过；</li>
+<li>原子发布、重复输入幂等、数值降序 Cursor、Regime 读取和不可变触发器通过；</li>
+<li>V3 全部测试（启用真实 PostgreSQL）：<code>81 passed</code>；</li>
+<li>全项目测试（启用真实 PostgreSQL）：<code>154 passed, 5 skipped</code>；</li>
+<li>全新环境发现并补齐 SQLAlchemy async 所需的显式 <code>greenlet</code> 依赖。</li>
+</ul>
+<h2 id="6">6. 待完成验收<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<p>核心实现不等于全市场性能验收。Phase 3 标记最终完成前仍需：</p>
+<ol>
+<li>在完整 5,551 Universe、完整 QFQ/HFQ 输入库执行正式 Feature Run；</li>
+<li>核对 3/5/10/20/60/120/250 日字段覆盖与上市不足样本的缺失原因；</li>
+<li>验证 5,551 行查询的过滤、字段选择、正反排序、连续 Cursor 和 Explain；</li>
+<li>记录总耗时、峰值内存、数据库体积、查询 P50/P95 和最终覆盖率；</li>
+<li>完成后更新本记录、需求追踪和工作状态，再建立 Phase 3 标签。</li>
+</ol></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

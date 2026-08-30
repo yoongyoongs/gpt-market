@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.container import container
+from app.v3.domain.features import FeatureQuery, FeatureSortField
+
+
+router = APIRouter(prefix="/api/v3", tags=["V3"])
+
+
+def _uow():
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    return container.v3.uow()
+
+
+async def _feature_query(
+    feature_run_id: str | None,
+    market: str | None,
+    stale: bool | None,
+    sort_by: FeatureSortField,
+    descending: bool,
+    min_value: float | None,
+    max_value: float | None,
+    fields: str | None,
+    limit: int,
+    cursor: str | None,
+):
+    request = FeatureQuery(
+        feature_run_id=feature_run_id,
+        market=market,
+        stale=stale,
+        sort_by=sort_by,
+        descending=descending,
+        min_value=min_value,
+        max_value=max_value,
+        fields=tuple(value.strip() for value in fields.split(",") if value.strip()) if fields else (),
+        limit=limit,
+        cursor=cursor,
+    )
+    async with _uow() as uow:
+        page = await uow.features.query(request)
+    if page is None:
+        raise HTTPException(status_code=404, detail="published feature run not found")
+    return page
+
+
+@router.get("/universe/features")
+@router.get("/universe/query", include_in_schema=False)
+async def universe_features(
+    feature_run_id: str | None = None,
+    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+    stale: bool | None = None,
+    sort_by: FeatureSortField = FeatureSortField.CODE,
+    descending: bool = False,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    fields: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    return await _feature_query(
+        feature_run_id, market, stale, sort_by, descending,
+        min_value, max_value, fields, limit, cursor,
+    )
+
+
+@router.get("/market-regime")
+async def market_regime():
+    async with _uow() as uow:
+        snapshot = await uow.features.latest_regime()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="published market regime not found")
+    return snapshot

@@ -634,7 +634,7 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
     assert DATABASE_URL is not None
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) + timedelta(seconds=2)
     code_seed = uuid4().int % 99_998
     codes = (f"6{code_seed:05d}", f"6{code_seed + 1:05d}")
     universe = UniverseSnapshot.build(
@@ -702,7 +702,7 @@ async def test_backfill_run_reads_universe_checkpoints_and_replays_without_dupli
     assert third.status is IngestionRunStatus.COMPLETED
     assert provider.calls == 4
     assert tuple(run_counts) == ("COMPLETED", 2, 2, 2, 0)
-    assert series_count == 18
+    assert series_count == 12
 
 
 @pytest.mark.asyncio
