@@ -14,6 +14,18 @@
 
 生产环境应在 Nginx 或防火墙限制 REST 调试端点，不应依赖其公开可访问性。
 
+### V3 Phase 3 READ（Feature Flag）
+
+以下端点仅在 `V3_ENABLED=true` 且 PostgreSQL 已迁移至 `0003_full_market_features` 时可用；禁用时返回 HTTP 503：
+
+| 路由 | 说明 |
+|---|---|
+| `GET /api/v3/universe/features` | 查询最新或指定 Published Feature Run |
+| `GET /api/v3/universe/query` | 上述接口的兼容别名 |
+| `GET /api/v3/market-regime` | 读取最新 Published Run 对应的事实型 Regime |
+
+Feature Query 参数包括 `feature_run_id`、`market`、`stale`、`sort_by`、`descending`、`min_value`、`max_value`、逗号分隔的 `fields`、`limit` 和 `cursor`。默认 50、最大 200；字段和排序键使用白名单，下一页必须原样沿用排序参数。当前部署仍默认关闭 V3，这些接口不代表 V3 已在生产启用。
+
 ## 2. MCP tools
 
 | 工具 | 主要参数 | 返回模型 |

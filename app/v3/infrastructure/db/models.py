@@ -490,6 +490,125 @@ class MarketBarModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class FeatureRunModel(Base):
+    __tablename__ = "feature_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('RUNNING','PUBLISHED','FAILED')", name="valid_status"),
+        CheckConstraint("expected_count >= 0 AND successful_count >= 0 AND failed_count >= 0", name="nonnegative_counts"),
+        CheckConstraint("successful_count + failed_count <= expected_count", name="valid_counts"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("content_hash", name="uq_feature_runs_content_hash"),
+        Index("ix_feature_runs_published_as_of", "status", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    universe_snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.universe_snapshots.snapshot_id"), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    successful_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    bar_revision_set_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    error_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SecurityFeatureModel(Base):
+    __tablename__ = "security_features"
+    __table_args__ = (
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("content_hash", name="uq_security_features_content_hash"),
+        Index("ix_security_features_run_return20", "feature_run_id", "return_20d", "security_id"),
+        Index("ix_security_features_run_position60", "feature_run_id", "position_60d", "security_id"),
+        Index("ix_security_features_run_amount", "feature_run_id", "amount", "security_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.feature_runs.feature_run_id"), primary_key=True)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), primary_key=True)
+    series_revision_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.bar_series_revisions.revision_id"), nullable=False)
+    factor_revision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.adjustment_factor_revisions.factor_revision_id"))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    return_3d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_5d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_10d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_20d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_60d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_120d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    return_250d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    position_60d: Mapped[Decimal | None] = mapped_column(Numeric(12, 10))
+    position_120d: Mapped[Decimal | None] = mapped_column(Numeric(12, 10))
+    position_250d: Mapped[Decimal | None] = mapped_column(Numeric(12, 10))
+    ma5: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    ma10: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    ma20: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    ma60: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    ma20_slope: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    ma60_slope: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    atr14: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    atr_pct: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    volatility20: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    distance_60d_high: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    distance_60d_low: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    breakout_20d: Mapped[bool | None] = mapped_column(Boolean)
+    pullback_20d: Mapped[bool | None] = mapped_column(Boolean)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    volume_ratio_5d: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    volume_expansion: Mapped[bool | None] = mapped_column(Boolean)
+    relative_index_strength: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    relative_industry_strength: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_errors: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    quality: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    features: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class MarketRegimeSnapshotModel(Base):
+    __tablename__ = "market_regime_snapshots"
+    __table_args__ = (
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+        UniqueConstraint("feature_run_id", name="uq_market_regime_feature_run"),
+        UniqueConstraint("content_hash", name="uq_market_regime_content_hash"),
+        Index("ix_market_regime_as_of", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+
+    regime_snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.feature_runs.feature_run_id"), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    index_states: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    breadth: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    turnover: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    limit_structure: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    size_style: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    growth_value_style: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    industry_rotation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    risk_appetite_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    domestic_risk_evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    global_risk_evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class CorporateActionModel(Base):
     __tablename__ = "corporate_actions"
     __table_args__ = (

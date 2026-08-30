@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.v3.infrastructure.db.session import V3Database
+from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
 
 
 @dataclass
@@ -34,3 +35,8 @@ class V3Container:
     async def close(self) -> None:
         if self.database is not None:
             await self.database.close()
+
+    def uow(self) -> SQLAlchemyUnitOfWork:
+        if self.database is None:
+            raise RuntimeError("V3 database is disabled")
+        return SQLAlchemyUnitOfWork(self.database.sessions)

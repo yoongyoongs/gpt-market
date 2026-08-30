@@ -78,12 +78,12 @@
 
 - `amount=NULL` 的正式 Market Bar 可写入；
 - Factor Revision 先于绑定它的 QFQ Revision 生效；
-- 首次 Bundle 发布写入 1 个 Factor Revision、2 个 Series Revision 和 6 条 Market Bar；
+- 当前 Bundle 发布写入 1 个 Factor Revision、RAW/QFQ/HFQ 3 个 Series Revision 和 9 条 Market Bar；
 - 原 Bundle 再发布时 Factor/Series 均为零新增；
 - Series 任一写入失败时 Factor 与 Bars 整组回滚；
 - 已发布 Bar 仍受不可变触发器保护。
 - 真实 Universe Snapshot 中两只证券完成 Backfill 后，运行记录为 `COMPLETED / 2 / 2 / 0`；
-- RAW/QFQ 的日、周、月共生成 8 个 Series Revision；同一 `run_id` 再执行时直接返回，序列数保持 8；
+- 两只证券的 RAW/QFQ/HFQ 日、周、月共生成 18 个 Series Revision；同一 `run_id` 再执行时直接返回，序列数保持 18；
 - 单元故障注入覆盖“首轮部分失败后只重试失败目标”和“发布成功但 checkpoint 前崩溃后无重复恢复”；
 - PostgreSQL 端到端测试：`test_backfill_run_reads_universe_checkpoints_and_replays_without_duplicates`，服务器隔离 PostgreSQL 17 实测通过。
 - 6 目标、并发上限 3 的故障注入测试实测最大并发为 3，并产生初始、两个批次和终态共 4 次 checkpoint；

@@ -16,7 +16,7 @@ def test_alembic_environment_loads_without_database_credentials() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
     assert Path(scripts.dir).resolve() == ROOT / "migrations"
-    assert scripts.get_heads() == ["0002_market_data_foundation"]
+    assert scripts.get_heads() == ["0003_full_market_features"]
 
 
 def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
@@ -41,4 +41,7 @@ def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
         "v3.bar_series_revisions",
         "v3.market_bars",
         "v3.corporate_actions",
+        "v3.feature_runs",
+        "v3.security_features",
+        "v3.market_regime_snapshots",
     }

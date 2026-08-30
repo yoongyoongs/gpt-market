@@ -178,6 +178,23 @@ async def test_unexpected_universe_expansion_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cold_start_rejects_oversized_secondary_snapshot() -> None:
+    store = Store(None)
+    oversized = fetched("secondary", 5701)
+    runner = RefreshUniverseService(
+        lambda: FakeUnitOfWork(store),
+        (
+            FakeProvider("primary", error=RuntimeError("down")),
+            FakeProvider("secondary", result=oversized),
+        ),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(AllUniverseProvidersFailed, match="exceeds cold-start maximum"):
+        await runner.execute()
+
+
+@pytest.mark.asyncio
 async def test_all_fail_without_lkg_raises_explicit_error() -> None:
     store = Store()
     with pytest.raises(AllUniverseProvidersFailed, match="primary"):

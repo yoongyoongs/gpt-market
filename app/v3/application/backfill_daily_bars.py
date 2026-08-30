@@ -135,7 +135,9 @@ class BackfillDailyBarsService:
                 minimum_last_bar_date=(None if target.suspended else minimum_last_bar_date),
             )
             aggregates = []
-            for source in filter(None, (daily.raw_revision, daily.adjusted_revision)):
+            for source in filter(
+                None, (daily.raw_revision, daily.adjusted_revision, daily.hfq_revision)
+            ):
                 aggregates.extend(
                     (
                         self._aggregator.execute(source, BarPeriod.WEEK),

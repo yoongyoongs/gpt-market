@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +22,15 @@ from app.v3.domain.market_data import (
     MarketDataIngestionRun,
     SecurityMember,
     UniverseSnapshot,
+    MarketBar,
+    BarSeriesRevisionContent,
+    PointInTimePrecision,
 )
+from app.v3.domain.features import (
+    FeaturePage, FeatureQuery, FeatureRun, FeatureRunStatus, FeatureSortField,
+    MarketRegimeSnapshot, SecurityFeature,
+)
+from app.v3.domain.hashing import canonical_json
 from app.v3.infrastructure.db.models import (
     AgentTaskModel,
     AdjustmentFactorModel,
@@ -37,6 +45,9 @@ from app.v3.infrastructure.db.models import (
     UniverseMemberModel,
     UniverseSnapshotModel,
     UniverseSourceModel,
+    FeatureRunModel,
+    SecurityFeatureModel,
+    MarketRegimeSnapshotModel,
 )
 
 
@@ -466,10 +477,14 @@ class SQLAlchemyBarRepository:
             select(
                 BarSeriesRevisionModel.revision_id,
                 BarSeriesRevisionModel.security_id,
+                BarSeriesRevisionModel.adjust_type,
                 BarSeriesRevisionModel.raw_bar_available,
                 func.row_number()
                 .over(
-                    partition_by=BarSeriesRevisionModel.security_id,
+                    partition_by=(
+                        BarSeriesRevisionModel.security_id,
+                        BarSeriesRevisionModel.adjust_type,
+                    ),
                     order_by=(
                         BarSeriesRevisionModel.known_at.desc(),
                         BarSeriesRevisionModel.revision_id.desc(),
@@ -480,7 +495,7 @@ class SQLAlchemyBarRepository:
             .where(
                 BarSeriesRevisionModel.security_id.in_(security_ids),
                 BarSeriesRevisionModel.period == "DAY",
-                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.adjust_type.in_(("QFQ", "HFQ")),
                 BarSeriesRevisionModel.status == "PUBLISHED",
             )
             .subquery()
@@ -489,13 +504,18 @@ class SQLAlchemyBarRepository:
             await self._session.execute(
                 select(
                     ranked.c.security_id,
+                    ranked.c.adjust_type,
                     ranked.c.raw_bar_available,
                     func.count(MarketBarModel.bar_time),
                     func.max(MarketBarModel.bar_time),
                 )
                 .join(MarketBarModel, MarketBarModel.revision_id == ranked.c.revision_id)
                 .where(ranked.c.revision_rank == 1)
-                .group_by(ranked.c.security_id, ranked.c.raw_bar_available)
+                .group_by(
+                    ranked.c.security_id,
+                    ranked.c.adjust_type,
+                    ranked.c.raw_bar_available,
+                )
             )
         ).all()
         required_dates = {
@@ -504,13 +524,298 @@ class SQLAlchemyBarRepository:
             )
             for target in targets
         }
+        valid_adjustments: dict[UUID, set[str]] = {}
+        for security_id, adjust_type, raw_available, count, last_bar_time in rows:
+            if (
+                raw_available
+                and count >= minimum_bars
+                and last_bar_time.astimezone(SHANGHAI).date()
+                >= required_dates[security_id]
+            ):
+                valid_adjustments.setdefault(security_id, set()).add(adjust_type)
         return {
             security_id
-            for security_id, raw_available, count, last_bar_time in rows
-            if raw_available
-            and count >= minimum_bars
-            and last_bar_time.astimezone(SHANGHAI).date() >= required_dates[security_id]
+            for security_id, adjustments in valid_adjustments.items()
+            if adjustments == {"QFQ", "HFQ"}
         }
+
+    async def latest_daily_revisions(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[BarSeriesRevision, ...]:
+        if not security_ids:
+            return ()
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id,
+                func.row_number().over(
+                    partition_by=BarSeriesRevisionModel.security_id,
+                    order_by=(BarSeriesRevisionModel.known_at.desc(), BarSeriesRevisionModel.revision_id.desc()),
+                ).label("revision_rank"),
+            )
+            .where(
+                BarSeriesRevisionModel.security_id.in_(security_ids),
+                BarSeriesRevisionModel.period == "DAY",
+                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.status == "PUBLISHED",
+                BarSeriesRevisionModel.known_at <= as_of,
+            )
+            .subquery()
+        )
+        revision_ids = select(ranked.c.revision_id).where(ranked.c.revision_rank == 1)
+        rows = (
+            await self._session.execute(
+                select(BarSeriesRevisionModel, MarketBarModel)
+                .join(MarketBarModel, MarketBarModel.revision_id == BarSeriesRevisionModel.revision_id)
+                .where(
+                    BarSeriesRevisionModel.revision_id.in_(revision_ids),
+                    MarketBarModel.bar_time <= as_of,
+                )
+                .order_by(BarSeriesRevisionModel.security_id, MarketBarModel.bar_time)
+            )
+        ).all()
+        grouped: dict[UUID, tuple[BarSeriesRevisionModel, list[MarketBar]]] = {}
+        for revision, bar in rows:
+            if revision.revision_id not in grouped:
+                grouped[revision.revision_id] = (revision, [])
+            grouped[revision.revision_id][1].append(MarketBar(
+                bar_time=bar.bar_time, open=float(bar.open), high=float(bar.high),
+                low=float(bar.low), close=float(bar.close), volume=bar.volume,
+                amount=None if bar.amount is None else float(bar.amount),
+                provisional=bar.provisional, fetch_time=bar.fetch_time,
+            ))
+        return tuple(
+            BarSeriesRevision.build(BarSeriesRevisionContent(
+                revision_id=model.revision_id, security_id=model.security_id,
+                period=BarPeriod(model.period), adjust_type=AdjustType(model.adjust_type),
+                source=model.source, upstream_source=model.upstream_source,
+                raw_bar_available=model.raw_bar_available,
+                factor_revision_id=model.factor_revision_id,
+                point_in_time_precision=PointInTimePrecision(model.point_in_time_precision),
+                precision_reason=model.precision_reason, known_at=model.known_at,
+                supersedes_revision_id=model.supersedes_revision_id, bars=tuple(bars),
+            ))
+            for model, bars in grouped.values()
+        )
+
+
+class SQLAlchemyFeatureRepository:
+    FIELD_COLUMNS = {
+        "code": SecurityModel.code,
+        "market": SecurityModel.market,
+        "name": SecurityModel.name,
+        "close": SecurityFeatureModel.close,
+        "return_3d": SecurityFeatureModel.return_3d,
+        "return_5d": SecurityFeatureModel.return_5d,
+        "return_10d": SecurityFeatureModel.return_10d,
+        "return_20d": SecurityFeatureModel.return_20d,
+        "return_60d": SecurityFeatureModel.return_60d,
+        "return_120d": SecurityFeatureModel.return_120d,
+        "return_250d": SecurityFeatureModel.return_250d,
+        "position_60d": SecurityFeatureModel.position_60d,
+        "position_120d": SecurityFeatureModel.position_120d,
+        "position_250d": SecurityFeatureModel.position_250d,
+        "ma5": SecurityFeatureModel.ma5,
+        "ma10": SecurityFeatureModel.ma10,
+        "ma20": SecurityFeatureModel.ma20,
+        "ma60": SecurityFeatureModel.ma60,
+        "atr_pct": SecurityFeatureModel.atr_pct,
+        "volatility20": SecurityFeatureModel.volatility20,
+        "amount": SecurityFeatureModel.amount,
+        "volume_ratio_5d": SecurityFeatureModel.volume_ratio_5d,
+        "coverage": SecurityFeatureModel.coverage,
+        "stale": SecurityFeatureModel.stale,
+        "missing_fields": SecurityFeatureModel.missing_fields,
+        "quality": SecurityFeatureModel.quality,
+        "features": SecurityFeatureModel.features,
+    }
+    DEFAULT_FIELDS = ("code", "market", "name", "close", "return_20d", "position_60d", "amount", "coverage", "stale")
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish(
+        self,
+        run: FeatureRun,
+        features: tuple[SecurityFeature, ...],
+        regime: MarketRegimeSnapshot,
+    ) -> bool:
+        if run.status.value != "PUBLISHED":
+            raise ValueError("only complete PUBLISHED feature runs can be persisted")
+        if len(features) != run.successful_count:
+            raise ValueError("feature count does not match run successful_count")
+        inserted = (
+            await self._session.execute(
+                insert(FeatureRunModel).values(**run.model_dump(mode="python"))
+                .on_conflict_do_nothing(index_elements=[FeatureRunModel.content_hash])
+                .returning(FeatureRunModel.feature_run_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return False
+        feature_models = []
+        for item in features:
+            payload = item.model_dump(mode="json")
+            payload.update({
+                "feature_run_id": item.feature_run_id,
+                "security_id": item.security_id,
+                "series_revision_id": item.series_revision_id,
+                "factor_revision_id": item.factor_revision_id,
+                "as_of": item.as_of,
+            })
+            feature_models.append(SecurityFeatureModel(**payload))
+        self._session.add_all(feature_models)
+        regime_payload = regime.model_dump(mode="python")
+        regime_payload["domestic_risk_evidence_ids"] = [
+            str(value) for value in regime.domestic_risk_evidence_ids
+        ]
+        regime_payload["global_risk_evidence_ids"] = [
+            str(value) for value in regime.global_risk_evidence_ids
+        ]
+        self._session.add(MarketRegimeSnapshotModel(**regime_payload))
+        return True
+
+    async def query(self, query: FeatureQuery) -> FeaturePage | None:
+        run_statement = select(FeatureRunModel).where(FeatureRunModel.status == "PUBLISHED")
+        if query.feature_run_id is not None:
+            run_statement = run_statement.where(FeatureRunModel.feature_run_id == query.feature_run_id)
+        run = (
+            await self._session.execute(
+                run_statement.order_by(FeatureRunModel.as_of.desc(), FeatureRunModel.created_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            return None
+        fields = query.fields or self.DEFAULT_FIELDS
+        invalid = sorted(set(fields) - self.FIELD_COLUMNS.keys())
+        if invalid:
+            raise ValueError(f"unsupported feature fields: {', '.join(invalid)}")
+        sort_column = self.FIELD_COLUMNS[query.sort_by.value]
+        filters = [SecurityFeatureModel.feature_run_id == run.feature_run_id]
+        if query.market:
+            filters.append(SecurityModel.market == query.market)
+        if query.stale is not None:
+            filters.append(SecurityFeatureModel.stale == query.stale)
+        if query.min_value is not None:
+            filters.append(sort_column >= query.min_value)
+        if query.max_value is not None:
+            filters.append(sort_column <= query.max_value)
+        count_filters = tuple(filters)
+        cursor_value, cursor_security_id = self._decode_cursor(query.cursor, query.sort_by)
+        if cursor_security_id is not None:
+            if cursor_value is None:
+                filters.append(and_(sort_column.is_(None), SecurityFeatureModel.security_id > cursor_security_id))
+            else:
+                comparison = sort_column < cursor_value if query.descending else sort_column > cursor_value
+                filters.append(or_(
+                    comparison,
+                    and_(sort_column == cursor_value, SecurityFeatureModel.security_id > cursor_security_id),
+                    sort_column.is_(None),
+                ))
+        selected = [self.FIELD_COLUMNS[field].label(field) for field in fields]
+        statement = (
+            select(SecurityFeatureModel.security_id, *selected, sort_column.label("_sort_value"))
+            .join(SecurityModel, SecurityModel.security_id == SecurityFeatureModel.security_id)
+            .where(*filters)
+        )
+        ordering = sort_column.desc().nullslast() if query.descending else sort_column.asc().nullslast()
+        rows = (await self._session.execute(
+            statement.order_by(ordering, SecurityFeatureModel.security_id.asc()).limit(query.limit + 1)
+        )).mappings().all()
+        count = await self._session.scalar(
+            select(func.count()).select_from(SecurityFeatureModel)
+            .join(SecurityModel, SecurityModel.security_id == SecurityFeatureModel.security_id)
+            .where(*count_filters)
+        )
+        has_more = len(rows) > query.limit
+        rows = rows[:query.limit]
+        items = tuple({key: self._json_scalar(value) for key, value in row.items() if key not in {"security_id", "_sort_value"}} for row in rows)
+        next_cursor = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = self._encode_cursor(query.sort_by, last["_sort_value"], last["security_id"])
+        return FeaturePage(
+            feature_run_id=run.feature_run_id, as_of=run.as_of,
+            feature_version=run.feature_version, total_count=int(count or 0), items=items,
+            next_cursor=next_cursor,
+            quality_summary={"coverage": float(run.coverage), "successful_count": run.successful_count, "failed_count": run.failed_count, "errors": run.error_summary},
+        )
+
+    async def latest_regime(self) -> MarketRegimeSnapshot | None:
+        model = (
+            await self._session.execute(
+                select(MarketRegimeSnapshotModel)
+                .join(FeatureRunModel, FeatureRunModel.feature_run_id == MarketRegimeSnapshotModel.feature_run_id)
+                .where(FeatureRunModel.status == "PUBLISHED")
+                .order_by(
+                    MarketRegimeSnapshotModel.as_of.desc(),
+                    MarketRegimeSnapshotModel.created_at.desc(),
+                    MarketRegimeSnapshotModel.regime_snapshot_id.desc(),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if model is None:
+            return None
+        return MarketRegimeSnapshot(
+            regime_snapshot_id=model.regime_snapshot_id, feature_run_id=model.feature_run_id,
+            as_of=model.as_of, known_at=model.known_at, index_states=model.index_states,
+            breadth=model.breadth, turnover=model.turnover, limit_structure=model.limit_structure,
+            size_style=model.size_style, growth_value_style=model.growth_value_style,
+            industry_rotation=model.industry_rotation, risk_appetite_facts=model.risk_appetite_facts,
+            domestic_risk_evidence_ids=tuple(model.domestic_risk_evidence_ids),
+            global_risk_evidence_ids=tuple(model.global_risk_evidence_ids),
+            coverage=float(model.coverage), confidence=float(model.confidence), stale=model.stale,
+            content_hash=model.content_hash,
+        )
+
+    async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None:
+        model = (
+            await self._session.execute(
+                select(FeatureRunModel).where(FeatureRunModel.content_hash == content_hash)
+            )
+        ).scalar_one_or_none()
+        if model is None:
+            return None
+        return FeatureRun(
+            feature_run_id=model.feature_run_id, as_of=model.as_of,
+            universe_snapshot_id=model.universe_snapshot_id,
+            feature_version=model.feature_version, status=FeatureRunStatus(model.status),
+            expected_count=model.expected_count, successful_count=model.successful_count,
+            failed_count=model.failed_count, coverage=float(model.coverage),
+            bar_revision_set_hash=model.bar_revision_set_hash,
+            input_manifest=model.input_manifest, error_summary=model.error_summary,
+            started_at=model.started_at, completed_at=model.completed_at,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _json_scalar(value):
+        from decimal import Decimal
+        return float(value) if isinstance(value, Decimal) else value
+
+    @staticmethod
+    def _encode_cursor(sort_by: FeatureSortField, value, security_id: UUID) -> str:
+        import base64
+        payload = canonical_json({
+            "sort_by": sort_by.value,
+            "value": SQLAlchemyFeatureRepository._json_scalar(value),
+            "security_id": security_id,
+        })
+        return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str | None, sort_by: FeatureSortField):
+        import base64
+        import json
+        if cursor is None:
+            return None, None
+        try:
+            raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            payload = json.loads(raw)
+            if payload.get("sort_by") != sort_by.value:
+                raise ValueError("cursor sort field does not match query")
+            return payload.get("value"), UUID(payload["security_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid feature query cursor") from exc
 
 
 class SQLAlchemyCorporateActionRepository:
