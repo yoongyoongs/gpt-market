@@ -10,6 +10,7 @@ from app.v3.domain.audit import AuditEvent
 from app.v3.domain.context import (
     CandidateComparisonPack,
     CandidateComparisonSource,
+    ContextBuildSource,
     ContextPack,
 )
 from app.v3.domain.evidence import (
@@ -252,6 +253,16 @@ class ContextPackRepository(Protocol):
     async def get(self, context_pack_id: UUID) -> ContextPack | None: ...
 
     async def get_by_content_hash(self, content_hash: str) -> ContextPack | None: ...
+
+    async def load_source(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        as_of: datetime,
+        feature_run_id: UUID | None = None,
+        recall_run_id: UUID | None = None,
+    ) -> ContextBuildSource | None: ...
 
 
 class TaskRegistryRepository(Protocol):

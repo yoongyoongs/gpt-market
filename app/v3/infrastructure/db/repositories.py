@@ -18,6 +18,11 @@ from app.v3.domain.context import (
     CandidateComparisonRecallHit,
     CandidateComparisonSource,
     CandidateComparisonSourceMember,
+    ContextBuildSource,
+    ContextEvidenceSelection,
+    ContextLevel,
+    ContextPack,
+    ContextSubjectType,
 )
 from app.v3.domain.evidence import (
     DecayModel,
@@ -89,6 +94,8 @@ from app.v3.infrastructure.db.models import (
     BarSeriesRevisionModel,
     CandidateComparisonMemberModel,
     CandidateComparisonPackModel,
+    ContextEvidenceSelectionModel,
+    ContextPackModel,
     CorporateActionModel,
     EvidenceConflictMemberModel,
     EvidenceConflictModel,
@@ -111,6 +118,7 @@ from app.v3.infrastructure.db.models import (
     RecallRunModel,
     SecurityFeatureModel,
     SecurityModel,
+    TaskProfileModel,
     UniverseDiffModel,
     UniverseMemberModel,
     UniverseSnapshotModel,
@@ -2422,6 +2430,326 @@ class SQLAlchemyCandidateComparisonRepository:
             missing_summary=model.missing_summary,
             trim_summary=model.trim_summary,
             members=members,
+            content_hash=model.content_hash,
+        )
+
+
+class SQLAlchemyContextPackRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish(self, pack: ContextPack) -> bool:
+        existing = await self.get_by_content_hash(pack.content_hash)
+        if existing is not None:
+            return False
+        await self._validate_references(pack)
+        inserted = (
+            await self._session.execute(
+                insert(ContextPackModel)
+                .values(
+                    context_pack_id=pack.context_pack_id,
+                    context_level=pack.context_level.value,
+                    subject_type=pack.subject_type.value,
+                    subject_id=pack.subject_id,
+                    task_profile_id=pack.task_profile_id,
+                    task_profile_version=pack.task_profile_version,
+                    builder_version=pack.builder_version,
+                    schema_version=pack.schema_version,
+                    as_of=pack.as_of,
+                    known_at=pack.known_at,
+                    universe_snapshot_id=pack.universe_snapshot_id,
+                    feature_run_id=pack.feature_run_id,
+                    recall_run_id=pack.recall_run_id,
+                    regime_snapshot_id=pack.regime_snapshot_id,
+                    comparison_pack_id=pack.comparison_pack_id,
+                    token_budget=pack.token_budget,
+                    actual_tokens=pack.actual_tokens,
+                    coverage=pack.coverage,
+                    missing_fields=list(pack.missing_fields),
+                    trim_summary=pack.trim_summary,
+                    payload=pack.payload,
+                    references=list(pack.references),
+                    content_hash=pack.content_hash,
+                )
+                .on_conflict_do_nothing()
+                .returning(ContextPackModel.context_pack_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            replay = await self.get_by_content_hash(pack.content_hash)
+            if replay is not None:
+                return False
+            raise RepositoryConflictError(
+                "context_pack_id already refers to different immutable content"
+            )
+        self._session.add_all(
+            ContextEvidenceSelectionModel(
+                context_pack_id=pack.context_pack_id,
+                evidence_id=item.evidence_id,
+                evidence_known_at=item.evidence_known_at,
+                selection_reason=item.selection_reason,
+                side=item.side.value,
+                retrieval_score=item.retrieval_score,
+                relevance=item.relevance,
+                source_priority=item.source_priority,
+                final_order=item.final_order,
+            )
+            for item in pack.evidence_selections
+        )
+        return True
+
+    async def get(self, context_pack_id: UUID) -> ContextPack | None:
+        model = await self._session.get(ContextPackModel, context_pack_id)
+        return None if model is None else await self._pack(model)
+
+    async def get_by_content_hash(self, content_hash: str) -> ContextPack | None:
+        model = await self._session.scalar(
+            select(ContextPackModel).where(ContextPackModel.content_hash == content_hash)
+        )
+        return None if model is None else await self._pack(model)
+
+    async def load_source(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        as_of: datetime,
+        feature_run_id: UUID | None = None,
+        recall_run_id: UUID | None = None,
+    ) -> ContextBuildSource | None:
+        filters = (
+            FeatureRunModel.status == FeatureRunStatus.PUBLISHED.value,
+            FeatureRunModel.as_of <= as_of,
+            FeatureRunModel.completed_at.is_not(None),
+            FeatureRunModel.completed_at <= as_of,
+        )
+        if feature_run_id is None:
+            run = await self._session.scalar(
+                select(FeatureRunModel)
+                .where(*filters)
+                .order_by(
+                    FeatureRunModel.as_of.desc(),
+                    FeatureRunModel.completed_at.desc(),
+                    FeatureRunModel.feature_run_id.desc(),
+                )
+                .limit(1)
+            )
+        else:
+            run = await self._session.scalar(
+                select(FeatureRunModel).where(
+                    FeatureRunModel.feature_run_id == feature_run_id, *filters
+                )
+            )
+        if run is None:
+            return None
+        regime_model = await self._session.scalar(
+            select(MarketRegimeSnapshotModel).where(
+                MarketRegimeSnapshotModel.feature_run_id == run.feature_run_id,
+                MarketRegimeSnapshotModel.known_at <= as_of,
+            )
+        )
+        recall_filters = (
+            RecallRunModel.feature_run_id == run.feature_run_id,
+            RecallRunModel.status == RecallRunStatus.PUBLISHED.value,
+            RecallRunModel.known_at <= as_of,
+        )
+        if recall_run_id is None:
+            recall = await self._session.scalar(
+                select(RecallRunModel)
+                .where(*recall_filters)
+                .order_by(RecallRunModel.known_at.desc(), RecallRunModel.recall_run_id.desc())
+                .limit(1)
+            )
+        else:
+            recall = await self._session.scalar(
+                select(RecallRunModel).where(
+                    RecallRunModel.recall_run_id == recall_run_id, *recall_filters
+                )
+            )
+            if recall is None:
+                raise RepositoryNotFoundError(
+                    "published recall run is unavailable for context as_of"
+                )
+        common = {
+            "feature_run": SQLAlchemyFeatureRepository._run(run),
+            "regime": None if regime_model is None else self._regime(regime_model),
+            "recall_run_id": None if recall is None else recall.recall_run_id,
+        }
+        if subject_type == ContextSubjectType.MARKET.value:
+            return ContextBuildSource(**common)
+        if subject_type != ContextSubjectType.SECURITY.value:
+            raise ValueError("unsupported context subject_type")
+        market, code = SQLAlchemyCandidateComparisonRepository._parse_candidate_code(
+            subject_id
+        )
+        rows = (
+            await self._session.execute(
+                select(SecurityModel, SecurityFeatureModel)
+                .join(
+                    SecurityFeatureModel,
+                    SecurityFeatureModel.security_id == SecurityModel.security_id,
+                )
+                .where(
+                    SecurityFeatureModel.feature_run_id == run.feature_run_id,
+                    SecurityModel.code == code,
+                    *(()) if market is None else (SecurityModel.market == market,),
+                )
+            )
+        ).all()
+        if not rows:
+            raise RepositoryNotFoundError("security feature is unavailable for context")
+        if len(rows) != 1:
+            raise ValueError("security code is ambiguous; use MARKET:CODE")
+        security, feature = rows[0]
+        return ContextBuildSource(
+            **common,
+            market=security.market,
+            code=security.code,
+            name=security.name,
+            feature=SQLAlchemyCandidateComparisonRepository._comparison_feature(feature),
+        )
+
+    async def _validate_references(self, pack: ContextPack) -> None:
+        profile = await self._session.get(TaskProfileModel, pack.task_profile_id)
+        if profile is None or profile.version != pack.task_profile_version:
+            raise RepositoryNotFoundError("task profile version does not exist")
+        if profile.context_level != pack.context_level.value:
+            raise ValueError("context level does not match task profile")
+        feature = await self._session.get(FeatureRunModel, pack.feature_run_id)
+        if (
+            feature is None
+            or feature.status != FeatureRunStatus.PUBLISHED.value
+            or feature.universe_snapshot_id != pack.universe_snapshot_id
+            or feature.completed_at is None
+            or feature.completed_at > pack.as_of
+        ):
+            raise RepositoryNotFoundError("published feature run is unavailable for context")
+        universe = await self._session.get(UniverseSnapshotModel, pack.universe_snapshot_id)
+        if universe is None or universe.known_at > pack.as_of:
+            raise RepositoryNotFoundError("universe snapshot is unavailable for context")
+        if pack.recall_run_id is not None:
+            recall = await self._session.get(RecallRunModel, pack.recall_run_id)
+            if (
+                recall is None
+                or recall.status != RecallRunStatus.PUBLISHED.value
+                or recall.feature_run_id != pack.feature_run_id
+                or recall.known_at > pack.as_of
+            ):
+                raise RepositoryNotFoundError("recall run is unavailable for context")
+        if pack.regime_snapshot_id is not None:
+            regime = await self._session.get(
+                MarketRegimeSnapshotModel, pack.regime_snapshot_id
+            )
+            if (
+                regime is None
+                or regime.feature_run_id != pack.feature_run_id
+                or regime.known_at > pack.as_of
+            ):
+                raise RepositoryNotFoundError("market regime is unavailable for context")
+        if pack.comparison_pack_id is not None:
+            comparison = await self._session.get(
+                CandidateComparisonPackModel, pack.comparison_pack_id
+            )
+            if (
+                comparison is None
+                or comparison.feature_run_id != pack.feature_run_id
+                or comparison.universe_snapshot_id != pack.universe_snapshot_id
+                or comparison.known_at > pack.as_of
+            ):
+                raise RepositoryNotFoundError("comparison pack is unavailable for context")
+        if pack.evidence_selections:
+            ids = tuple(item.evidence_id for item in pack.evidence_selections)
+            records = {
+                model.evidence_id: model
+                for model in (
+                    await self._session.execute(
+                        select(EvidenceRecordModel).where(
+                            EvidenceRecordModel.evidence_id.in_(ids)
+                        )
+                    )
+                ).scalars()
+            }
+            for item in pack.evidence_selections:
+                record = records.get(item.evidence_id)
+                if (
+                    record is None
+                    or record.known_at != item.evidence_known_at
+                    or record.known_at > pack.as_of
+                ):
+                    raise RepositoryNotFoundError(
+                        "selected evidence is unavailable for context"
+                    )
+
+    async def _pack(self, model: ContextPackModel) -> ContextPack:
+        rows = (
+            await self._session.execute(
+                select(ContextEvidenceSelectionModel)
+                .where(
+                    ContextEvidenceSelectionModel.context_pack_id
+                    == model.context_pack_id
+                )
+                .order_by(ContextEvidenceSelectionModel.final_order)
+            )
+        ).scalars().all()
+        return ContextPack(
+            context_pack_id=model.context_pack_id,
+            context_level=ContextLevel(model.context_level),
+            subject_type=ContextSubjectType(model.subject_type),
+            subject_id=model.subject_id,
+            task_profile_id=model.task_profile_id,
+            task_profile_version=model.task_profile_version,
+            builder_version=model.builder_version,
+            schema_version=model.schema_version,
+            as_of=model.as_of,
+            known_at=model.known_at,
+            universe_snapshot_id=model.universe_snapshot_id,
+            feature_run_id=model.feature_run_id,
+            recall_run_id=model.recall_run_id,
+            regime_snapshot_id=model.regime_snapshot_id,
+            comparison_pack_id=model.comparison_pack_id,
+            token_budget=model.token_budget,
+            actual_tokens=model.actual_tokens,
+            coverage=float(model.coverage),
+            missing_fields=tuple(model.missing_fields),
+            trim_summary=model.trim_summary,
+            payload=model.payload,
+            references=tuple(model.references),
+            evidence_selections=tuple(
+                ContextEvidenceSelection(
+                    evidence_id=item.evidence_id,
+                    evidence_known_at=item.evidence_known_at,
+                    selection_reason=item.selection_reason,
+                    side=item.side,
+                    retrieval_score=float(item.retrieval_score),
+                    relevance=float(item.relevance),
+                    source_priority=item.source_priority,
+                    final_order=item.final_order,
+                )
+                for item in rows
+            ),
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _regime(model: MarketRegimeSnapshotModel) -> MarketRegimeSnapshot:
+        return MarketRegimeSnapshot(
+            regime_snapshot_id=model.regime_snapshot_id,
+            feature_run_id=model.feature_run_id,
+            as_of=model.as_of,
+            known_at=model.known_at,
+            index_states=model.index_states,
+            breadth=model.breadth,
+            turnover=model.turnover,
+            limit_structure=model.limit_structure,
+            size_style=model.size_style,
+            growth_value_style=model.growth_value_style,
+            industry_rotation=model.industry_rotation,
+            risk_appetite_facts=model.risk_appetite_facts,
+            domestic_risk_evidence_ids=tuple(model.domestic_risk_evidence_ids),
+            global_risk_evidence_ids=tuple(model.global_risk_evidence_ids),
+            coverage=float(model.coverage),
+            confidence=float(model.confidence),
+            stale=model.stale,
             content_hash=model.content_hash,
         )
 

@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01、P6-02、P6-03 已完成；按用户授权继续 P6-04
+> 当前状态：P6-01～P6-04 已完成；按用户授权继续 Phase 6 后续 Task
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -23,7 +23,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | P6-01 | 冻结 Context、Candidate Comparison、Task Domain/Repository 契约和 0006 设计 | DONE | `044da58`；状态提交 `1585be0` |
 | P6-02 | 完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化 | DONE | `e669cac` 检查点；PostgreSQL 17.11 完整回归 `212 passed, 5 skipped` |
 | P6-03 | Comparison Builder 与 N→TopK READ | DONE | `GET /api/v3/candidates/comparison-pack`；本地全量回归 `195 passed, 25 skipped` |
-| P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | TODO | 依赖 P6-01/P6-02 |
+| P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | DONE | 三级预算、Evidence Selection、不可变 Repository；本地全量 `198 passed, 25 skipped` |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | TODO | 不实现 AI Import |
 | P6-06 | ChatGPT READ JSON 接线与契约测试 | TODO | 依赖 P6-03–P6-05 |
 | P6-07 | 全市场性能验收与 Architecture Gate | TODO | Phase 6 最终验收 |
@@ -120,6 +120,17 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - `GET /api/v3/candidates/comparison-pack` 支持按候选代码构建，也支持按 `candidate_set_id` 读取已发布 Pack；返回 Pack Hash 和全部版本/时点引用；
 - 专项回归：`13 passed, 2 skipped, 2 warnings`；全量本地回归：`195 passed, 25 skipped, 2 warnings`。Skip 均为未配置本地 PostgreSQL/联网条件的既有可选测试，两项 Warning 为既有警告；本 Task 按用户要求不连接服务器。
 
-## 8. 下一步
+## 8. P6-04 实现与验证
 
-用户已授权 P6-03 独立提交后继续 P6-04。下一 Task 为 FAST/NORMAL/DEEP Context Pack 与 Evidence Selection；不得进入 P6-05。
+- 新增 FAST/NORMAL/DEEP 三级 Context Builder，预算分别为 3,000、6,500、12,000 Token，均位于冻结范围内；
+- Security/Market Context 绑定同一时点可用的 Universe、Feature、Recall、Regime 和可选 Candidate Comparison；
+- Evidence Retrieval 一次最多读取 200 条候选，按时点相关性、来源优先级、置信度、冲突和反方立场排序；保存候选 Evidence IDs、检索配置和最终 Selection 解释；
+- FAST/NORMAL/DEEP 最多选择 8/20/40 条 Evidence；保存 Side、Reason、Retrieval Score、Relevance、Source Priority 和连续顺序；
+- Raw Payload 不进入 Context；Normalized Payload 位于明确 `UNTRUSTED_DATA` 边界并限制字符串/集合尺寸；
+- Portfolio 等 Phase 8 尚不可用事实明确标记 `UNKNOWN`，不伪造；真实持仓/交易/Stop/Cancel 的不可裁剪规则留待相应事实模块接入后执行；
+- `SQLAlchemyContextPackRepository` 支持原子发布、ID/Hash 读取、有序 Selection 重建、时点和引用一致性验证；Unit of Work 已接线；
+- 专项回归 `14 passed`；全量本地回归 `198 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收按用户安排留待晚间执行。
+
+## 9. 下一步
+
+按用户授权继续 P6-05 Task Profile、Expected Run 与 Task Run Registry；保持独立提交。

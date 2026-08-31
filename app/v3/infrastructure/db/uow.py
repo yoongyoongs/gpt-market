@@ -9,6 +9,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyAuditRepository,
     SQLAlchemyBarRepository,
     SQLAlchemyCandidateComparisonRepository,
+    SQLAlchemyContextPackRepository,
     SQLAlchemyCorporateActionRepository,
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyFeatureRepository,
@@ -39,6 +40,7 @@ class SQLAlchemyUnitOfWork:
         self.candidate_comparisons = SQLAlchemyCandidateComparisonRepository(
             self._session
         )
+        self.context_packs = SQLAlchemyContextPackRepository(self._session)
         return self
 
     async def __aexit__(

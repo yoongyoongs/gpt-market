@@ -9,13 +9,14 @@ from pydantic import Field, field_validator, model_validator
 
 from app.v3.contracts.base import V3Contract, require_aware
 from app.v3.domain.hashing import canonical_hash
-from app.v3.domain.features import FeatureRun, SecurityFeature
+from app.v3.domain.features import FeatureRun, MarketRegimeSnapshot, SecurityFeature
 
 
 CANDIDATE_COMPARISON_SCHEMA_VERSION = "candidate-comparison.v1"
 CANDIDATE_COMPARISON_BUILDER_VERSION = "candidate-comparison-builder.v1"
 CANDIDATE_COMPARISON_FIELD_PROFILE_VERSION = "compact-fields.v1"
 CONTEXT_PACK_SCHEMA_VERSION = "context-pack.v1"
+CONTEXT_PACK_BUILDER_VERSION = "context-pack-builder.v1"
 
 
 class CandidateComparisonRecallHit(V3Contract):
@@ -42,6 +43,16 @@ class CandidateComparisonSource(V3Contract):
     members: tuple[CandidateComparisonSourceMember, ...] = Field(
         min_length=20, max_length=100
     )
+
+
+class ContextBuildSource(V3Contract):
+    feature_run: FeatureRun
+    regime: MarketRegimeSnapshot | None = None
+    recall_run_id: UUID | None = None
+    market: str | None = Field(default=None, pattern=r"^(SH|SZ|BJ)$")
+    code: str | None = Field(default=None, max_length=16)
+    name: str | None = Field(default=None, max_length=128)
+    feature: SecurityFeature | None = None
 
 
 class ContextLevel(StrEnum):
