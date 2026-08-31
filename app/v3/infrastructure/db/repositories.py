@@ -6,76 +6,106 @@ from uuid import UUID
 from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.market_data import (
-    AdjustmentFactorRevision,
-    AdjustType,
-    BarIngestionTarget,
-    BarPeriod,
-    BarSeriesRevision,
-    CorporateAction,
-    IngestionRunStatus,
-    Market,
-    MarketDataIngestionRun,
-    SecurityMember,
-    UniverseSnapshot,
-    MarketBar,
-    BarSeriesRevisionContent,
-    PointInTimePrecision,
-)
-from app.v3.domain.features import (
-    FeaturePage, FeatureQuery, FeatureRun, FeatureRunStatus, FeatureSortField,
-    MarketRegimeSnapshot, SecurityFeature,
-)
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
-    EvidenceConflict,
     EvidenceAvailability,
+    EvidenceConflict,
     EvidenceFetchRun,
     EvidenceMatchType,
     EvidenceReadQuery,
+    EvidenceRelation,
     EvidenceRepositoryPage,
     EvidenceRepositoryView,
-    EvidenceRelation,
     EvidenceSource,
     EvidenceSourceType,
     FetchRunStatus,
     NormalizedEvidence,
     ParseAttempt,
     RawDocument,
+    SecurityEvidenceView,
+)
+from app.v3.domain.features import (
+    FeaturePage,
+    FeatureQuery,
+    FeatureRun,
+    FeatureRunStatus,
+    FeatureSortField,
+    MarketRegimeSnapshot,
+    SecurityFeature,
 )
 from app.v3.domain.hashing import canonical_hash, canonical_json
+from app.v3.domain.market_data import (
+    AdjustmentFactorRevision,
+    AdjustType,
+    BarIngestionTarget,
+    BarPeriod,
+    BarSeriesRevision,
+    BarSeriesRevisionContent,
+    CorporateAction,
+    IngestionRunStatus,
+    Market,
+    MarketBar,
+    MarketDataIngestionRun,
+    PointInTimePrecision,
+    SecurityMember,
+    UniverseSnapshot,
+)
+from app.v3.domain.recall import (
+    ObservationStatus,
+    PerformanceObservation,
+    RawOpportunity,
+    RawOpportunityReadItem,
+    RawOpportunityReadPage,
+    RecallChannel,
+    RecallFeatureView,
+    RecallMissEvaluation,
+    RecallMissReadItem,
+    RecallMissReadPage,
+    RecallReadItem,
+    RecallReadPage,
+    RecallResult,
+    RecallRun,
+    RecallRunStatus,
+)
 from app.v3.infrastructure.db.models import (
-    AgentTaskModel,
     AdjustmentFactorModel,
     AdjustmentFactorRevisionModel,
+    AgentTaskModel,
     AuditEventModel,
     BarSeriesRevisionModel,
     CorporateActionModel,
+    EvidenceConflictMemberModel,
+    EvidenceConflictModel,
+    EvidenceEntityLinkModel,
+    EvidenceFetchRunModel,
+    EvidenceRecordModel,
+    EvidenceRelationModel,
+    EvidenceSourceModel,
+    FeatureRunModel,
     MarketBarModel,
     MarketDataIngestionRunModel,
+    MarketRegimeSnapshotModel,
+    PerformanceObservationModel,
+    RawDocumentModel,
+    RawDocumentParseAttemptModel,
+    RawOpportunityModel,
+    RecallChannelModel,
+    RecallMissEvaluationModel,
+    RecallResultModel,
+    RecallRunModel,
+    SecurityFeatureModel,
     SecurityModel,
     UniverseDiffModel,
     UniverseMemberModel,
     UniverseSnapshotModel,
     UniverseSourceModel,
-    FeatureRunModel,
-    SecurityFeatureModel,
-    MarketRegimeSnapshotModel,
-    EvidenceSourceModel,
-    RawDocumentModel,
-    EvidenceRecordModel,
-    RawDocumentParseAttemptModel,
-    EvidenceEntityLinkModel,
-    EvidenceFetchRunModel,
-    EvidenceRelationModel,
-    EvidenceConflictModel,
-    EvidenceConflictMemberModel,
 )
 
 
@@ -548,6 +578,72 @@ class SQLAlchemyEvidenceRepository:
         return EvidenceRepositoryPage(
             views=tuple(result),
             coverage_counts={EvidenceType(kind): count for kind, count in coverage_rows},
+        )
+
+    async def for_securities(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[SecurityEvidenceView, ...]:
+        if not security_ids:
+            return ()
+        securities = (
+            await self._session.execute(
+                select(SecurityModel.security_id, SecurityModel.market, SecurityModel.code)
+                .where(SecurityModel.security_id.in_(security_ids))
+            )
+        ).all()
+        subject_to_security = {
+            f"{market}:{code}": security_id for security_id, market, code in securities
+        }
+        subjects = tuple(subject_to_security)
+        if not subjects:
+            return ()
+        base_filters = (
+            EvidenceRecordModel.known_at <= as_of,
+            EvidenceRecordModel.availability == EvidenceAvailability.AVAILABLE.value,
+            or_(EvidenceRecordModel.expire_at.is_(None), EvidenceRecordModel.expire_at >= as_of),
+        )
+        direct = (
+            await self._session.execute(
+                select(EvidenceRecordModel)
+                .where(
+                    EvidenceRecordModel.subject_type == "SECURITY",
+                    EvidenceRecordModel.subject_id.in_(subjects),
+                    *base_filters,
+                )
+            )
+        ).scalars().all()
+        linked = (
+            await self._session.execute(
+                select(EvidenceEntityLinkModel.entity_id, EvidenceRecordModel)
+                .join(
+                    EvidenceRecordModel,
+                    EvidenceRecordModel.evidence_id == EvidenceEntityLinkModel.evidence_id,
+                )
+                .where(
+                    EvidenceEntityLinkModel.entity_type == "SECURITY",
+                    EvidenceEntityLinkModel.entity_id.in_(subjects),
+                    EvidenceEntityLinkModel.status == "CONFIRMED",
+                    *base_filters,
+                )
+            )
+        ).all()
+        found = {}
+        for model in direct:
+            security_id = subject_to_security[model.subject_id]
+            found[(security_id, model.evidence_id)] = self._record(model)
+        for subject_id, model in linked:
+            security_id = subject_to_security[subject_id]
+            found[(security_id, model.evidence_id)] = self._record(model)
+        return tuple(
+            SecurityEvidenceView(
+                security_id=security_id,
+                record=record,
+                effective_relevance=record.effective_relevance(as_of),
+            )
+            for (security_id, _), record in sorted(
+                found.items(), key=lambda item: (str(item[0][0]), item[1].known_at, str(item[0][1]))
+            )
+            if record.effective_relevance(as_of) > 0
         )
 
     @staticmethod
@@ -1327,8 +1423,46 @@ class SQLAlchemyFeatureRepository:
                 select(FeatureRunModel).where(FeatureRunModel.content_hash == content_hash)
             )
         ).scalar_one_or_none()
-        if model is None:
-            return None
+        return None if model is None else self._run(model)
+
+    async def get_run(self, feature_run_id: UUID) -> FeatureRun | None:
+        model = (
+            await self._session.execute(
+                select(FeatureRunModel).where(
+                    FeatureRunModel.feature_run_id == feature_run_id,
+                    FeatureRunModel.status == FeatureRunStatus.PUBLISHED.value,
+                )
+            )
+        ).scalar_one_or_none()
+        return None if model is None else self._run(model)
+
+    async def latest_run(self) -> FeatureRun | None:
+        model = (
+            await self._session.execute(
+                select(FeatureRunModel)
+                .where(FeatureRunModel.status == FeatureRunStatus.PUBLISHED.value)
+                .order_by(
+                    FeatureRunModel.as_of.desc(),
+                    FeatureRunModel.created_at.desc(),
+                    FeatureRunModel.feature_run_id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return None if model is None else self._run(model)
+
+    async def features_for_run(self, feature_run_id: UUID) -> tuple[RecallFeatureView, ...]:
+        models = (
+            await self._session.execute(
+                select(SecurityFeatureModel)
+                .where(SecurityFeatureModel.feature_run_id == feature_run_id)
+                .order_by(SecurityFeatureModel.security_id)
+            )
+        ).scalars().all()
+        return tuple(self._feature(model) for model in models)
+
+    @staticmethod
+    def _run(model: FeatureRunModel) -> FeatureRun:
         return FeatureRun(
             feature_run_id=model.feature_run_id, as_of=model.as_of,
             universe_snapshot_id=model.universe_snapshot_id,
@@ -1339,6 +1473,33 @@ class SQLAlchemyFeatureRepository:
             input_manifest=model.input_manifest, error_summary=model.error_summary,
             started_at=model.started_at, completed_at=model.completed_at,
             content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _feature(model: SecurityFeatureModel) -> RecallFeatureView:
+        def number(value):
+            return None if value is None else float(value)
+
+        return RecallFeatureView(
+            feature_run_id=model.feature_run_id,
+            security_id=model.security_id,
+            as_of=model.as_of,
+            close=float(model.close),
+            return_3d=number(model.return_3d),
+            return_5d=number(model.return_5d),
+            return_20d=number(model.return_20d),
+            position_60d=number(model.position_60d),
+            ma20_slope=number(model.ma20_slope),
+            breakout_20d=model.breakout_20d,
+            pullback_20d=model.pullback_20d,
+            volume_ratio_5d=number(model.volume_ratio_5d),
+            volume_expansion=model.volume_expansion,
+            relative_index_strength=number(model.relative_index_strength),
+            relative_industry_strength=number(model.relative_industry_strength),
+            coverage=float(model.coverage),
+            stale=model.stale,
+            features=model.features,
+            source_content_hash=model.content_hash,
         )
 
     @staticmethod
@@ -1370,6 +1531,465 @@ class SQLAlchemyFeatureRepository:
             return payload.get("value"), UUID(payload["security_id"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("invalid feature query cursor") from exc
+
+
+class SQLAlchemyRecallRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def resolve_channels(
+        self, channels: tuple[RecallChannel, ...]
+    ) -> dict[str, UUID]:
+        result = {}
+        for channel in channels:
+            channel_id = (
+                await self._session.execute(
+                    insert(RecallChannelModel)
+                    .values(**channel.model_dump(mode="python"))
+                    .on_conflict_do_nothing(index_elements=[RecallChannelModel.content_hash])
+                    .returning(RecallChannelModel.channel_id)
+                )
+            ).scalar_one_or_none()
+            if channel_id is None:
+                channel_id = await self._session.scalar(
+                    select(RecallChannelModel.channel_id).where(
+                        RecallChannelModel.content_hash == channel.content_hash
+                    )
+                )
+            if channel_id is None:
+                raise RuntimeError("recall channel conflict did not resolve")
+            result[channel.content_hash] = channel_id
+        return result
+
+    async def publish(
+        self,
+        run: RecallRun,
+        results: tuple[RecallResult, ...],
+        raw_opportunities: tuple[RawOpportunity, ...],
+        observations: tuple[PerformanceObservation, ...],
+    ) -> bool:
+        inserted = (
+            await self._session.execute(
+                insert(RecallRunModel)
+                .values(**run.model_dump(mode="python"))
+                .on_conflict_do_nothing(index_elements=[RecallRunModel.content_hash])
+                .returning(RecallRunModel.recall_run_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            return False
+        self._session.add_all(RecallResultModel(
+            **item.model_dump(mode="python", exclude={"reasons"}),
+            reasons=list(item.reasons),
+        ) for item in results)
+        self._session.add_all(RawOpportunityModel(
+            **item.model_dump(
+                mode="python",
+                exclude={"recall_result_ids", "channel_codes", "reason_summary"},
+            ),
+            recall_result_ids=[str(value) for value in item.recall_result_ids],
+            channel_codes=list(item.channel_codes),
+            reason_summary={key: list(value) for key, value in item.reason_summary.items()},
+        ) for item in raw_opportunities)
+        self._session.add_all(PerformanceObservationModel(
+            **item.model_dump(mode="python")
+        ) for item in observations)
+        return True
+
+    async def get_run_by_content_hash(self, content_hash: str) -> RecallRun | None:
+        model = await self._session.scalar(
+            select(RecallRunModel).where(RecallRunModel.content_hash == content_hash)
+        )
+        if model is None:
+            return None
+        return self._run(model)
+
+    async def read_results(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        channel_code: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallReadPage | None:
+        run_model = await self._read_run(recall_run_id)
+        if run_model is None:
+            return None
+        filters = [RecallResultModel.recall_run_id == run_model.recall_run_id]
+        if channel_code:
+            filters.append(RecallChannelModel.code == channel_code)
+        cursor_values = self._decode_read_cursor(cursor, "recall")
+        if cursor_values:
+            last_channel, last_rank, last_id = cursor_values
+            filters.append(or_(
+                RecallChannelModel.code > last_channel,
+                and_(
+                    RecallChannelModel.code == last_channel,
+                    RecallResultModel.channel_rank > int(last_rank),
+                ),
+                and_(
+                    RecallChannelModel.code == last_channel,
+                    RecallResultModel.channel_rank == int(last_rank),
+                    RecallResultModel.recall_result_id > UUID(last_id),
+                ),
+            ))
+        rows = (
+            await self._session.execute(
+                select(RecallResultModel, RecallChannelModel, SecurityModel)
+                .join(RecallChannelModel, RecallChannelModel.channel_id == RecallResultModel.channel_id)
+                .join(SecurityModel, SecurityModel.security_id == RecallResultModel.security_id)
+                .where(*filters)
+                .order_by(
+                    RecallChannelModel.code,
+                    RecallResultModel.channel_rank,
+                    RecallResultModel.recall_result_id,
+                )
+                .limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = tuple(RecallReadItem(
+            recall_result_id=result.recall_result_id,
+            security_id=result.security_id,
+            market=security.market,
+            code=security.code,
+            name=security.name,
+            channel_code=channel.code,
+            channel_version=channel.version,
+            channel_rank=result.channel_rank,
+            strength=float(result.strength),
+            reasons=tuple(result.reasons),
+            matched_features=result.matched_features,
+            coverage=float(result.coverage),
+        ) for result, channel, security in rows)
+        next_cursor = None
+        if has_more and rows:
+            result, channel, _ = rows[-1]
+            next_cursor = self._encode_read_cursor(
+                "recall", (channel.code, result.channel_rank, str(result.recall_result_id))
+            )
+        return RecallReadPage(run=self._run(run_model), items=items, next_cursor=next_cursor)
+
+    async def read_raw(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RawOpportunityReadPage | None:
+        run_model = await self._read_run(recall_run_id)
+        if run_model is None:
+            return None
+        filters = [RawOpportunityModel.recall_run_id == run_model.recall_run_id]
+        cursor_values = self._decode_read_cursor(cursor, "raw")
+        if cursor_values:
+            last_market, last_code, last_security_id = cursor_values
+            filters.append(or_(
+                SecurityModel.market > last_market,
+                and_(SecurityModel.market == last_market, SecurityModel.code > last_code),
+                and_(
+                    SecurityModel.market == last_market,
+                    SecurityModel.code == last_code,
+                    SecurityModel.security_id > UUID(last_security_id),
+                ),
+            ))
+        rows = (
+            await self._session.execute(
+                select(RawOpportunityModel, SecurityModel)
+                .join(SecurityModel, SecurityModel.security_id == RawOpportunityModel.security_id)
+                .where(*filters)
+                .order_by(SecurityModel.market, SecurityModel.code, SecurityModel.security_id)
+                .limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = tuple(RawOpportunityReadItem(
+            raw_opportunity_id=raw.raw_opportunity_id,
+            security_id=raw.security_id,
+            market=security.market,
+            code=security.code,
+            name=security.name,
+            as_of=raw.as_of,
+            known_at=raw.known_at,
+            recall_result_ids=tuple(UUID(value) for value in raw.recall_result_ids),
+            channel_codes=tuple(raw.channel_codes),
+            reason_summary={key: tuple(value) for key, value in raw.reason_summary.items()},
+        ) for raw, security in rows)
+        next_cursor = None
+        if has_more and rows:
+            _, security = rows[-1]
+            next_cursor = self._encode_read_cursor(
+                "raw", (security.market, security.code, str(security.security_id))
+            )
+        return RawOpportunityReadPage(
+            run=self._run(run_model), items=items, next_cursor=next_cursor
+        )
+
+    async def pending_observations(
+        self, *, as_of: datetime, limit: int
+    ) -> tuple[PerformanceObservation, ...]:
+        terminal = aliased(PerformanceObservationModel)
+        models = (
+            await self._session.execute(
+                select(PerformanceObservationModel)
+                .where(
+                    PerformanceObservationModel.status == "PENDING",
+                    PerformanceObservationModel.matures_at <= as_of,
+                    ~exists(
+                        select(terminal.observation_id).where(
+                            terminal.supersedes_observation_id
+                            == PerformanceObservationModel.observation_id
+                        )
+                    ),
+                )
+                .order_by(
+                    PerformanceObservationModel.matures_at,
+                    PerformanceObservationModel.observation_id,
+                )
+                .limit(limit)
+            )
+        ).scalars().all()
+        return tuple(self._observation(model) for model in models)
+
+    async def recalled_security_keys(
+        self, observations: tuple[PerformanceObservation, ...]
+    ) -> set[tuple[UUID, UUID]]:
+        if not observations:
+            return set()
+        expected = {
+            (item.recall_run_id, item.security_id) for item in observations
+        }
+        rows = (
+            await self._session.execute(
+                select(
+                    RawOpportunityModel.recall_run_id,
+                    RawOpportunityModel.security_id,
+                )
+                .where(
+                    RawOpportunityModel.recall_run_id.in_(
+                        {item[0] for item in expected}
+                    ),
+                    RawOpportunityModel.security_id.in_(
+                        {item[1] for item in expected}
+                    ),
+                )
+                .distinct()
+            )
+        ).all()
+        return {tuple(row) for row in rows} & expected
+
+    async def publish_maturities(
+        self,
+        observations: tuple[PerformanceObservation, ...],
+        evaluations: tuple[RecallMissEvaluation, ...],
+    ) -> set[UUID]:
+        if not observations:
+            return set()
+        evaluation_by_observation = {
+            item.observation_id: item for item in evaluations
+        }
+        if not set(evaluation_by_observation).issubset(
+            {item.observation_id for item in observations}
+        ):
+            raise ValueError("evaluation must reference a supplied mature observation")
+        inserted_ids = set((
+            await self._session.execute(
+                insert(PerformanceObservationModel)
+                .values([item.model_dump(mode="python") for item in observations])
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        PerformanceObservationModel.supersedes_observation_id
+                    ]
+                )
+                .returning(PerformanceObservationModel.observation_id)
+            )
+        ).scalars().all())
+        self._session.add_all(
+            RecallMissEvaluationModel(**evaluation.model_dump(mode="python"))
+            for observation_id, evaluation in evaluation_by_observation.items()
+            if observation_id in inserted_ids
+        )
+        return inserted_ids
+
+    async def read_misses(
+        self,
+        *,
+        threshold_version: str | None,
+        only_misses: bool,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallMissReadPage:
+        filters = []
+        if threshold_version:
+            filters.append(
+                RecallMissEvaluationModel.threshold_version == threshold_version
+            )
+        if only_misses:
+            filters.extend((
+                RecallMissEvaluationModel.is_exceptional.is_(True),
+                RecallMissEvaluationModel.was_recalled.is_(False),
+            ))
+        cursor_values = self._decode_read_cursor(cursor, "recall_miss")
+        if cursor_values:
+            last_evaluated_at = datetime.fromisoformat(cursor_values[0])
+            last_id = UUID(cursor_values[1])
+            filters.append(or_(
+                RecallMissEvaluationModel.evaluated_at < last_evaluated_at,
+                and_(
+                    RecallMissEvaluationModel.evaluated_at == last_evaluated_at,
+                    RecallMissEvaluationModel.evaluation_id < last_id,
+                ),
+            ))
+        rows = (
+            await self._session.execute(
+                select(
+                    RecallMissEvaluationModel,
+                    PerformanceObservationModel,
+                    SecurityModel,
+                )
+                .join(
+                    PerformanceObservationModel,
+                    PerformanceObservationModel.observation_id
+                    == RecallMissEvaluationModel.observation_id,
+                )
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id
+                    == PerformanceObservationModel.security_id,
+                )
+                .where(*filters)
+                .order_by(
+                    RecallMissEvaluationModel.evaluated_at.desc(),
+                    RecallMissEvaluationModel.evaluation_id.desc(),
+                )
+                .limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = tuple(RecallMissReadItem(
+            evaluation_id=evaluation.evaluation_id,
+            observation_id=observation.observation_id,
+            recall_run_id=observation.recall_run_id,
+            security_id=observation.security_id,
+            market=security.market,
+            code=security.code,
+            name=security.name,
+            horizon_sessions=observation.horizon_sessions,
+            as_of=observation.as_of,
+            matures_at=observation.matures_at,
+            raw_return=float(observation.raw_return),
+            benchmark_return=(
+                None
+                if observation.benchmark_return is None
+                else float(observation.benchmark_return)
+            ),
+            excess_return=(
+                None
+                if observation.excess_return is None
+                else float(observation.excess_return)
+            ),
+            threshold_version=evaluation.threshold_version,
+            threshold_spec=evaluation.threshold_spec,
+            was_recalled=evaluation.was_recalled,
+            is_exceptional=evaluation.is_exceptional,
+            miss_type=evaluation.miss_type,
+            evaluated_at=evaluation.evaluated_at,
+            known_at=evaluation.known_at,
+        ) for evaluation, observation, security in rows)
+        next_cursor = None
+        if has_more and rows:
+            evaluation = rows[-1][0]
+            next_cursor = self._encode_read_cursor(
+                "recall_miss",
+                (evaluation.evaluated_at.isoformat(), str(evaluation.evaluation_id)),
+            )
+        return RecallMissReadPage(items=items, next_cursor=next_cursor)
+
+    async def _read_run(self, recall_run_id: UUID | None) -> RecallRunModel | None:
+        statement = select(RecallRunModel)
+        if recall_run_id is not None:
+            statement = statement.where(RecallRunModel.recall_run_id == recall_run_id)
+        else:
+            statement = statement.where(RecallRunModel.status == RecallRunStatus.PUBLISHED.value)
+        return (
+            await self._session.execute(
+                statement.order_by(
+                    RecallRunModel.as_of.desc(),
+                    RecallRunModel.created_at.desc(),
+                    RecallRunModel.recall_run_id.desc(),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _run(model: RecallRunModel) -> RecallRun:
+        return RecallRun(
+            recall_run_id=model.recall_run_id,
+            feature_run_id=model.feature_run_id,
+            regime_snapshot_id=model.regime_snapshot_id,
+            strategy_version=model.strategy_version,
+            channel_set_hash=model.channel_set_hash,
+            as_of=model.as_of,
+            known_at=model.known_at,
+            status=RecallRunStatus(model.status),
+            expected_channel_count=model.expected_channel_count,
+            successful_channel_count=model.successful_channel_count,
+            failed_channel_count=model.failed_channel_count,
+            security_count=model.security_count,
+            hit_security_count=model.hit_security_count,
+            coverage=float(model.coverage),
+            errors=model.errors,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _observation(model: PerformanceObservationModel) -> PerformanceObservation:
+        def number(value):
+            return None if value is None else float(value)
+
+        return PerformanceObservation(
+            observation_id=model.observation_id,
+            recall_run_id=model.recall_run_id,
+            security_id=model.security_id,
+            horizon_sessions=model.horizon_sessions,
+            status=ObservationStatus(model.status),
+            as_of=model.as_of,
+            matures_at=model.matures_at,
+            known_at=model.known_at,
+            baseline_price=float(model.baseline_price),
+            future_price=number(model.future_price),
+            raw_return=number(model.raw_return),
+            benchmark_return=number(model.benchmark_return),
+            excess_return=number(model.excess_return),
+            unavailable_reason=model.unavailable_reason,
+            supersedes_observation_id=model.supersedes_observation_id,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _encode_read_cursor(kind: str, values: tuple[object, ...]) -> str:
+        import base64
+        payload = canonical_json({"kind": kind, "values": values})
+        return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_read_cursor(cursor: str | None, kind: str) -> tuple | None:
+        import base64
+        import json
+        if cursor is None:
+            return None
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(
+                cursor + "=" * (-len(cursor) % 4)
+            ))
+            if payload.get("kind") != kind or not isinstance(payload.get("values"), list):
+                raise ValueError
+            return tuple(payload["values"])
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid recall cursor") from exc
 
 
 class SQLAlchemyCorporateActionRepository:

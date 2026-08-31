@@ -7,6 +7,26 @@ from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
+from app.v3.domain.evidence import (
+    EntityLink,
+    EvidenceConflict,
+    EvidenceFetchRun,
+    EvidenceReadQuery,
+    EvidenceRelation,
+    EvidenceRepositoryPage,
+    EvidenceSource,
+    NormalizedEvidence,
+    ParseAttempt,
+    RawDocument,
+    SecurityEvidenceView,
+)
+from app.v3.domain.features import (
+    FeaturePage,
+    FeatureQuery,
+    FeatureRun,
+    MarketRegimeSnapshot,
+    SecurityFeature,
+)
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
     AdjustType,
@@ -17,18 +37,17 @@ from app.v3.domain.market_data import (
     MarketDataIngestionRun,
     UniverseSnapshot,
 )
-from app.v3.domain.features import FeaturePage, FeatureQuery, FeatureRun, MarketRegimeSnapshot, SecurityFeature
-from app.v3.domain.evidence import (
-    EntityLink,
-    EvidenceConflict,
-    EvidenceFetchRun,
-    EvidenceRelation,
-    EvidenceReadQuery,
-    EvidenceRepositoryPage,
-    EvidenceSource,
-    NormalizedEvidence,
-    ParseAttempt,
-    RawDocument,
+from app.v3.domain.recall import (
+    PerformanceObservation,
+    RawOpportunity,
+    RawOpportunityReadPage,
+    RecallChannel,
+    RecallFeatureView,
+    RecallMissEvaluation,
+    RecallMissReadPage,
+    RecallReadPage,
+    RecallResult,
+    RecallRun,
 )
 
 
@@ -90,6 +109,68 @@ class FeatureRepository(Protocol):
 
     async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None: ...
 
+    async def get_run(self, feature_run_id: UUID) -> FeatureRun | None: ...
+
+    async def latest_run(self) -> FeatureRun | None: ...
+
+    async def features_for_run(self, feature_run_id: UUID) -> tuple[RecallFeatureView, ...]: ...
+
+
+class RecallRepository(Protocol):
+    async def resolve_channels(
+        self, channels: tuple[RecallChannel, ...]
+    ) -> dict[str, UUID]: ...
+
+    async def publish(
+        self,
+        run: RecallRun,
+        results: tuple[RecallResult, ...],
+        raw_opportunities: tuple[RawOpportunity, ...],
+        observations: tuple[PerformanceObservation, ...],
+    ) -> bool: ...
+
+    async def get_run_by_content_hash(self, content_hash: str) -> RecallRun | None: ...
+
+    async def read_results(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        channel_code: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallReadPage | None: ...
+
+    async def read_raw(
+        self,
+        *,
+        recall_run_id: UUID | None,
+        limit: int,
+        cursor: str | None,
+    ) -> RawOpportunityReadPage | None: ...
+
+    async def pending_observations(
+        self, *, as_of: datetime, limit: int
+    ) -> tuple[PerformanceObservation, ...]: ...
+
+    async def recalled_security_keys(
+        self, observations: tuple[PerformanceObservation, ...]
+    ) -> set[tuple[UUID, UUID]]: ...
+
+    async def publish_maturities(
+        self,
+        observations: tuple[PerformanceObservation, ...],
+        evaluations: tuple[RecallMissEvaluation, ...],
+    ) -> set[UUID]: ...
+
+    async def read_misses(
+        self,
+        *,
+        threshold_version: str | None,
+        only_misses: bool,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallMissReadPage: ...
+
 
 class EvidenceRepository(Protocol):
     async def upsert_source(self, source: EvidenceSource) -> UUID: ...
@@ -129,6 +210,10 @@ class EvidenceRepository(Protocol):
         self, *, query: EvidenceReadQuery
     ) -> EvidenceRepositoryPage: ...
 
+    async def for_securities(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[SecurityEvidenceView, ...]: ...
+
 
 class CorporateActionRepository(Protocol):
     async def latest_by_source_references(
@@ -155,6 +240,7 @@ class UnitOfWork(Protocol):
     ingestion_runs: IngestionRunRepository
     features: FeatureRepository
     evidence: EvidenceRepository
+    recalls: RecallRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

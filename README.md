@@ -2,7 +2,7 @@
 
 只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
 
-V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1 正式状态基础、Phase 2 全市场历史行情底座、Phase 3 全市场 Feature Run/Universe Query/事实型 Market Regime 和 Phase 4 Core Evidence Ingestion 已完成技术验收；Phase 5 Multi-Recall 正在启动。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 3 实施记录](docs/Phase3全市场特征实施记录.md) 与 [Phase 4 实施记录](docs/Phase4证据管道实施记录.md)。
+V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1 正式状态基础、Phase 2 全市场历史行情底座、Phase 3 全市场 Feature Run/Universe Query/事实型 Market Regime、Phase 4 Core Evidence Ingestion 和 Phase 5 Multi-Recall 已完成技术验收；下一阶段为 Phase 6 Context/Comparison/Task/READ JSON。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 4 实施记录](docs/Phase4证据管道实施记录.md) 与 [Phase 5 实施记录](docs/Phase5多通道召回实施记录.md)。
 
 ## 接手开发必读
 
@@ -46,6 +46,8 @@ V2 选股作为并行能力保留 V1，不覆盖旧工具：
 
 - MCP：`scan_mainboard_v2`、`scan_mainboard_ab`
 - REST/GPT：`GET /scan/v2`、`GET /gpt/{secret}/scan/v2`、`GET /gpt/{secret}/scan/v2/html`、`GET /gpt/{secret}/scan/ab`
+
+V3 默认关闭并与 Legacy 隔离。当前开发 READ 包括 `GET /api/v3/universe/features`、`market-regime`、`evidence/{subject_type}/{subject_id}`、`recalls`、`raw-opportunities` 和 `recalls/misses`；必须启用 `V3_ENABLED` 并将 PostgreSQL 迁移到对应 Phase，不能把这些开发接口表述为已在生产上线。
 
 V1 仍按 `total_score` 排名；V2 按 `opportunity_score` 排名，并返回 `raw_top30`、`action_top30`、`top100`、`score_version=v2`、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 `coverage=false`、`score=null` 和 `missing_fields` 暴露。
 

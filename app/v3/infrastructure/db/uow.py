@@ -12,6 +12,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyFeatureRepository,
     SQLAlchemyEvidenceRepository,
+    SQLAlchemyRecallRepository,
     SQLAlchemyUniverseRepository,
 )
 
@@ -33,6 +34,7 @@ class SQLAlchemyUnitOfWork:
         self.ingestion_runs = SQLAlchemyIngestionRunRepository(self._session)
         self.features = SQLAlchemyFeatureRepository(self._session)
         self.evidence = SQLAlchemyEvidenceRepository(self._session)
+        self.recalls = SQLAlchemyRecallRepository(self._session)
         return self
 
     async def __aexit__(

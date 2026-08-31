@@ -16,13 +16,17 @@
 
 ### V3 Phase 3 READ（Feature Flag）
 
-以下端点仅在 `V3_ENABLED=true` 且 PostgreSQL 已迁移至 `0003_full_market_features` 时可用；禁用时返回 HTTP 503：
+以下端点仅在 `V3_ENABLED=true` 且 PostgreSQL 已迁移到对应 Phase 时可用；禁用时返回 HTTP 503。Feature/Regime 需要 `0003`，Evidence 需要 `0004`，Recall/Raw/Miss 需要 `0005`：
 
 | 路由 | 说明 |
 |---|---|
 | `GET /api/v3/universe/features` | 查询最新或指定 Published Feature Run |
 | `GET /api/v3/universe/query` | 上述接口的兼容别名 |
 | `GET /api/v3/market-regime` | 读取最新 Published Run 对应的事实型 Regime |
+| `GET /api/v3/evidence/{subject_type}/{subject_id}` | 按时点、类型、来源和有效相关性读取 Evidence |
+| `GET /api/v3/recalls` | 读取最新或指定 Recall Run 的通道内结果 |
+| `GET /api/v3/raw-opportunities` | 读取 Recall 命中并集，不含 Final Score 或 Action 建议 |
+| `GET /api/v3/recalls/misses` | 读取成熟评价；支持 `threshold_version`、`only_misses`、`limit` 和 `cursor` |
 
 Feature Query 参数包括 `feature_run_id`、`market`、`stale`、`sort_by`、`descending`、`min_value`、`max_value`、逗号分隔的 `fields`、`limit` 和 `cursor`。默认 50、最大 200；字段和排序键使用白名单，下一页必须原样沿用排序参数。当前部署仍默认关闭 V3，这些接口不代表 V3 已在生产启用。
 

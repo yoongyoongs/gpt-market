@@ -1,0 +1,440 @@
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+from uuid import UUID, uuid4
+
+from pydantic import Field, field_validator, model_validator
+
+from app.v3.contracts.base import V3Contract, require_aware
+from app.v3.domain.hashing import canonical_hash
+
+
+def _float_fields(payload: dict[str, Any], *fields: str) -> dict[str, Any]:
+    for field in fields:
+        if payload.get(field) is not None:
+            payload[field] = float(payload[field])
+    return payload
+
+
+class RecallRunStatus(StrEnum):
+    PUBLISHED = "PUBLISHED"
+    FAILED = "FAILED"
+
+
+class ObservationStatus(StrEnum):
+    PENDING = "PENDING"
+    MATURED = "MATURED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class RecallFeatureView(V3Contract):
+    feature_run_id: UUID
+    security_id: UUID
+    as_of: datetime
+    close: float = Field(gt=0)
+    return_3d: float | None = None
+    return_5d: float | None = None
+    return_20d: float | None = None
+    position_60d: float | None = Field(default=None, ge=0, le=1)
+    ma20_slope: float | None = None
+    breakout_20d: bool | None = None
+    pullback_20d: bool | None = None
+    volume_ratio_5d: float | None = Field(default=None, ge=0)
+    volume_expansion: bool | None = None
+    relative_index_strength: float | None = None
+    relative_industry_strength: float | None = None
+    coverage: float = Field(ge=0, le=1)
+    stale: bool
+    features: dict[str, Any] = Field(default_factory=dict)
+    source_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: datetime) -> datetime:
+        return require_aware(value, "as_of")
+
+
+class RecallChannel(V3Contract):
+    channel_id: UUID = Field(default_factory=uuid4)
+    code: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    configuration: dict[str, Any]
+    description: str = Field(min_length=1)
+    enabled: bool = True
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, **values: Any) -> "RecallChannel":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        return cls(**payload, content_hash=canonical_hash(
+            {key: value for key, value in payload.items() if key != "channel_id"}
+        ))
+
+    @model_validator(mode="after")
+    def validate_hash(self) -> "RecallChannel":
+        expected = canonical_hash(self.model_dump(exclude={"channel_id", "content_hash"}))
+        if self.content_hash != expected:
+            raise ValueError("content_hash does not match recall channel")
+        return self
+
+
+class RecallRun(V3Contract):
+    recall_run_id: UUID = Field(default_factory=uuid4)
+    feature_run_id: UUID
+    regime_snapshot_id: UUID | None = None
+    strategy_version: str = Field(min_length=1, max_length=64)
+    channel_set_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    as_of: datetime
+    known_at: datetime
+    status: RecallRunStatus
+    expected_channel_count: int = Field(ge=1)
+    successful_channel_count: int = Field(ge=0)
+    failed_channel_count: int = Field(ge=0)
+    security_count: int = Field(ge=0)
+    hit_security_count: int = Field(ge=0)
+    coverage: float = Field(ge=0, le=1)
+    errors: dict[str, str] = Field(default_factory=dict)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of", "known_at")
+    @classmethod
+    def validate_times(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @field_validator("coverage")
+    @classmethod
+    def normalize_coverage(cls, value: float) -> float:
+        return round(value, 7)
+
+    @model_validator(mode="after")
+    def validate_run(self) -> "RecallRun":
+        if self.known_at < self.as_of:
+            raise ValueError("known_at cannot be earlier than as_of")
+        if self.successful_channel_count + self.failed_channel_count != self.expected_channel_count:
+            raise ValueError("recall channel counts must be complete")
+        if self.hit_security_count > self.security_count:
+            raise ValueError("hit_security_count cannot exceed security_count")
+        if self.content_hash != self.computed_content_hash():
+            raise ValueError("content_hash does not match recall run")
+        return self
+
+    def computed_content_hash(self) -> str:
+        payload = self.model_dump(exclude={"recall_run_id", "known_at", "content_hash"})
+        return canonical_hash(_float_fields(payload, "coverage"))
+
+    @classmethod
+    def build(cls, **values: Any) -> "RecallRun":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        payload["coverage"] = round(float(payload["coverage"]), 7)
+        content_hash = canonical_hash(_float_fields({
+            key: value for key, value in payload.items()
+            if key not in {"recall_run_id", "known_at"}
+        }, "coverage"))
+        return cls(**payload, content_hash=content_hash)
+
+
+class RecallResult(V3Contract):
+    recall_result_id: UUID = Field(default_factory=uuid4)
+    recall_run_id: UUID
+    channel_id: UUID
+    security_id: UUID
+    channel_rank: int = Field(ge=1)
+    strength: float = Field(ge=0, le=1)
+    reasons: tuple[str, ...] = Field(min_length=1)
+    matched_features: dict[str, Any]
+    coverage: float = Field(ge=0, le=1)
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("strength", "coverage")
+    @classmethod
+    def normalize_metrics(cls, value: float) -> float:
+        return round(value, 7)
+
+    @classmethod
+    def build(cls, **values: Any) -> "RecallResult":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        payload["strength"] = round(float(payload["strength"]), 7)
+        payload["coverage"] = round(float(payload["coverage"]), 7)
+        hash_payload = {key: value for key, value in payload.items() if key != "recall_result_id"}
+        return cls(**payload, content_hash=canonical_hash(
+            _float_fields(hash_payload, "strength", "coverage")
+        ))
+
+    @model_validator(mode="after")
+    def validate_hash(self) -> "RecallResult":
+        payload = self.model_dump(exclude={"recall_result_id", "content_hash"})
+        expected = canonical_hash(_float_fields(payload, "strength", "coverage"))
+        if self.content_hash != expected:
+            raise ValueError("content_hash does not match recall result")
+        return self
+
+
+class RawOpportunity(V3Contract):
+    raw_opportunity_id: UUID = Field(default_factory=uuid4)
+    recall_run_id: UUID
+    security_id: UUID
+    as_of: datetime
+    known_at: datetime
+    recall_result_ids: tuple[UUID, ...] = Field(min_length=1)
+    channel_codes: tuple[str, ...] = Field(min_length=1)
+    reason_summary: dict[str, tuple[str, ...]]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of", "known_at")
+    @classmethod
+    def validate_times(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_raw(self) -> "RawOpportunity":
+        if self.known_at < self.as_of:
+            raise ValueError("known_at cannot be earlier than as_of")
+        if len(set(self.recall_result_ids)) != len(self.recall_result_ids):
+            raise ValueError("recall_result_ids must be unique")
+        if len(set(self.channel_codes)) != len(self.channel_codes):
+            raise ValueError("channel_codes must be unique")
+        if set(self.reason_summary) != set(self.channel_codes):
+            raise ValueError("reason_summary must cover every channel")
+        if self.content_hash != self.computed_content_hash():
+            raise ValueError("content_hash does not match raw opportunity")
+        return self
+
+    def computed_content_hash(self) -> str:
+        return canonical_hash(self.model_dump(exclude={"raw_opportunity_id", "content_hash"}))
+
+    @classmethod
+    def build(cls, **values: Any) -> "RawOpportunity":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        content_hash = canonical_hash({
+            key: value for key, value in payload.items() if key != "raw_opportunity_id"
+        })
+        return cls(**payload, content_hash=content_hash)
+
+
+class PerformanceObservation(V3Contract):
+    observation_id: UUID = Field(default_factory=uuid4)
+    recall_run_id: UUID
+    security_id: UUID
+    horizon_sessions: int
+    status: ObservationStatus
+    as_of: datetime
+    matures_at: datetime
+    known_at: datetime
+    baseline_price: float = Field(gt=0)
+    future_price: float | None = Field(default=None, gt=0)
+    raw_return: float | None = None
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    unavailable_reason: str | None = Field(default=None, max_length=256)
+    supersedes_observation_id: UUID | None = None
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("horizon_sessions")
+    @classmethod
+    def validate_horizon(cls, value: int) -> int:
+        if value not in {3, 5, 10}:
+            raise ValueError("horizon_sessions must be 3, 5 or 10")
+        return value
+
+    @field_validator("as_of", "matures_at", "known_at")
+    @classmethod
+    def validate_times(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @field_validator("baseline_price", "future_price")
+    @classmethod
+    def normalize_prices(cls, value: float | None) -> float | None:
+        return None if value is None else round(value, 6)
+
+    @field_validator("raw_return", "benchmark_return", "excess_return")
+    @classmethod
+    def normalize_returns(cls, value: float | None) -> float | None:
+        return None if value is None else round(value, 10)
+
+    @model_validator(mode="after")
+    def validate_observation(self) -> "PerformanceObservation":
+        if self.matures_at <= self.as_of or self.known_at < self.as_of:
+            raise ValueError("observation time ordering is invalid")
+        future_values = (
+            self.future_price,
+            self.raw_return,
+            self.benchmark_return,
+            self.excess_return,
+        )
+        if self.status is ObservationStatus.PENDING:
+            if self.supersedes_observation_id is not None:
+                raise ValueError("pending observation cannot supersede another observation")
+            if any(value is not None for value in future_values):
+                raise ValueError("pending observation cannot contain future results")
+            if self.unavailable_reason is not None:
+                raise ValueError("pending observation cannot contain unavailable_reason")
+        else:
+            if self.supersedes_observation_id is None:
+                raise ValueError("terminal observation must supersede its pending observation")
+            if self.known_at < self.matures_at:
+                raise ValueError("terminal observation cannot be known before maturity")
+        if self.status is ObservationStatus.MATURED:
+            if self.future_price is None or self.raw_return is None:
+                raise ValueError("matured observation requires future result")
+            if self.unavailable_reason is not None:
+                raise ValueError("matured observation cannot contain unavailable_reason")
+            expected_raw = round(self.future_price / self.baseline_price - 1, 10)
+            if abs(self.raw_return - expected_raw) > 1e-9:
+                raise ValueError("raw_return does not match observation prices")
+            if (self.benchmark_return is None) != (self.excess_return is None):
+                raise ValueError("benchmark_return and excess_return must be provided together")
+            if self.benchmark_return is not None:
+                expected_excess = round(self.raw_return - self.benchmark_return, 10)
+                if abs(self.excess_return - expected_excess) > 1e-9:
+                    raise ValueError("excess_return does not match raw and benchmark returns")
+        if self.status is ObservationStatus.UNAVAILABLE:
+            if any(value is not None for value in future_values):
+                raise ValueError("unavailable observation cannot contain future results")
+            if not self.unavailable_reason:
+                raise ValueError("unavailable observation requires unavailable_reason")
+        if self.content_hash != self.computed_content_hash():
+            raise ValueError("content_hash does not match performance observation")
+        return self
+
+    def computed_content_hash(self) -> str:
+        payload = self.model_dump(exclude={"observation_id", "content_hash"})
+        return canonical_hash(_float_fields(
+            payload, "baseline_price", "future_price", "raw_return",
+            "benchmark_return", "excess_return",
+        ))
+
+    @classmethod
+    def build(cls, **values: Any) -> "PerformanceObservation":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        for field in ("baseline_price", "future_price"):
+            if payload.get(field) is not None:
+                payload[field] = round(float(payload[field]), 6)
+        for field in ("raw_return", "benchmark_return", "excess_return"):
+            if payload.get(field) is not None:
+                payload[field] = round(float(payload[field]), 10)
+        content_hash = canonical_hash(_float_fields({
+            key: value for key, value in payload.items() if key != "observation_id"
+        }, "baseline_price", "future_price", "raw_return", "benchmark_return", "excess_return"))
+        return cls(**payload, content_hash=content_hash)
+
+
+class RecallMissEvaluation(V3Contract):
+    evaluation_id: UUID = Field(default_factory=uuid4)
+    observation_id: UUID
+    threshold_version: str = Field(min_length=1, max_length=64)
+    threshold_spec: dict[str, Any]
+    was_recalled: bool
+    is_exceptional: bool
+    miss_type: str | None = Field(default=None, max_length=64)
+    evaluated_at: datetime
+    known_at: datetime
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("evaluated_at", "known_at")
+    @classmethod
+    def validate_times(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_evaluation(self) -> "RecallMissEvaluation":
+        if self.known_at < self.evaluated_at:
+            raise ValueError("known_at cannot be earlier than evaluated_at")
+        is_miss = self.is_exceptional and not self.was_recalled
+        if is_miss != (self.miss_type is not None):
+            raise ValueError("miss_type is required only for exceptional unrecalled observations")
+        if self.content_hash != self.computed_content_hash():
+            raise ValueError("content_hash does not match recall miss evaluation")
+        return self
+
+    def computed_content_hash(self) -> str:
+        return canonical_hash(self.model_dump(exclude={"evaluation_id", "content_hash"}))
+
+    @classmethod
+    def build(cls, **values: Any) -> "RecallMissEvaluation":
+        payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
+            exclude={"content_hash"}
+        )
+        content_hash = canonical_hash({
+            key: value for key, value in payload.items() if key != "evaluation_id"
+        })
+        return cls(**payload, content_hash=content_hash)
+
+
+class RecallMissReadItem(V3Contract):
+    evaluation_id: UUID
+    observation_id: UUID
+    recall_run_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    horizon_sessions: int
+    as_of: datetime
+    matures_at: datetime
+    raw_return: float
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    threshold_version: str
+    threshold_spec: dict[str, Any]
+    was_recalled: bool
+    is_exceptional: bool
+    miss_type: str | None = None
+    evaluated_at: datetime
+    known_at: datetime
+
+
+class RecallMissReadPage(V3Contract):
+    items: tuple[RecallMissReadItem, ...]
+    next_cursor: str | None = None
+
+
+class RecallReadItem(V3Contract):
+    recall_result_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    channel_code: str
+    channel_version: str
+    channel_rank: int
+    strength: float
+    reasons: tuple[str, ...]
+    matched_features: dict[str, Any]
+    coverage: float
+
+
+class RecallReadPage(V3Contract):
+    run: RecallRun
+    items: tuple[RecallReadItem, ...]
+    next_cursor: str | None = None
+
+
+class RawOpportunityReadItem(V3Contract):
+    raw_opportunity_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    as_of: datetime
+    known_at: datetime
+    recall_result_ids: tuple[UUID, ...]
+    channel_codes: tuple[str, ...]
+    reason_summary: dict[str, tuple[str, ...]]
+
+
+class RawOpportunityReadPage(V3Contract):
+    run: RecallRun
+    items: tuple[RawOpportunityReadItem, ...]
+    next_cursor: str | None = None

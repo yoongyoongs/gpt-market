@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="9b2fbd25895dbc3b0ac59a3c145130249bb1e1b17215a3e864e7b143b8fc73f6"><title>Phase 5 多通道召回实施记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 范围</a></li>
+<li><a href="#2">2. 不变量</a></li>
+<li><a href="#3">3. 当前验收</a></li>
+<li><a href="#4">4. 验收边界与后续</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase5多通道召回实施记录.md · 内容哈希：9b2fbd25895d</div><h1 id="phase-5">Phase 5 多通道召回实施记录<a class="headerlink" href="#phase-5" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>日期：2026-08-31（Asia/Shanghai）
+分支：<code>codex/phase5-multi-recall</code>
+状态：Phase 5 技术验收完成；生产 V3 仍保持关闭</p>
+</blockquote>
+<h2 id="1">1. 范围<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>Phase 5 按《架构设计实施稿》实现 Multi-Recall、Raw Opportunity、未来表现观察和 Recall Miss 基础，不修改 V1/V2 评分，不增加自动交易，也不建立统一 Final Score 或 Recall 权限墙。</p>
+<p>首个检查点新增：</p>
+<ul>
+<li><code>0005_multi_recall_foundation</code>；</li>
+<li>不可变 <code>recall_channels/recall_runs/recall_results</code>；</li>
+<li>只表达多通道命中事实的 <code>raw_opportunities</code>；</li>
+<li>T+3/T+5/T+10 <code>performance_observations</code>；</li>
+<li>绑定阈值版本的 <code>recall_miss_evaluations</code>。</li>
+<li>9 个 Feature Channel：低位转强、趋势启动、首次突破、首次回踩、周底日强、相对指数、相对行业、量能扩张和异常组合；</li>
+<li>单通道失败/缺字段隔离，<code>UNAVAILABLE</code> 不伪装为零命中；</li>
+<li>原子发布、确定性通道内排名、Raw 命中并集和全 Universe T+3/5/10 PENDING Observation；</li>
+<li><code>GET /api/v3/recalls</code> 与 <code>GET /api/v3/raw-opportunities</code> 稳定 Cursor READ；</li>
+<li>PENDING Observation 保持不可变，MATURED/UNAVAILABLE 通过 <code>supersedes_observation_id</code> 追加形成修订链；</li>
+<li><code>MatureRecallObservationsService</code> 在事务外读取 Outcome Provider，事务内只追加终态 Observation 和绑定阈值版本的 Recall Miss Evaluation；</li>
+<li><code>GET /api/v3/recalls/misses</code> 支持阈值版本、仅漏召回过滤和稳定 Cursor READ；</li>
+<li><code>scripts/v3_phase5_recall.py</code> 最新/指定 Feature Run 执行与幂等重放。</li>
+<li>财务改善、业绩拐点和催化事件 3 个 Evidence Channel：分别只比较同报告期跨年财务、明确同比字段和近 30 日官方公告事件词，并返回 Evidence ID。</li>
+</ul>
+<h2 id="2">2. 不变量<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Recall Result 只保存通道内 <code>strength/rank/reasons/matched_features/coverage</code>，不保存跨通道 Final Score。</li>
+<li>Raw Opportunity 是 Recall 命中并集，不是 Action Candidate，不产生买卖建议。</li>
+<li>Recall 未命中证券仍由 Full Universe Query 直接读取。</li>
+<li><code>PENDING</code> 观察禁止出现未来价格、未来收益或超额收益。</li>
+<li><code>MATURED</code> 观察必须到达成熟时点并包含可验证未来结果。</li>
+<li>PENDING 不得 UPDATE 为终态；一个 PENDING 最多被一个 MATURED 或 UNAVAILABLE 记录替代，终态必须明确引用原 PENDING。</li>
+<li>只有“未来表现优秀且当时未被召回”才是 Recall Miss，阈值必须绑定版本，窗口未成熟不得生成最终评价。</li>
+<li>六张 Phase 5 表均为 append-only，修改或删除由 PostgreSQL Trigger 拒绝。</li>
+</ul>
+<h2 id="3">3. 当前验收<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<ul>
+<li>PostgreSQL 17 <code>0004 -&gt; 0005 -&gt; 0004 -&gt; 0005</code> 双往返通过；全新数据库从 <code>base -&gt; 0005</code> 迁移通过；</li>
+<li>Domain/Channel/Run/Metadata 覆盖 Hash、完整通道计数、Raw 无 Final Score、未来泄漏拒绝、Miss 类型、失败隔离、全 Universe 观察和幂等；</li>
+<li>真实 PostgreSQL 验证 2 只证券原子发布 2 Result、2 Raw、6 PENDING Observation，重复执行零新增，UPDATE 被 Trigger 拒绝；</li>
+<li>成熟 Feature Job 探针 9 个通道中 6 个成功，周线/指数/行业输入缺失的 3 个通道明确 <code>UNAVAILABLE</code>；同输入连续执行返回同一 Recall Run；</li>
+<li>未来 <code>as_of</code> Feature 被 Job 在写 Channel 前拒绝，不能伪造已知未来；</li>
+<li>全新真实 PostgreSQL 的完整回归 <code>197 passed, 5 skipped</code>；2 条既有依赖/异步资源警告未由本阶段引入；</li>
+<li>12 通道真实 Job 探针成功发布：2 股夹具中 6 个 Feature 通道成功，周线/指数/行业及三类 Evidence 因确实缺输入明确 <code>UNAVAILABLE</code>，Coverage <code>0.5</code>；</li>
+<li>Evidence Channel 专项验证跨年同报告期、预告/快报同比、官方催化词和普通公告不命中；第三个全新 PostgreSQL 库完整回归 <code>199 passed, 5 skipped</code>；</li>
+<li>相关文件 Ruff 和 <code>git diff --check</code> 通过。</li>
+<li>本地新增成熟链、Outcome 完整性、收益一致性、幂等和漏召回分类测试；不配置真实 PostgreSQL 的完整回归为 <code>184 passed, 23 skipped</code>。</li>
+<li>修改后的 <code>0005</code> 已在服务器隔离 PostgreSQL 17 完成 <code>0003 -&gt; 0005 -&gt; 0003 -&gt; 0005</code> 双向迁移；5,551 条 Feature 全程保留，六张 Phase 5 表创建完整。</li>
+<li>独立空库从 <code>base -&gt; 0005</code> 后执行完整回归：<code>202 passed, 5 skipped</code>；两条既有依赖/异步资源警告保留。真实 PostgreSQL 专项用例同时通过追加终态、Recall Miss READ、未召回证券仍由 Full Universe Query 返回和成熟重放零新增。</li>
+<li>真实 5,551 证券 Feature Run 执行 12 通道：6 个成功、6 个因输入确实缺失明确 <code>UNAVAILABLE</code>，发布状态 <code>PUBLISHED</code>，通道 Coverage <code>0.5</code>，命中 3,492 只。</li>
+<li>全市场 Run 生成 5,726 条 Recall Result、3,492 条 Raw Opportunity 和 16,653 条全 Universe PENDING Observation；首次耗时 14.971 秒，第二次耗时 3.539 秒并返回同一 <code>recall_run_id=8866cd57-f68e-4ffd-9275-83f1e55ce4f1</code>，数据库只保留一个 Run。</li>
+<li>2,059 只未命中证券仍存在于 5,551 条 Full Universe Query；抽样 <code>BJ 920001 纬达光电</code> 可读取，证明 Recall 不是 Universe 权限墙。</li>
+<li>READ 20 次服务器实测 P95：Feature 12.273ms、Raw 11.858ms、Recall Result 10.600ms、Recall Miss 1.081ms；所有接口均为数据库读取，没有触发行情采集。</li>
+<li>验收期间生产 <code>market-mcp</code>、Nginx 本机入口和公网 <code>106.13.171.166:80</code> 健康检查均为 HTTP 200；隔离数据库未挂载生产，V3 未启用。</li>
+<li>Phase 5 只定义 Outcome Provider 契约和基础漏召回分类；严格同口径未来收益、MFE/MAE、Target/Stop 与七类归因仍属于 Phase 10，禁止用不一致复权价格冒充严格评价。</li>
+</ul>
+<h2 id="4">4. 验收边界与后续<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Phase 6 开始实现 Candidate Comparison Context、Context Pack、Task 和 READ JSON；</li>
+<li>Phase 10 再选择并验证 point-in-time-safe Outcome Provider；若同口径收益无法证明则追加 <code>UNAVAILABLE</code>，不得伪造；</li>
+<li>生产 PostgreSQL Migration 和 V3 启用仍须等待后续 Phase 与最终部署验收，本轮不部署 V3。</li>
+</ol>
+<p>Phase 5 技术验收通过，但不表示整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 <code>0005</code>。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
