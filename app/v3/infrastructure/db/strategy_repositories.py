@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.v3.domain.hashing import canonical_hash
@@ -247,6 +247,7 @@ class SQLAlchemyStrategyRepository:
     async def activate(
         self, environment: str, command: StrategyActivationCommand,
     ) -> dict:
+        self._validate_environment(environment)
         strategy = await self._session.get(
             StrategyVersionModel, command.strategy_version_id
         )
@@ -287,6 +288,7 @@ class SQLAlchemyStrategyRepository:
     async def rollback(
         self, environment: str, command: StrategyRollbackCommand,
     ) -> dict:
+        self._validate_environment(environment)
         state = await self._release_state(environment, lock=True)
         if state.row_version != command.expected_row_version:
             raise RepositoryConflictError("release state changed; refresh before rollback")
@@ -372,6 +374,7 @@ class SQLAlchemyStrategyRepository:
         }
 
     async def _release_state(self, environment: str, *, lock: bool):
+        self._validate_environment(environment)
         statement = select(ReleaseStateModel).where(
             ReleaseStateModel.environment == environment
         )
@@ -386,6 +389,13 @@ class SQLAlchemyStrategyRepository:
             self._session.add(state)
             await self._session.flush()
         return state
+
+    @staticmethod
+    def _validate_environment(environment: str) -> None:
+        if not environment or len(environment) > 32:
+            raise RepositoryConflictError(
+                "release environment must contain between 1 and 32 characters"
+            )
 
     async def _append_release_event(
         self, environment: str, from_mode: str, to_mode: str,
@@ -444,6 +454,7 @@ class SQLAlchemyStrategyRepository:
                 "automatic_rollback_event_id": rollback_event_id}
 
     async def release_dashboard(self, environment: str) -> dict:
+        self._validate_environment(environment)
         state = await self._session.scalar(select(ReleaseStateModel).where(
             ReleaseStateModel.environment == environment
         ))
@@ -455,9 +466,11 @@ class SQLAlchemyStrategyRepository:
         ).order_by(
             OperationalHealthEventModel.observed_at.desc()
         ).limit(100))).all()
-        serialize = lambda row: {
-            column.name: getattr(row, column.name) for column in row.__table__.columns
-        }
+        def serialize(row):
+            return {
+                column.name: getattr(row, column.name)
+                for column in row.__table__.columns
+            }
         state_payload = serialize(state) if state is not None else {
             "release_state_id": None, "environment": environment,
             "mode": "V2", "active_strategy_version_id": None,
@@ -479,9 +492,11 @@ class SQLAlchemyStrategyRepository:
         guardrails = (await self._session.scalars(select(GuardrailVersionModel).order_by(
             GuardrailVersionModel.guardrail_code, GuardrailVersionModel.version.desc()
         ).limit(limit))).all()
-        serialize = lambda row: {
-            column.name: getattr(row, column.name) for column in row.__table__.columns
-        }
+        def serialize(row):
+            return {
+                column.name: getattr(row, column.name)
+                for column in row.__table__.columns
+            }
         return {"strategy_versions": tuple(serialize(item) for item in strategies),
                 "proposals": tuple(serialize(item) for item in proposals),
                 "guardrail_versions": tuple(serialize(item) for item in guardrails)}
@@ -500,9 +515,11 @@ class SQLAlchemyStrategyRepository:
             CapacityEvaluationModel.strategy_version_id == experiment.treatment_strategy_version_id,
             CapacityEvaluationModel.guardrail_version_id == experiment.guardrail_version_id,
         ).order_by(CapacityEvaluationModel.evaluated_at.desc()).limit(20))).all()
-        serialize = lambda row: {
-            column.name: getattr(row, column.name) for column in row.__table__.columns
-        }
+        def serialize(row):
+            return {
+                column.name: getattr(row, column.name)
+                for column in row.__table__.columns
+            }
         return {"experiment": serialize(experiment),
                 "current_status": events[-1].event_type if events else "UNKNOWN",
                 "events": tuple(serialize(item) for item in events),

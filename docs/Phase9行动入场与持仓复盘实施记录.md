@@ -1,6 +1,6 @@
 # Phase 9 行动、入场与持仓复盘实施记录
 
-> 状态：开发完成，待测试验收
+> 状态：技术验收通过；生产 V3 仍关闭
 
 ## 已实现
 
@@ -23,4 +23,4 @@
 
 ## 验收状态
 
-按当前要求未执行 Domain、数据库、Bundle Import、手工持仓 Review、API 或回归测试，未部署生产。以上状态仅表示代码开发完成。
+2026-09-01 完成 Domain/OpenAPI/PostgreSQL 验收：Action/Entry 的四类统一总分字段均被拒绝；人工 Opening Position 在 Decision/EntryPlan 为空时可物化 PositionReview，建议 `REDUCE` 后 Trade Ledger 仍为 0。完整项目串行回归通过，生产未部署。

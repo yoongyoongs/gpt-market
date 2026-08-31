@@ -412,7 +412,11 @@ class SQLAlchemyAIResultImportRepository:
         reviews = (await self._session.scalars(select(ReviewModel).where(
             ReviewModel.decision_id.in_(ids)
         ).order_by(ReviewModel.as_of))).all() if ids else []
-        serialize = lambda row: {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        def serialize(row):
+            return {
+                column.name: getattr(row, column.name)
+                for column in row.__table__.columns
+            }
         return {"decisions": tuple(serialize(item) for item in decisions),
                 "entry_plan_versions": tuple(serialize(item) for item in plans),
                 "reviews": tuple(serialize(item) for item in reviews)}

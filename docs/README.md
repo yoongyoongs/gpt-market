@@ -35,6 +35,7 @@
 - [V3 Phase 9 行动入场与持仓复盘实施记录](Phase9行动入场与持仓复盘实施记录.md)
 - [V3 Phase 10 绩效回放与回归实施记录](Phase10绩效回放与回归实施记录.md)
 - [V3 Phase 11 策略影子与稳定化实施记录](Phase11策略影子与稳定化实施记录.md)
+- [V3 Phase 7–11 技术验收报告](Phase7-11技术验收报告.md)
 - [服务器部署记录](deployment.md)
 - [东方财富字段实测记录](eastmoney_fields.md)
 - `eastmoney_probe.json`：带时间戳的字段探针样例；

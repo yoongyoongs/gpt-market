@@ -1,6 +1,6 @@
 # Phase 11 策略影子与稳定化实施记录
 
-> 状态：开发完成，待测试验收
+> 状态：技术验收通过；生产 V3 仍关闭
 > 分支：`codex/phase11-stabilization`
 
 ## 已实现
@@ -46,4 +46,4 @@
 
 ## 验收状态
 
-按当前约定，本阶段未执行 Domain、Migration、PostgreSQL、Shadow、A/B、并发激活、自动回滚、容量或生产回归测试。当前只表示代码、迁移、API 和文档开发完成，不代表通过 Phase 11 Architecture Gate，也不代表 V3 已稳定上线。
+2026-09-01 完成 Domain、Migration、PostgreSQL、Shadow 确定分组、真实 Observation 派生容量、人审激活和健康故障自动回滚验收；AI 激活/实验控制/回滚均被拒绝。验收同时补齐 Release Environment 1–32 字符边界，避免超长路径参数下沉为数据库错误。技术验收通过不代表 V3 已生产上线；Feature Flag、进程配置和生产路由均未改变。

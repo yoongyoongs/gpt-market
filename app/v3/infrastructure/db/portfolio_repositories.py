@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.v3.domain.hashing import canonical_hash
@@ -396,9 +396,11 @@ class SQLAlchemyPortfolioRepository:
         plans = (await self._session.scalars(select(EntryPlanModel).where(
             EntryPlanModel.decision_id.in_(decision_ids)
         ).order_by(EntryPlanModel.effective_from.desc()))).all() if decision_ids else []
-        serialize = lambda row: {
-            column.name: getattr(row, column.name) for column in row.__table__.columns
-        }
+        def serialize(row):
+            return {
+                column.name: getattr(row, column.name)
+                for column in row.__table__.columns
+            }
         return {
             "security": {"security_id": security.security_id, "code": security.code,
                          "market": security.market, "name": security.name},

@@ -197,6 +197,13 @@ class PositionProjection(V3Contract):
     def validate_rebuilt_at(cls, value: datetime) -> datetime:
         return require_aware(value, "rebuilt_at")
 
+    @model_validator(mode="after")
+    def validate_input_hash(self) -> "PositionProjection":
+        expected = canonical_hash(self.model_dump(exclude={"input_hash"}))
+        if expected != self.input_hash:
+            raise ValueError("input_hash does not match position projection")
+        return self
+
     @classmethod
     def build(cls, **values: Any) -> "PositionProjection":
         payload = cls.model_construct(**values, input_hash="0" * 64).model_dump(

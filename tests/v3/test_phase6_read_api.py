@@ -108,6 +108,14 @@ def test_openapi_exposes_phase6_read_routes():
         "/api/v3/task-runs",
         "/api/v3/task-runs/{task_run_id}",
     } <= set(paths)
-    for path in paths:
-        if path.startswith("/api/v3/"):
-            assert set(paths[path]) <= {"get", "parameters"}
+    for path in {
+        "/api/v3/market-overview",
+        "/api/v3/candidates/comparison-pack",
+        "/api/v3/stocks/{code}/context-pack",
+        "/api/v3/stocks/{code}/evidence",
+        "/api/v3/context-packs/{context_pack_id}",
+        "/api/v3/task-context/{profile}",
+        "/api/v3/task-runs",
+        "/api/v3/task-runs/{task_run_id}",
+    }:
+        assert set(paths[path]) <= {"get", "parameters"}

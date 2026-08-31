@@ -17,7 +17,7 @@ from app.v3.domain.context import (
     ContextSubjectType,
     EvidenceSelectionSide,
 )
-from app.v3.domain.evidence import EvidenceReadQuery, EvidenceRepositoryView
+from app.v3.domain.evidence import EvidenceReadQuery
 from app.v3.domain.hashing import canonical_json
 from app.v3.repositories.errors import RepositoryNotFoundError
 from app.v3.repositories.protocols import UnitOfWork

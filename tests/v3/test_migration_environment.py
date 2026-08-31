@@ -16,11 +16,12 @@ def test_alembic_environment_loads_without_database_credentials() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
     assert Path(scripts.dir).resolve() == ROOT / "migrations"
-    assert scripts.get_heads() == ["0006_context_task_foundation"]
+    assert scripts.get_heads() == ["0011_strategy_stabilization"]
 
 
-def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
-    assert {table.fullname for table in Base.metadata.sorted_tables} == {
+def test_v3_metadata_contains_phase1_through_phase11_tables() -> None:
+    tables = {table.fullname for table in Base.metadata.sorted_tables}
+    assert {
         "v3.evidence_sources",
         "v3.raw_documents",
         "v3.evidence_records",
@@ -60,4 +61,25 @@ def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
         "v3.candidate_comparison_members",
         "v3.context_packs",
         "v3.context_evidence_selections",
-    }
+    } <= tables
+    assert {
+        "v3.ai_result_imports",
+        "v3.ai_result_atomic_groups",
+        "v3.decisions",
+        "v3.entry_plans",
+        "v3.accounts",
+        "v3.trade_drafts",
+        "v3.trade_ledger",
+        "v3.position_projections",
+        "v3.action_candidates",
+        "v3.entry_assessments",
+        "v3.position_reviews",
+        "v3.performance_attributions",
+        "v3.replay_runs",
+        "v3.regression_cases",
+        "v3.strategy_versions",
+        "v3.strategy_experiments",
+        "v3.shadow_observations",
+        "v3.release_states",
+        "v3.release_events",
+    } <= tables
