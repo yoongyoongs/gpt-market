@@ -19,12 +19,12 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.v3.infrastructure.db.base import Base
-
 
 V3_SCHEMA = "v3"
 
@@ -956,12 +956,28 @@ class PerformanceObservationModel(Base):
         CheckConstraint("known_at >= as_of", name="known_after_as_of"),
         CheckConstraint("baseline_price > 0 AND (future_price IS NULL OR future_price > 0)", name="positive_prices"),
         CheckConstraint(
-            "(status = 'PENDING' AND future_price IS NULL AND raw_return IS NULL AND excess_return IS NULL) OR "
-            "(status = 'MATURED' AND future_price IS NOT NULL AND raw_return IS NOT NULL) OR status = 'UNAVAILABLE'",
+            "(status = 'PENDING' AND future_price IS NULL AND raw_return IS NULL "
+            "AND benchmark_return IS NULL AND excess_return IS NULL "
+            "AND unavailable_reason IS NULL AND supersedes_observation_id IS NULL) OR "
+            "(status = 'MATURED' AND future_price IS NOT NULL AND raw_return IS NOT NULL "
+            "AND unavailable_reason IS NULL AND supersedes_observation_id IS NOT NULL "
+            "AND known_at >= matures_at) OR "
+            "(status = 'UNAVAILABLE' AND future_price IS NULL AND raw_return IS NULL "
+            "AND benchmark_return IS NULL AND excess_return IS NULL "
+            "AND unavailable_reason IS NOT NULL AND supersedes_observation_id IS NOT NULL "
+            "AND known_at >= matures_at)",
             name="status_payload",
         ),
-        UniqueConstraint("recall_run_id", "security_id", "horizon_sessions", name="uq_performance_observations_run_security_horizon"),
+        UniqueConstraint("supersedes_observation_id", name="uq_performance_observations_supersedes"),
         UniqueConstraint("content_hash", name="uq_performance_observations_content_hash"),
+        Index(
+            "uq_performance_observations_pending",
+            "recall_run_id",
+            "security_id",
+            "horizon_sessions",
+            unique=True,
+            postgresql_where=text("supersedes_observation_id IS NULL"),
+        ),
         Index("ix_performance_observations_maturity", "status", "matures_at"),
         {"schema": V3_SCHEMA},
     )
@@ -979,6 +995,10 @@ class PerformanceObservationModel(Base):
     raw_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
     benchmark_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
     excess_return: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    unavailable_reason: Mapped[str | None] = mapped_column(String(256))
+    supersedes_observation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.performance_observations.observation_id")
+    )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

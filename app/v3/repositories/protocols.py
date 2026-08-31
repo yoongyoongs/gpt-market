@@ -7,6 +7,26 @@ from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
+from app.v3.domain.evidence import (
+    EntityLink,
+    EvidenceConflict,
+    EvidenceFetchRun,
+    EvidenceReadQuery,
+    EvidenceRelation,
+    EvidenceRepositoryPage,
+    EvidenceSource,
+    NormalizedEvidence,
+    ParseAttempt,
+    RawDocument,
+    SecurityEvidenceView,
+)
+from app.v3.domain.features import (
+    FeaturePage,
+    FeatureQuery,
+    FeatureRun,
+    MarketRegimeSnapshot,
+    SecurityFeature,
+)
 from app.v3.domain.market_data import (
     AdjustmentFactorRevision,
     AdjustType,
@@ -17,29 +37,17 @@ from app.v3.domain.market_data import (
     MarketDataIngestionRun,
     UniverseSnapshot,
 )
-from app.v3.domain.features import FeaturePage, FeatureQuery, FeatureRun, MarketRegimeSnapshot, SecurityFeature
-from app.v3.domain.evidence import (
-    EntityLink,
-    EvidenceConflict,
-    EvidenceFetchRun,
-    EvidenceRelation,
-    EvidenceReadQuery,
-    EvidenceRepositoryPage,
-    EvidenceSource,
-    NormalizedEvidence,
-    ParseAttempt,
-    RawDocument,
-    SecurityEvidenceView,
-)
 from app.v3.domain.recall import (
     PerformanceObservation,
     RawOpportunity,
+    RawOpportunityReadPage,
     RecallChannel,
     RecallFeatureView,
-    RecallResult,
+    RecallMissEvaluation,
+    RecallMissReadPage,
     RecallReadPage,
+    RecallResult,
     RecallRun,
-    RawOpportunityReadPage,
 )
 
 
@@ -139,6 +147,29 @@ class RecallRepository(Protocol):
         limit: int,
         cursor: str | None,
     ) -> RawOpportunityReadPage | None: ...
+
+    async def pending_observations(
+        self, *, as_of: datetime, limit: int
+    ) -> tuple[PerformanceObservation, ...]: ...
+
+    async def recalled_security_keys(
+        self, observations: tuple[PerformanceObservation, ...]
+    ) -> set[tuple[UUID, UUID]]: ...
+
+    async def publish_maturities(
+        self,
+        observations: tuple[PerformanceObservation, ...],
+        evaluations: tuple[RecallMissEvaluation, ...],
+    ) -> set[UUID]: ...
+
+    async def read_misses(
+        self,
+        *,
+        threshold_version: str | None,
+        only_misses: bool,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallMissReadPage: ...
 
 
 class EvidenceRepository(Protocol):

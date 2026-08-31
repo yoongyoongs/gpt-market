@@ -141,6 +141,8 @@ def upgrade() -> None:
         sa.Column("raw_return", sa.Numeric(20, 10)),
         sa.Column("benchmark_return", sa.Numeric(20, 10)),
         sa.Column("excess_return", sa.Numeric(20, 10)),
+        sa.Column("unavailable_reason", sa.String(256)),
+        sa.Column("supersedes_observation_id", sa.Uuid()),
         sa.Column("content_hash", sa.String(64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint("horizon_sessions IN (3,5,10)", name="ck_performance_observations_valid_horizon"),
@@ -149,17 +151,33 @@ def upgrade() -> None:
         sa.CheckConstraint("known_at >= as_of", name="ck_performance_observations_known_after_as_of"),
         sa.CheckConstraint("baseline_price > 0 AND (future_price IS NULL OR future_price > 0)", name="ck_performance_observations_positive_prices"),
         sa.CheckConstraint(
-            "(status = 'PENDING' AND future_price IS NULL AND raw_return IS NULL AND excess_return IS NULL) OR "
-            "(status = 'MATURED' AND future_price IS NOT NULL AND raw_return IS NOT NULL) OR "
-            "status = 'UNAVAILABLE'",
+            "(status = 'PENDING' AND future_price IS NULL AND raw_return IS NULL "
+            "AND benchmark_return IS NULL AND excess_return IS NULL "
+            "AND unavailable_reason IS NULL AND supersedes_observation_id IS NULL) OR "
+            "(status = 'MATURED' AND future_price IS NOT NULL AND raw_return IS NOT NULL "
+            "AND unavailable_reason IS NULL AND supersedes_observation_id IS NOT NULL "
+            "AND known_at >= matures_at) OR "
+            "(status = 'UNAVAILABLE' AND future_price IS NULL AND raw_return IS NULL "
+            "AND benchmark_return IS NULL AND excess_return IS NULL "
+            "AND unavailable_reason IS NOT NULL AND supersedes_observation_id IS NOT NULL "
+            "AND known_at >= matures_at)",
             name="ck_performance_observations_status_payload",
         ),
         sa.ForeignKeyConstraint(["recall_run_id"], [f"{SCHEMA}.recall_runs.recall_run_id"], name="fk_performance_observations_run"),
         sa.ForeignKeyConstraint(["security_id"], [f"{SCHEMA}.securities.security_id"], name="fk_performance_observations_security"),
+        sa.ForeignKeyConstraint(["supersedes_observation_id"], [f"{SCHEMA}.performance_observations.observation_id"], name="fk_performance_observations_supersedes"),
         sa.PrimaryKeyConstraint("observation_id", name="pk_performance_observations"),
-        sa.UniqueConstraint("recall_run_id", "security_id", "horizon_sessions", name="uq_performance_observations_run_security_horizon"),
+        sa.UniqueConstraint("supersedes_observation_id", name="uq_performance_observations_supersedes"),
         sa.UniqueConstraint("content_hash", name="uq_performance_observations_content_hash"),
         schema=SCHEMA,
+    )
+    op.create_index(
+        "uq_performance_observations_pending",
+        "performance_observations",
+        ["recall_run_id", "security_id", "horizon_sessions"],
+        unique=True,
+        schema=SCHEMA,
+        postgresql_where=sa.text("supersedes_observation_id IS NULL"),
     )
     op.create_index("ix_performance_observations_maturity", "performance_observations", ["status", "matures_at"], schema=SCHEMA)
     op.create_table(
@@ -199,6 +217,7 @@ def downgrade() -> None:
         op.execute(f"DROP TRIGGER IF EXISTS prevent_mutation ON {SCHEMA}.{table_name}")
     op.drop_table("recall_miss_evaluations", schema=SCHEMA)
     op.drop_index("ix_performance_observations_maturity", table_name="performance_observations", schema=SCHEMA)
+    op.drop_index("uq_performance_observations_pending", table_name="performance_observations", schema=SCHEMA)
     op.drop_table("performance_observations", schema=SCHEMA)
     op.drop_table("raw_opportunities", schema=SCHEMA)
     op.drop_index("ix_recall_results_run_security", table_name="recall_results", schema=SCHEMA)

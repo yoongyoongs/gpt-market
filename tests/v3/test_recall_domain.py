@@ -16,7 +16,6 @@ from app.v3.domain.recall import (
     RecallRunStatus,
 )
 
-
 NOW = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
 
 
@@ -99,10 +98,39 @@ def test_pending_observation_cannot_leak_future_results() -> None:
     assert pending.future_price is None
     with pytest.raises(ValidationError, match="pending observation cannot contain future"):
         PerformanceObservation.build(**values, future_price=12, raw_return=0.2)
-    with pytest.raises(ValidationError, match="requires mature time"):
+    with pytest.raises(ValidationError, match="must supersede"):
         PerformanceObservation.build(
             **{**values, "status": ObservationStatus.MATURED},
             future_price=12, raw_return=0.2,
+        )
+    with pytest.raises(ValidationError, match="cannot be known before maturity"):
+        PerformanceObservation.build(
+            **{**values, "status": ObservationStatus.MATURED},
+            future_price=12,
+            raw_return=0.2,
+            supersedes_observation_id=pending.observation_id,
+        )
+
+
+def test_mature_observation_appends_to_pending_and_validates_returns() -> None:
+    pending = PerformanceObservation.build(
+        recall_run_id=uuid4(), security_id=uuid4(), horizon_sessions=3,
+        status=ObservationStatus.PENDING, as_of=NOW,
+        matures_at=NOW + timedelta(days=3), known_at=NOW, baseline_price=10,
+    )
+    matured = PerformanceObservation.build(
+        recall_run_id=pending.recall_run_id, security_id=pending.security_id,
+        horizon_sessions=pending.horizon_sessions, status=ObservationStatus.MATURED,
+        as_of=pending.as_of, matures_at=pending.matures_at,
+        known_at=pending.matures_at, baseline_price=pending.baseline_price,
+        future_price=12, raw_return=0.2, benchmark_return=0.05,
+        excess_return=0.15, supersedes_observation_id=pending.observation_id,
+    )
+    assert matured.supersedes_observation_id == pending.observation_id
+    with pytest.raises(ValidationError, match="raw_return does not match"):
+        PerformanceObservation.build(
+            **matured.model_dump(exclude={"observation_id", "content_hash", "raw_return"}),
+            raw_return=0.19,
         )
 
 

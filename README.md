@@ -47,6 +47,8 @@ V2 选股作为并行能力保留 V1，不覆盖旧工具：
 - MCP：`scan_mainboard_v2`、`scan_mainboard_ab`
 - REST/GPT：`GET /scan/v2`、`GET /gpt/{secret}/scan/v2`、`GET /gpt/{secret}/scan/v2/html`、`GET /gpt/{secret}/scan/ab`
 
+V3 默认关闭并与 Legacy 隔离。当前开发 READ 包括 `GET /api/v3/universe/features`、`market-regime`、`evidence/{subject_type}/{subject_id}`、`recalls`、`raw-opportunities` 和 `recalls/misses`；必须启用 `V3_ENABLED` 并将 PostgreSQL 迁移到对应 Phase，不能把这些开发接口表述为已在生产上线。
+
 V1 仍按 `total_score` 排名；V2 按 `opportunity_score` 排名，并返回 `raw_top30`、`action_top30`、`top100`、`score_version=v2`、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 `coverage=false`、`score=null` 和 `missing_fields` 暴露。
 
 REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kline/{code}`、`/detail/{code}`、`/market`、`/sectors`、`/scan`、`/scan/coverage`。REST 与 MCP 使用完全相同的 service/provider 层。

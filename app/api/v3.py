@@ -6,11 +6,10 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 
 from app.container import container
-from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.application.read_evidence import ReadEvidenceService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
-
+from app.v3.domain.features import FeatureQuery, FeatureSortField
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
 
@@ -155,3 +154,22 @@ async def raw_opportunities(
     if page is None:
         raise HTTPException(status_code=404, detail="published recall run not found")
     return page
+
+
+@router.get("/recalls/misses")
+async def recall_misses(
+    threshold_version: str | None = Query(default=None, min_length=1, max_length=64),
+    only_misses: bool = True,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    try:
+        async with _uow() as uow:
+            return await uow.recalls.read_misses(
+                threshold_version=threshold_version,
+                only_misses=only_misses,
+                limit=limit,
+                cursor=cursor,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

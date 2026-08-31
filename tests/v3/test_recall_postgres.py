@@ -9,8 +9,13 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.v3.application.mature_recall_observations import (
+    MatureRecallObservationsService,
+    RecallMissThreshold,
+)
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.run_multi_recall import RunMultiRecallService
+from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.domain.market_data import (
     Market,
     SecurityMember,
@@ -21,9 +26,12 @@ from app.v3.domain.market_data import (
 from app.v3.domain.recall import RecallChannel
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
 from app.v3.providers.calendar import TradingCalendarMetadata
-from app.v3.providers.recall import ChannelEvaluation, RecallCandidate
+from app.v3.providers.recall import (
+    ChannelEvaluation,
+    ObservationOutcome,
+    RecallCandidate,
+)
 from tests.v3.test_phase3_feature_postgres import make_revision
-
 
 DATABASE_URL = os.getenv("V3_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="V3_TEST_DATABASE_URL is not configured")
@@ -55,6 +63,33 @@ class AllRowsChannel:
                 coverage=item.coverage,
             ) for item in features),
         )
+
+
+class FirstRowChannel:
+    channel = RecallChannel.build(
+        code="POSTGRES_FIRST_ROW", version="v1", configuration={"fixture": True},
+        description="验证未召回证券仍可读取和成熟评价",
+    )
+
+    def evaluate(self, features, _evidence):
+        first = features[0]
+        return ChannelEvaluation(
+            evaluated_count=len(features), unavailable_count=0,
+            candidates=(RecallCandidate(
+                security_id=first.security_id, strength=0.5,
+                reasons=("fixture=first",), matched_features={"fixture": "first"},
+                coverage=first.coverage,
+            ),),
+        )
+
+
+class TwentyPercentOutcomeProvider:
+    async def resolve(self, observations, *, as_of):
+        return tuple(ObservationOutcome(
+            pending_observation_id=item.observation_id,
+            future_price=round(item.baseline_price * 1.2, 6),
+            benchmark_return=0.05,
+        ) for item in observations)
 
 
 @pytest.mark.asyncio
@@ -132,4 +167,51 @@ async def test_recall_run_atomic_publish_replay_full_observations_and_immutabili
                 "UPDATE v3.recall_runs SET coverage=0 WHERE recall_run_id=:id"
             ), {"id": first.recall_run_id})
         await connection.rollback()
+
+    first_only = await RunMultiRecallService(
+        lambda: SQLAlchemyUnitOfWork(sessions), Calendar(),
+        channels=(FirstRowChannel(),), clock=lambda: NOW + timedelta(minutes=2),
+    ).execute(feature_run_id=feature_run.feature_run_id)
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        full_universe = await uow.features.query(FeatureQuery(
+            feature_run_id=feature_run.feature_run_id,
+            sort_by=FeatureSortField.CODE,
+            fields=("code", "close"),
+            limit=10,
+        ))
+        first_only_raw = await uow.recalls.read_raw(
+            recall_run_id=first_only.recall_run_id, limit=10, cursor=None,
+        )
+    assert full_universe is not None and full_universe.total_count == 2
+    assert first_only_raw is not None and len(first_only_raw.items) == 1
+    assert first_only_raw.items[0].code in {
+        item["code"] for item in full_universe.items
+    }
+
+    maturity = MatureRecallObservationsService(
+        lambda: SQLAlchemyUnitOfWork(sessions),
+        TwentyPercentOutcomeProvider(),
+        threshold=RecallMissThreshold(
+            version="postgres-return-v1",
+            raw_return_gte=0.15,
+            excess_return_gte=0.1,
+        ),
+        clock=lambda: NOW + timedelta(days=30),
+    )
+    maturity_result = await maturity.execute(limit=100)
+    maturity_replay = await maturity.execute(limit=100)
+    assert maturity_result.requested_count == 12
+    assert maturity_result.matured_count == 12
+    assert maturity_result.miss_count == 3
+    assert maturity_replay.requested_count == 0
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        misses = await uow.recalls.read_misses(
+            threshold_version="postgres-return-v1",
+            only_misses=True,
+            limit=10,
+            cursor=None,
+        )
+    assert len(misses.items) == 3
+    assert {item.horizon_sessions for item in misses.items} == {3, 5, 10}
+    assert all(item.recall_run_id == first_only.recall_run_id for item in misses.items)
     await engine.dispose()

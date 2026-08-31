@@ -26,6 +26,9 @@
 - [Baseline 一致性修补摘要](Baseline一致性修补摘要.md)
 - [V3 Phase 1 基础验收记录](Phase1基础验收记录.md)
 - [V3 Phase 2 行情底座实施记录](Phase2行情底座实施记录.md)
+- [V3 Phase 3 全市场特征实施记录](Phase3全市场特征实施记录.md)
+- [V3 Phase 4 证据管道实施记录](Phase4证据管道实施记录.md)
+- [V3 Phase 5 多通道召回实施记录](Phase5多通道召回实施记录.md)
 - [服务器部署记录](deployment.md)
 - [东方财富字段实测记录](eastmoney_fields.md)
 - `eastmoney_probe.json`：带时间戳的字段探针样例；

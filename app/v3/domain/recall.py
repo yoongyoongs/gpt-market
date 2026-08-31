@@ -235,6 +235,8 @@ class PerformanceObservation(V3Contract):
     raw_return: float | None = None
     benchmark_return: float | None = None
     excess_return: float | None = None
+    unavailable_reason: str | None = Field(default=None, max_length=256)
+    supersedes_observation_id: UUID | None = None
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("horizon_sessions")
@@ -263,14 +265,43 @@ class PerformanceObservation(V3Contract):
     def validate_observation(self) -> "PerformanceObservation":
         if self.matures_at <= self.as_of or self.known_at < self.as_of:
             raise ValueError("observation time ordering is invalid")
-        if self.status is ObservationStatus.PENDING and any(
-            value is not None for value in (self.future_price, self.raw_return, self.excess_return)
-        ):
-            raise ValueError("pending observation cannot contain future results")
-        if self.status is ObservationStatus.MATURED and (
-            self.known_at < self.matures_at or self.future_price is None or self.raw_return is None
-        ):
-            raise ValueError("matured observation requires mature time and future result")
+        future_values = (
+            self.future_price,
+            self.raw_return,
+            self.benchmark_return,
+            self.excess_return,
+        )
+        if self.status is ObservationStatus.PENDING:
+            if self.supersedes_observation_id is not None:
+                raise ValueError("pending observation cannot supersede another observation")
+            if any(value is not None for value in future_values):
+                raise ValueError("pending observation cannot contain future results")
+            if self.unavailable_reason is not None:
+                raise ValueError("pending observation cannot contain unavailable_reason")
+        else:
+            if self.supersedes_observation_id is None:
+                raise ValueError("terminal observation must supersede its pending observation")
+            if self.known_at < self.matures_at:
+                raise ValueError("terminal observation cannot be known before maturity")
+        if self.status is ObservationStatus.MATURED:
+            if self.future_price is None or self.raw_return is None:
+                raise ValueError("matured observation requires future result")
+            if self.unavailable_reason is not None:
+                raise ValueError("matured observation cannot contain unavailable_reason")
+            expected_raw = round(self.future_price / self.baseline_price - 1, 10)
+            if abs(self.raw_return - expected_raw) > 1e-9:
+                raise ValueError("raw_return does not match observation prices")
+            if (self.benchmark_return is None) != (self.excess_return is None):
+                raise ValueError("benchmark_return and excess_return must be provided together")
+            if self.benchmark_return is not None:
+                expected_excess = round(self.raw_return - self.benchmark_return, 10)
+                if abs(self.excess_return - expected_excess) > 1e-9:
+                    raise ValueError("excess_return does not match raw and benchmark returns")
+        if self.status is ObservationStatus.UNAVAILABLE:
+            if any(value is not None for value in future_values):
+                raise ValueError("unavailable observation cannot contain future results")
+            if not self.unavailable_reason:
+                raise ValueError("unavailable observation requires unavailable_reason")
         if self.content_hash != self.computed_content_hash():
             raise ValueError("content_hash does not match performance observation")
         return self
@@ -339,6 +370,34 @@ class RecallMissEvaluation(V3Contract):
             key: value for key, value in payload.items() if key != "evaluation_id"
         })
         return cls(**payload, content_hash=content_hash)
+
+
+class RecallMissReadItem(V3Contract):
+    evaluation_id: UUID
+    observation_id: UUID
+    recall_run_id: UUID
+    security_id: UUID
+    market: str
+    code: str
+    name: str
+    horizon_sessions: int
+    as_of: datetime
+    matures_at: datetime
+    raw_return: float
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    threshold_version: str
+    threshold_spec: dict[str, Any]
+    was_recalled: bool
+    is_exceptional: bool
+    miss_type: str | None = None
+    evaluated_at: datetime
+    known_at: datetime
+
+
+class RecallMissReadPage(V3Contract):
+    items: tuple[RecallMissReadItem, ...]
+    next_cursor: str | None = None
 
 
 class RecallReadItem(V3Contract):

@@ -6,42 +6,23 @@ from uuid import UUID
 from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.market_data import (
-    AdjustmentFactorRevision,
-    AdjustType,
-    BarIngestionTarget,
-    BarPeriod,
-    BarSeriesRevision,
-    CorporateAction,
-    IngestionRunStatus,
-    Market,
-    MarketDataIngestionRun,
-    SecurityMember,
-    UniverseSnapshot,
-    MarketBar,
-    BarSeriesRevisionContent,
-    PointInTimePrecision,
-)
-from app.v3.domain.features import (
-    FeaturePage, FeatureQuery, FeatureRun, FeatureRunStatus, FeatureSortField,
-    MarketRegimeSnapshot, SecurityFeature,
-)
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
-    EvidenceConflict,
     EvidenceAvailability,
+    EvidenceConflict,
     EvidenceFetchRun,
     EvidenceMatchType,
     EvidenceReadQuery,
+    EvidenceRelation,
     EvidenceRepositoryPage,
     EvidenceRepositoryView,
-    EvidenceRelation,
     EvidenceSource,
     EvidenceSourceType,
     FetchRunStatus,
@@ -50,51 +31,81 @@ from app.v3.domain.evidence import (
     RawDocument,
     SecurityEvidenceView,
 )
+from app.v3.domain.features import (
+    FeaturePage,
+    FeatureQuery,
+    FeatureRun,
+    FeatureRunStatus,
+    FeatureSortField,
+    MarketRegimeSnapshot,
+    SecurityFeature,
+)
+from app.v3.domain.hashing import canonical_hash, canonical_json
+from app.v3.domain.market_data import (
+    AdjustmentFactorRevision,
+    AdjustType,
+    BarIngestionTarget,
+    BarPeriod,
+    BarSeriesRevision,
+    BarSeriesRevisionContent,
+    CorporateAction,
+    IngestionRunStatus,
+    Market,
+    MarketBar,
+    MarketDataIngestionRun,
+    PointInTimePrecision,
+    SecurityMember,
+    UniverseSnapshot,
+)
 from app.v3.domain.recall import (
+    ObservationStatus,
     PerformanceObservation,
     RawOpportunity,
     RawOpportunityReadItem,
     RawOpportunityReadPage,
     RecallChannel,
     RecallFeatureView,
+    RecallMissEvaluation,
+    RecallMissReadItem,
+    RecallMissReadPage,
     RecallReadItem,
     RecallReadPage,
     RecallResult,
     RecallRun,
     RecallRunStatus,
 )
-from app.v3.domain.hashing import canonical_hash, canonical_json
 from app.v3.infrastructure.db.models import (
-    AgentTaskModel,
     AdjustmentFactorModel,
     AdjustmentFactorRevisionModel,
+    AgentTaskModel,
     AuditEventModel,
     BarSeriesRevisionModel,
     CorporateActionModel,
+    EvidenceConflictMemberModel,
+    EvidenceConflictModel,
+    EvidenceEntityLinkModel,
+    EvidenceFetchRunModel,
+    EvidenceRecordModel,
+    EvidenceRelationModel,
+    EvidenceSourceModel,
+    FeatureRunModel,
     MarketBarModel,
     MarketDataIngestionRunModel,
+    MarketRegimeSnapshotModel,
+    PerformanceObservationModel,
+    RawDocumentModel,
+    RawDocumentParseAttemptModel,
+    RawOpportunityModel,
+    RecallChannelModel,
+    RecallMissEvaluationModel,
+    RecallResultModel,
+    RecallRunModel,
+    SecurityFeatureModel,
     SecurityModel,
     UniverseDiffModel,
     UniverseMemberModel,
     UniverseSnapshotModel,
     UniverseSourceModel,
-    FeatureRunModel,
-    SecurityFeatureModel,
-    MarketRegimeSnapshotModel,
-    RecallChannelModel,
-    RecallRunModel,
-    RecallResultModel,
-    RawOpportunityModel,
-    PerformanceObservationModel,
-    EvidenceSourceModel,
-    RawDocumentModel,
-    EvidenceRecordModel,
-    RawDocumentParseAttemptModel,
-    EvidenceEntityLinkModel,
-    EvidenceFetchRunModel,
-    EvidenceRelationModel,
-    EvidenceConflictModel,
-    EvidenceConflictMemberModel,
 )
 
 
@@ -1716,6 +1727,187 @@ class SQLAlchemyRecallRepository:
             run=self._run(run_model), items=items, next_cursor=next_cursor
         )
 
+    async def pending_observations(
+        self, *, as_of: datetime, limit: int
+    ) -> tuple[PerformanceObservation, ...]:
+        terminal = aliased(PerformanceObservationModel)
+        models = (
+            await self._session.execute(
+                select(PerformanceObservationModel)
+                .where(
+                    PerformanceObservationModel.status == "PENDING",
+                    PerformanceObservationModel.matures_at <= as_of,
+                    ~exists(
+                        select(terminal.observation_id).where(
+                            terminal.supersedes_observation_id
+                            == PerformanceObservationModel.observation_id
+                        )
+                    ),
+                )
+                .order_by(
+                    PerformanceObservationModel.matures_at,
+                    PerformanceObservationModel.observation_id,
+                )
+                .limit(limit)
+            )
+        ).scalars().all()
+        return tuple(self._observation(model) for model in models)
+
+    async def recalled_security_keys(
+        self, observations: tuple[PerformanceObservation, ...]
+    ) -> set[tuple[UUID, UUID]]:
+        if not observations:
+            return set()
+        expected = {
+            (item.recall_run_id, item.security_id) for item in observations
+        }
+        rows = (
+            await self._session.execute(
+                select(
+                    RawOpportunityModel.recall_run_id,
+                    RawOpportunityModel.security_id,
+                )
+                .where(
+                    RawOpportunityModel.recall_run_id.in_(
+                        {item[0] for item in expected}
+                    ),
+                    RawOpportunityModel.security_id.in_(
+                        {item[1] for item in expected}
+                    ),
+                )
+                .distinct()
+            )
+        ).all()
+        return {tuple(row) for row in rows} & expected
+
+    async def publish_maturities(
+        self,
+        observations: tuple[PerformanceObservation, ...],
+        evaluations: tuple[RecallMissEvaluation, ...],
+    ) -> set[UUID]:
+        if not observations:
+            return set()
+        evaluation_by_observation = {
+            item.observation_id: item for item in evaluations
+        }
+        if not set(evaluation_by_observation).issubset(
+            {item.observation_id for item in observations}
+        ):
+            raise ValueError("evaluation must reference a supplied mature observation")
+        inserted_ids = set((
+            await self._session.execute(
+                insert(PerformanceObservationModel)
+                .values([item.model_dump(mode="python") for item in observations])
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        PerformanceObservationModel.supersedes_observation_id
+                    ]
+                )
+                .returning(PerformanceObservationModel.observation_id)
+            )
+        ).scalars().all())
+        self._session.add_all(
+            RecallMissEvaluationModel(**evaluation.model_dump(mode="python"))
+            for observation_id, evaluation in evaluation_by_observation.items()
+            if observation_id in inserted_ids
+        )
+        return inserted_ids
+
+    async def read_misses(
+        self,
+        *,
+        threshold_version: str | None,
+        only_misses: bool,
+        limit: int,
+        cursor: str | None,
+    ) -> RecallMissReadPage:
+        filters = []
+        if threshold_version:
+            filters.append(
+                RecallMissEvaluationModel.threshold_version == threshold_version
+            )
+        if only_misses:
+            filters.extend((
+                RecallMissEvaluationModel.is_exceptional.is_(True),
+                RecallMissEvaluationModel.was_recalled.is_(False),
+            ))
+        cursor_values = self._decode_read_cursor(cursor, "recall_miss")
+        if cursor_values:
+            last_evaluated_at = datetime.fromisoformat(cursor_values[0])
+            last_id = UUID(cursor_values[1])
+            filters.append(or_(
+                RecallMissEvaluationModel.evaluated_at < last_evaluated_at,
+                and_(
+                    RecallMissEvaluationModel.evaluated_at == last_evaluated_at,
+                    RecallMissEvaluationModel.evaluation_id < last_id,
+                ),
+            ))
+        rows = (
+            await self._session.execute(
+                select(
+                    RecallMissEvaluationModel,
+                    PerformanceObservationModel,
+                    SecurityModel,
+                )
+                .join(
+                    PerformanceObservationModel,
+                    PerformanceObservationModel.observation_id
+                    == RecallMissEvaluationModel.observation_id,
+                )
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id
+                    == PerformanceObservationModel.security_id,
+                )
+                .where(*filters)
+                .order_by(
+                    RecallMissEvaluationModel.evaluated_at.desc(),
+                    RecallMissEvaluationModel.evaluation_id.desc(),
+                )
+                .limit(limit + 1)
+            )
+        ).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        items = tuple(RecallMissReadItem(
+            evaluation_id=evaluation.evaluation_id,
+            observation_id=observation.observation_id,
+            recall_run_id=observation.recall_run_id,
+            security_id=observation.security_id,
+            market=security.market,
+            code=security.code,
+            name=security.name,
+            horizon_sessions=observation.horizon_sessions,
+            as_of=observation.as_of,
+            matures_at=observation.matures_at,
+            raw_return=float(observation.raw_return),
+            benchmark_return=(
+                None
+                if observation.benchmark_return is None
+                else float(observation.benchmark_return)
+            ),
+            excess_return=(
+                None
+                if observation.excess_return is None
+                else float(observation.excess_return)
+            ),
+            threshold_version=evaluation.threshold_version,
+            threshold_spec=evaluation.threshold_spec,
+            was_recalled=evaluation.was_recalled,
+            is_exceptional=evaluation.is_exceptional,
+            miss_type=evaluation.miss_type,
+            evaluated_at=evaluation.evaluated_at,
+            known_at=evaluation.known_at,
+        ) for evaluation, observation, security in rows)
+        next_cursor = None
+        if has_more and rows:
+            evaluation = rows[-1][0]
+            next_cursor = self._encode_read_cursor(
+                "recall_miss",
+                (evaluation.evaluated_at.isoformat(), str(evaluation.evaluation_id)),
+            )
+        return RecallMissReadPage(items=items, next_cursor=next_cursor)
+
     async def _read_run(self, recall_run_id: UUID | None) -> RecallRunModel | None:
         statement = select(RecallRunModel)
         if recall_run_id is not None:
@@ -1750,6 +1942,30 @@ class SQLAlchemyRecallRepository:
             hit_security_count=model.hit_security_count,
             coverage=float(model.coverage),
             errors=model.errors,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _observation(model: PerformanceObservationModel) -> PerformanceObservation:
+        def number(value):
+            return None if value is None else float(value)
+
+        return PerformanceObservation(
+            observation_id=model.observation_id,
+            recall_run_id=model.recall_run_id,
+            security_id=model.security_id,
+            horizon_sessions=model.horizon_sessions,
+            status=ObservationStatus(model.status),
+            as_of=model.as_of,
+            matures_at=model.matures_at,
+            known_at=model.known_at,
+            baseline_price=float(model.baseline_price),
+            future_price=number(model.future_price),
+            raw_return=number(model.raw_return),
+            benchmark_return=number(model.benchmark_return),
+            excess_return=number(model.excess_return),
+            unavailable_reason=model.unavailable_reason,
+            supersedes_observation_id=model.supersedes_observation_id,
             content_hash=model.content_hash,
         )
 
