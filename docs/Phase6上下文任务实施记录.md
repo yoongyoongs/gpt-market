@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01～P6-06 已完成；按用户授权继续 P6-07 本地验收
+> 当前状态：P6-01～P6-06 已完成；P6-07 本地预验收完成，等待晚间 PostgreSQL 17/真实数据/公网验收
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -26,7 +26,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | DONE | 三级预算、Evidence Selection、不可变 Repository；本地全量 `198 passed, 25 skipped` |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | DONE | Registry/UoW/确定性调度登记；本地全量 `200 passed, 25 skipped` |
 | P6-06 | ChatGPT READ JSON 接线与契约测试 | DONE | 全部新增接口只读 JSON；本地全量 `202 passed, 25 skipped` |
-| P6-07 | 全市场性能验收与 Architecture Gate | TODO | Phase 6 最终验收 |
+| P6-07 | 全市场性能验收与 Architecture Gate | READY_FOR_EXTERNAL_VALIDATION | 本地 Gate `205 passed, 25 skipped`；隔离 PostgreSQL/5,551/P95/公网待晚间执行 |
 
 ## 3. P6-01 已冻结契约
 
@@ -151,6 +151,23 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - V3 Feature Flag 关闭时继续 503；机器接口均为 JSON；本 Task 未增加任何 POST/PATCH/PUT/DELETE，也未实现 Phase 7 Import；
 - 专项契约回归 `12 passed, 2 warnings`；全量本地回归 `202 passed, 25 skipped, 2 warnings`。未连接服务器，公网/真实 PostgreSQL 验收待晚间执行。
 
-## 11. 下一步
+## 11. P6-07 本地预验收与外部 Gate
 
-按用户授权继续 P6-07 本地性能与 Architecture Gate 预验收。服务器 PostgreSQL 17、真实 5,551 数据和公网验收必须保持待执行，不能虚报完成。
+- 新增 `scripts/v3_phase6_acceptance.py`，要求显式提供隔离 `V3_TEST_DATABASE_URL`，不默认连接生产库；
+- 验收脚本从真实 Published Feature Run 读取 20–100 只候选，构建 Candidate Comparison 及 FAST/NORMAL/DEEP Context；
+- 脚本验证候选数量/连续顺序、无统一 Final Score、三级预算，并测量 Comparison、NORMAL Context 和已存 Context READ 的 Median/P95/Max；
+- 性能门禁：Comparison P95 < 500ms、Context P95 < 500ms、已存 Context READ P95 < 200ms；输出结构化 JSON，任一门禁失败返回非零退出码；
+- 本地 Architecture Gate 专项 `13 passed, 1 warning`；最终本地全量回归 `205 passed, 25 skipped, 2 warnings`；
+- 按用户要求本轮未连接服务器，因此 PostgreSQL 17 Migration/Repository、真实 5,551 数据、实际 P95、公网 JSON 和 V1/V2 生产健康检查均仍是外部 Gate，P6-07 不标记 DONE。
+
+## 12. 晚间验收命令与停止点
+
+在隔离 PostgreSQL 17 且已具备 Published Feature/Recall/Evidence 数据的环境执行：
+
+```bash
+python scripts/v3_phase6_acceptance.py \
+  --database-url "$V3_TEST_DATABASE_URL" \
+  --repetitions 20
+```
+
+结果 `passed=true` 后，还需执行完整测试、V3 READ JSON HTTP/公网探测和 V1/V2 健康检查，再将 P6-07 改为 DONE。当前停止，不进入 Phase 7。
