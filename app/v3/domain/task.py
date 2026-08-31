@@ -186,6 +186,11 @@ class TaskRun(V3Contract):
         return self
 
 
+class TaskRunReadPage(V3Contract):
+    items: tuple[TaskRun, ...]
+    next_cursor: str | None = None
+
+
 def derive_task_run_status(
     counts: TaskGroupCounts, *, cancelled: bool = False, grace_period_expired: bool = False
 ) -> TaskRunStatus:

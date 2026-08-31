@@ -92,6 +92,7 @@ from app.v3.domain.task import (
     TaskGroupCounts,
     TaskProfile,
     TaskRun,
+    TaskRunReadPage,
     TaskRunStatus,
 )
 from app.v3.infrastructure.db.models import (
@@ -2834,6 +2835,15 @@ class SQLAlchemyTaskRegistryRepository:
         )
         return None if model is None else self._profile(model)
 
+    async def latest_profile(self, profile_code: str) -> TaskProfile | None:
+        model = await self._session.scalar(
+            select(TaskProfileModel)
+            .where(TaskProfileModel.profile_code == profile_code)
+            .order_by(TaskProfileModel.version.desc())
+            .limit(1)
+        )
+        return None if model is None else self._profile(model)
+
     async def publish_expected_run(self, expected_run: ExpectedRun) -> bool:
         await self._validate_profile(
             expected_run.task_profile_id, expected_run.task_profile_version
@@ -2914,6 +2924,73 @@ class SQLAlchemyTaskRegistryRepository:
     async def get_task_run(self, task_run_id: UUID) -> TaskRun | None:
         model = await self._session.get(TaskRunModel, task_run_id)
         return None if model is None else self._task_run(model)
+
+    async def latest_task_context(
+        self, profile_code: str
+    ) -> tuple[TaskProfile, ExpectedRun | None, TaskRun | None] | None:
+        profile = await self._session.scalar(
+            select(TaskProfileModel)
+            .where(TaskProfileModel.profile_code == profile_code)
+            .order_by(TaskProfileModel.version.desc())
+            .limit(1)
+        )
+        if profile is None:
+            return None
+        expected = await self._session.scalar(
+            select(ExpectedRunModel)
+            .where(ExpectedRunModel.task_profile_id == profile.task_profile_id)
+            .order_by(
+                ExpectedRunModel.scheduled_for.desc(),
+                ExpectedRunModel.expected_run_id.desc(),
+            )
+            .limit(1)
+        )
+        run = None if expected is None else await self._session.scalar(
+            select(TaskRunModel).where(
+                TaskRunModel.expected_run_id == expected.expected_run_id
+            )
+        )
+        return (
+            self._profile(profile),
+            None if expected is None else self._expected(expected),
+            None if run is None else self._task_run(run),
+        )
+
+    async def read_task_runs(
+        self, *, limit: int, cursor: str | None = None
+    ) -> TaskRunReadPage:
+        if not 1 <= limit <= 200:
+            raise ValueError("task run limit must be between 1 and 200")
+        decoded = self._decode_task_cursor(cursor)
+        statement = select(TaskRunModel)
+        if decoded is not None:
+            created_at, task_run_id = decoded
+            statement = statement.where(
+                or_(
+                    TaskRunModel.created_at < created_at,
+                    and_(
+                        TaskRunModel.created_at == created_at,
+                        TaskRunModel.task_run_id < task_run_id,
+                    ),
+                )
+            )
+        models = (
+            await self._session.execute(
+                statement.order_by(
+                    TaskRunModel.created_at.desc(), TaskRunModel.task_run_id.desc()
+                ).limit(limit + 1)
+            )
+        ).scalars().all()
+        has_more = len(models) > limit
+        visible = models[:limit]
+        next_cursor = None
+        if has_more and visible:
+            last = visible[-1]
+            next_cursor = self._encode_task_cursor(last.created_at, last.task_run_id)
+        return TaskRunReadPage(
+            items=tuple(self._task_run(model) for model in visible),
+            next_cursor=next_cursor,
+        )
 
     async def save_task_run(
         self, task_run: TaskRun, *, expected_version: int
@@ -3032,6 +3109,31 @@ class SQLAlchemyTaskRegistryRepository:
             "completed_at": run.completed_at,
             "row_version": run.row_version,
         }
+
+    @staticmethod
+    def _encode_task_cursor(created_at: datetime, task_run_id: UUID) -> str:
+        import base64
+        return base64.urlsafe_b64encode(canonical_json({
+            "created_at": created_at,
+            "task_run_id": task_run_id,
+        }).encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_task_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
+        import base64
+        import json
+        if cursor is None:
+            return None
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(
+                cursor + "=" * (-len(cursor) % 4)
+            ))
+            created_at = datetime.fromisoformat(payload["created_at"].replace("Z", "+00:00"))
+            if created_at.tzinfo is None:
+                raise ValueError
+            return created_at, UUID(payload["task_run_id"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid task run cursor") from exc
 
 
 class SQLAlchemyCorporateActionRepository:

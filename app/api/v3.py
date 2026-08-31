@@ -10,6 +10,10 @@ from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
 )
+from app.v3.application.build_context_pack import (
+    BuildContextPackCommand,
+    BuildContextPackService,
+)
 from app.v3.application.read_evidence import ReadEvidenceService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
@@ -88,6 +92,11 @@ async def market_regime():
     return snapshot
 
 
+@router.get("/market-overview")
+async def market_overview():
+    return await market_regime()
+
+
 @router.get("/candidates/comparison-pack")
 async def candidate_comparison_pack(
     candidate_set_id: UUID | None = None,
@@ -156,6 +165,71 @@ async def evidence_for_subject(
     return await ReadEvidenceService(_uow).execute(query)
 
 
+@router.get("/stocks/{code}/evidence")
+async def stock_evidence(
+    code: str,
+    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+    as_of: datetime | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    subject_id = f"{market}:{code}" if market else code
+    return await evidence_for_subject(
+        "SECURITY", subject_id, as_of=as_of, limit=limit
+    )
+
+
+@router.get("/stocks/{code}/context-pack")
+async def stock_context_pack(
+    code: str,
+    profile: str = Query(min_length=1, max_length=64),
+    profile_version: int | None = Query(default=None, ge=1),
+    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+    as_of: datetime | None = None,
+    feature_run_id: UUID | None = None,
+    recall_run_id: UUID | None = None,
+    comparison_pack_id: UUID | None = None,
+):
+    try:
+        async with _uow() as uow:
+            task_profile = (
+                await uow.task_registry.latest_profile(profile)
+                if profile_version is None
+                else await uow.task_registry.get_profile_version(
+                    profile_code=profile, version=profile_version
+                )
+            )
+        if task_profile is None or not task_profile.enabled:
+            raise RepositoryNotFoundError("enabled task profile not found")
+        return await BuildContextPackService(_uow).execute(
+            BuildContextPackCommand(
+                context_level=task_profile.context_level,
+                subject_type="SECURITY",
+                subject_id=f"{market}:{code}" if market else code,
+                task_profile_id=task_profile.task_profile_id,
+                task_profile_version=task_profile.version,
+                as_of=as_of or datetime.now(timezone.utc),
+                feature_run_id=feature_run_id,
+                recall_run_id=recall_run_id,
+                comparison_pack_id=comparison_pack_id,
+            )
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/context-packs/{context_pack_id}")
+async def context_pack_by_id(context_pack_id: UUID):
+    async with _uow() as uow:
+        pack = await uow.context_packs.get(context_pack_id)
+    if pack is None:
+        raise HTTPException(status_code=404, detail="context pack not found")
+    return pack
+
+
 @router.get("/recalls")
 async def recall_results(
     recall_run_id: UUID | None = None,
@@ -215,3 +289,51 @@ async def recall_misses(
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/recalls/{run_id}")
+async def recall_run_results(
+    run_id: UUID,
+    channel: str | None = Query(default=None, min_length=1, max_length=64),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    return await recall_results(run_id, channel, limit, cursor)
+
+
+@router.get("/task-context/{profile}")
+async def task_context(profile: str):
+    async with _uow() as uow:
+        context = await uow.task_registry.latest_task_context(profile)
+    if context is None:
+        raise HTTPException(status_code=404, detail="task profile not found")
+    task_profile, expected_run, task_run = context
+    return {
+        "profile": task_profile,
+        "expected_run": expected_run,
+        "task_run": task_run,
+        "semantics": {
+            "expected_run": "scheduled ChatGPT task expectation; not server AI execution"
+        },
+    }
+
+
+@router.get("/task-runs")
+async def task_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+):
+    try:
+        async with _uow() as uow:
+            return await uow.task_registry.read_task_runs(limit=limit, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/task-runs/{task_run_id}")
+async def task_run_by_id(task_run_id: UUID):
+    async with _uow() as uow:
+        run = await uow.task_registry.get_task_run(task_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="task run not found")
+    return run

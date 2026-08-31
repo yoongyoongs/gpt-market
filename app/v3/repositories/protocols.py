@@ -55,7 +55,7 @@ from app.v3.domain.recall import (
     RecallResult,
     RecallRun,
 )
-from app.v3.domain.task import ExpectedRun, TaskProfile, TaskRun
+from app.v3.domain.task import ExpectedRun, TaskProfile, TaskRun, TaskRunReadPage
 
 
 class AgentTaskRepository(Protocol):
@@ -272,6 +272,8 @@ class TaskRegistryRepository(Protocol):
 
     async def get_profile_version(self, *, profile_code: str, version: int) -> TaskProfile | None: ...
 
+    async def latest_profile(self, profile_code: str) -> TaskProfile | None: ...
+
     async def publish_expected_run(self, expected_run: ExpectedRun) -> bool: ...
 
     async def get_expected_run(self, expected_run_id: UUID) -> ExpectedRun | None: ...
@@ -283,6 +285,14 @@ class TaskRegistryRepository(Protocol):
     async def create_task_run(self, task_run: TaskRun) -> bool: ...
 
     async def get_task_run(self, task_run_id: UUID) -> TaskRun | None: ...
+
+    async def latest_task_context(
+        self, profile_code: str
+    ) -> tuple[TaskProfile, ExpectedRun | None, TaskRun | None] | None: ...
+
+    async def read_task_runs(
+        self, *, limit: int, cursor: str | None = None
+    ) -> TaskRunReadPage: ...
 
     async def save_task_run(self, task_run: TaskRun, *, expected_version: int) -> bool: ...
 

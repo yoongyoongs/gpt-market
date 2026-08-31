@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01～P6-05 已完成；按用户授权继续 Phase 6 后续 Task
+> 当前状态：P6-01～P6-06 已完成；按用户授权继续 P6-07 本地验收
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -25,7 +25,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | P6-03 | Comparison Builder 与 N→TopK READ | DONE | `GET /api/v3/candidates/comparison-pack`；本地全量回归 `195 passed, 25 skipped` |
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | DONE | 三级预算、Evidence Selection、不可变 Repository；本地全量 `198 passed, 25 skipped` |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | DONE | Registry/UoW/确定性调度登记；本地全量 `200 passed, 25 skipped` |
-| P6-06 | ChatGPT READ JSON 接线与契约测试 | TODO | 依赖 P6-03–P6-05 |
+| P6-06 | ChatGPT READ JSON 接线与契约测试 | DONE | 全部新增接口只读 JSON；本地全量 `202 passed, 25 skipped` |
 | P6-07 | 全市场性能验收与 Architecture Gate | TODO | Phase 6 最终验收 |
 
 ## 3. P6-01 已冻结契约
@@ -141,6 +141,16 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - 本 Task 不解析 Cron、不替代交易日历 Scheduler，不实现 Phase 7 AI Result Import；
 - 专项回归 `10 passed`；全量本地回归 `200 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收待晚间执行。
 
-## 10. 下一步
+## 10. P6-06 实现与验证
 
-按用户授权继续 P6-06 ChatGPT READ JSON 接线与契约测试；保持独立提交。
+- 增加 `GET /api/v3/market-overview`、`GET /api/v3/recalls/{run_id}`；
+- 增加 `GET /api/v3/stocks/{code}/evidence`、`GET /api/v3/stocks/{code}/context-pack` 和 `GET /api/v3/context-packs/{context_pack_id}`；
+- 增加 `GET /api/v3/task-context/{profile}`、`GET /api/v3/task-runs`、`GET /api/v3/task-runs/{task_run_id}`；
+- Task Run 列表使用稳定 Cursor；Task Context 明确返回 Expected Run 只是计划中的 ChatGPT 任务，不表示服务器执行 AI；
+- 股票 Context 根据已发布 Task Profile 的 Context Level 构建，支持绑定 Feature/Recall/Comparison，错误映射为 404/409/422；
+- V3 Feature Flag 关闭时继续 503；机器接口均为 JSON；本 Task 未增加任何 POST/PATCH/PUT/DELETE，也未实现 Phase 7 Import；
+- 专项契约回归 `12 passed, 2 warnings`；全量本地回归 `202 passed, 25 skipped, 2 warnings`。未连接服务器，公网/真实 PostgreSQL 验收待晚间执行。
+
+## 11. 下一步
+
+按用户授权继续 P6-07 本地性能与 Architecture Gate 预验收。服务器 PostgreSQL 17、真实 5,551 数据和公网验收必须保持待执行，不能虚报完成。
