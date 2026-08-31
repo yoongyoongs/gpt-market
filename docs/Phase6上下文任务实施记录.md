@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01～P6-04 已完成；按用户授权继续 Phase 6 后续 Task
+> 当前状态：P6-01～P6-05 已完成；按用户授权继续 Phase 6 后续 Task
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -24,7 +24,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | P6-02 | 完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化 | DONE | `e669cac` 检查点；PostgreSQL 17.11 完整回归 `212 passed, 5 skipped` |
 | P6-03 | Comparison Builder 与 N→TopK READ | DONE | `GET /api/v3/candidates/comparison-pack`；本地全量回归 `195 passed, 25 skipped` |
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | DONE | 三级预算、Evidence Selection、不可变 Repository；本地全量 `198 passed, 25 skipped` |
-| P6-05 | Task Profile、Expected Run 与 Task Run Registry | TODO | 不实现 AI Import |
+| P6-05 | Task Profile、Expected Run 与 Task Run Registry | DONE | Registry/UoW/确定性调度登记；本地全量 `200 passed, 25 skipped` |
 | P6-06 | ChatGPT READ JSON 接线与契约测试 | TODO | 依赖 P6-03–P6-05 |
 | P6-07 | 全市场性能验收与 Architecture Gate | TODO | Phase 6 最终验收 |
 
@@ -131,6 +131,16 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - `SQLAlchemyContextPackRepository` 支持原子发布、ID/Hash 读取、有序 Selection 重建、时点和引用一致性验证；Unit of Work 已接线；
 - 专项回归 `14 passed`；全量本地回归 `198 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收按用户安排留待晚间执行。
 
-## 9. 下一步
+## 9. P6-05 实现与验证
 
-按用户授权继续 P6-05 Task Profile、Expected Run 与 Task Run Registry；保持独立提交。
+- `SQLAlchemyTaskRegistryRepository` 已实现 Task Profile 不可变版本发布、按 ID/Code+Version 读取；
+- Expected Run 支持幂等发布、读取和 `row_version` 乐观锁更新；Task Run 支持创建、读取和乐观锁更新；
+- Registry 校验 Profile Version、Expected Run/Profile 归属和 Context Pack ID/Hash，一致性冲突显式失败；
+- `RegisterExpectedTaskService` 按已验证 Profile 和明确 `scheduled_for` 原子登记 Expected Run + PENDING Task Run；Expected/Task ID 由 Profile+Schedule 确定性生成，重放零新增；
+- Window 使用 Profile `grace_seconds`，组计数来自 `expected_group_count`；Expected Run 仍只表达计划事实，不包含或声称 AI 执行状态；
+- 本 Task 不解析 Cron、不替代交易日历 Scheduler，不实现 Phase 7 AI Result Import；
+- 专项回归 `10 passed`；全量本地回归 `200 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收待晚间执行。
+
+## 10. 下一步
+
+按用户授权继续 P6-06 ChatGPT READ JSON 接线与契约测试；保持独立提交。

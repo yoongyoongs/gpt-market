@@ -10,6 +10,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyBarRepository,
     SQLAlchemyCandidateComparisonRepository,
     SQLAlchemyContextPackRepository,
+    SQLAlchemyTaskRegistryRepository,
     SQLAlchemyCorporateActionRepository,
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyFeatureRepository,
@@ -41,6 +42,7 @@ class SQLAlchemyUnitOfWork:
             self._session
         )
         self.context_packs = SQLAlchemyContextPackRepository(self._session)
+        self.task_registry = SQLAlchemyTaskRegistryRepository(self._session)
         return self
 
     async def __aexit__(

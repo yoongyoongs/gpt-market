@@ -86,6 +86,14 @@ from app.v3.domain.recall import (
     RecallRun,
     RecallRunStatus,
 )
+from app.v3.domain.task import (
+    ExpectedRun,
+    ExpectedRunStatus,
+    TaskGroupCounts,
+    TaskProfile,
+    TaskRun,
+    TaskRunStatus,
+)
 from app.v3.infrastructure.db.models import (
     AdjustmentFactorModel,
     AdjustmentFactorRevisionModel,
@@ -119,6 +127,8 @@ from app.v3.infrastructure.db.models import (
     SecurityFeatureModel,
     SecurityModel,
     TaskProfileModel,
+    ExpectedRunModel,
+    TaskRunModel,
     UniverseDiffModel,
     UniverseMemberModel,
     UniverseSnapshotModel,
@@ -2752,6 +2762,276 @@ class SQLAlchemyContextPackRepository:
             stale=model.stale,
             content_hash=model.content_hash,
         )
+
+
+class SQLAlchemyTaskRegistryRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish_profile(self, profile: TaskProfile) -> bool:
+        existing = await self.get_profile_version(
+            profile_code=profile.profile_code, version=profile.version
+        )
+        if existing is not None:
+            if existing.content_hash == profile.content_hash:
+                return False
+            raise RepositoryConflictError(
+                "task profile code/version already refers to different content"
+            )
+        inserted = (
+            await self._session.execute(
+                insert(TaskProfileModel)
+                .values(
+                    task_profile_id=profile.task_profile_id,
+                    profile_code=profile.profile_code,
+                    version=profile.version,
+                    schedule=profile.schedule,
+                    timezone=profile.timezone,
+                    trading_calendar=profile.trading_calendar_source,
+                    trading_calendar_source=profile.trading_calendar_source,
+                    trading_calendar_version=profile.trading_calendar_version,
+                    context_level=profile.context_level.value,
+                    comparison_first=profile.comparison_first,
+                    candidate_limit=profile.candidate_limit,
+                    topk_limit=profile.topk_limit,
+                    topk_context_level=None if profile.topk_context_level is None else profile.topk_context_level.value,
+                    output_schema=profile.output_schema,
+                    expected_group_count=profile.expected_group_count,
+                    grace_seconds=profile.grace_seconds,
+                    strategy_version=profile.strategy_version,
+                    enabled=profile.enabled,
+                    content_hash=profile.content_hash,
+                )
+                .on_conflict_do_nothing()
+                .returning(TaskProfileModel.task_profile_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            by_hash = await self._session.scalar(
+                select(TaskProfileModel).where(
+                    TaskProfileModel.content_hash == profile.content_hash
+                )
+            )
+            if by_hash is not None:
+                return False
+            raise RepositoryConflictError(
+                "task_profile_id already refers to different immutable content"
+            )
+        return True
+
+    async def get_profile(self, task_profile_id: UUID) -> TaskProfile | None:
+        model = await self._session.get(TaskProfileModel, task_profile_id)
+        return None if model is None else self._profile(model)
+
+    async def get_profile_version(
+        self, *, profile_code: str, version: int
+    ) -> TaskProfile | None:
+        model = await self._session.scalar(
+            select(TaskProfileModel).where(
+                TaskProfileModel.profile_code == profile_code,
+                TaskProfileModel.version == version,
+            )
+        )
+        return None if model is None else self._profile(model)
+
+    async def publish_expected_run(self, expected_run: ExpectedRun) -> bool:
+        await self._validate_profile(
+            expected_run.task_profile_id, expected_run.task_profile_version
+        )
+        inserted = (
+            await self._session.execute(
+                insert(ExpectedRunModel)
+                .values(
+                    expected_run_id=expected_run.expected_run_id,
+                    task_profile_id=expected_run.task_profile_id,
+                    task_profile_version=expected_run.task_profile_version,
+                    scheduled_for=expected_run.scheduled_for,
+                    window_end=expected_run.window_end,
+                    status=expected_run.status.value,
+                    known_at=expected_run.known_at,
+                    row_version=expected_run.row_version,
+                    content_hash=expected_run.content_hash,
+                )
+                .on_conflict_do_nothing()
+                .returning(ExpectedRunModel.expected_run_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is not None:
+            return True
+        replay = await self._session.scalar(
+            select(ExpectedRunModel).where(
+                ExpectedRunModel.content_hash == expected_run.content_hash
+            )
+        )
+        if replay is not None:
+            return False
+        raise RepositoryConflictError(
+            "expected run identity/schedule already refers to different content"
+        )
+
+    async def get_expected_run(self, expected_run_id: UUID) -> ExpectedRun | None:
+        model = await self._session.get(ExpectedRunModel, expected_run_id)
+        return None if model is None else self._expected(model)
+
+    async def save_expected_run(
+        self, expected_run: ExpectedRun, *, expected_version: int
+    ) -> bool:
+        if expected_run.row_version != expected_version + 1:
+            raise ValueError("expected run row_version must increment by one")
+        result = await self._session.execute(
+            update(ExpectedRunModel)
+            .where(
+                ExpectedRunModel.expected_run_id == expected_run.expected_run_id,
+                ExpectedRunModel.row_version == expected_version,
+            )
+            .values(
+                status=expected_run.status.value,
+                known_at=expected_run.known_at,
+                row_version=expected_run.row_version,
+                content_hash=expected_run.content_hash,
+            )
+        )
+        return result.rowcount == 1
+
+    async def create_task_run(self, task_run: TaskRun) -> bool:
+        await self._validate_task_run_references(task_run)
+        result = await self._session.execute(
+            insert(TaskRunModel)
+            .values(**self._task_run_values(task_run))
+            .on_conflict_do_nothing()
+            .returning(TaskRunModel.task_run_id)
+        )
+        inserted = result.scalar_one_or_none()
+        if inserted is not None:
+            return True
+        existing = await self.get_task_run(task_run.task_run_id)
+        if existing == task_run:
+            return False
+        raise RepositoryConflictError(
+            "task run identity/expected run already refers to different content"
+        )
+
+    async def get_task_run(self, task_run_id: UUID) -> TaskRun | None:
+        model = await self._session.get(TaskRunModel, task_run_id)
+        return None if model is None else self._task_run(model)
+
+    async def save_task_run(
+        self, task_run: TaskRun, *, expected_version: int
+    ) -> bool:
+        if task_run.row_version != expected_version + 1:
+            raise ValueError("task run row_version must increment by one")
+        await self._validate_task_run_references(task_run)
+        values = self._task_run_values(task_run)
+        values.pop("task_run_id")
+        values.pop("expected_run_id")
+        values.pop("task_profile_id")
+        values.pop("task_profile_version")
+        result = await self._session.execute(
+            update(TaskRunModel)
+            .where(
+                TaskRunModel.task_run_id == task_run.task_run_id,
+                TaskRunModel.row_version == expected_version,
+            )
+            .values(**values)
+        )
+        return result.rowcount == 1
+
+    async def _validate_profile(self, task_profile_id: UUID, version: int) -> None:
+        profile = await self._session.get(TaskProfileModel, task_profile_id)
+        if profile is None or profile.version != version:
+            raise RepositoryNotFoundError("task profile version does not exist")
+
+    async def _validate_task_run_references(self, run: TaskRun) -> None:
+        await self._validate_profile(run.task_profile_id, run.task_profile_version)
+        if run.expected_run_id is not None:
+            expected = await self._session.get(ExpectedRunModel, run.expected_run_id)
+            if (
+                expected is None
+                or expected.task_profile_id != run.task_profile_id
+                or expected.task_profile_version != run.task_profile_version
+            ):
+                raise RepositoryNotFoundError("expected run does not match task profile")
+        if run.context_pack_id is not None:
+            context = await self._session.get(ContextPackModel, run.context_pack_id)
+            if context is None or context.content_hash != run.context_pack_hash:
+                raise RepositoryNotFoundError("context pack id/hash does not match")
+
+    @staticmethod
+    def _profile(model: TaskProfileModel) -> TaskProfile:
+        return TaskProfile(
+            task_profile_id=model.task_profile_id,
+            profile_code=model.profile_code,
+            version=model.version,
+            schedule=model.schedule,
+            timezone=model.timezone,
+            trading_calendar_source=model.trading_calendar_source,
+            trading_calendar_version=model.trading_calendar_version,
+            context_level=ContextLevel(model.context_level),
+            comparison_first=model.comparison_first,
+            candidate_limit=model.candidate_limit,
+            topk_limit=model.topk_limit,
+            topk_context_level=None if model.topk_context_level is None else ContextLevel(model.topk_context_level),
+            output_schema=model.output_schema,
+            expected_group_count=model.expected_group_count,
+            grace_seconds=model.grace_seconds,
+            strategy_version=model.strategy_version,
+            enabled=model.enabled,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _expected(model: ExpectedRunModel) -> ExpectedRun:
+        return ExpectedRun(
+            expected_run_id=model.expected_run_id,
+            task_profile_id=model.task_profile_id,
+            task_profile_version=model.task_profile_version,
+            scheduled_for=model.scheduled_for,
+            window_end=model.window_end,
+            status=ExpectedRunStatus(model.status),
+            known_at=model.known_at,
+            row_version=model.row_version,
+            content_hash=model.content_hash,
+        )
+
+    @staticmethod
+    def _task_run(model: TaskRunModel) -> TaskRun:
+        return TaskRun(
+            task_run_id=model.task_run_id,
+            expected_run_id=model.expected_run_id,
+            task_profile_id=model.task_profile_id,
+            task_profile_version=model.task_profile_version,
+            status=TaskRunStatus(model.status),
+            counts=TaskGroupCounts(
+                expected=model.expected_group_count,
+                successful=model.successful_group_count,
+                failed=model.failed_group_count,
+                pending=model.pending_group_count,
+            ),
+            context_pack_id=model.context_pack_id,
+            context_pack_hash=model.context_pack_hash,
+            started_at=model.started_at,
+            completed_at=model.completed_at,
+            row_version=model.row_version,
+        )
+
+    @staticmethod
+    def _task_run_values(run: TaskRun) -> dict:
+        return {
+            "task_run_id": run.task_run_id,
+            "expected_run_id": run.expected_run_id,
+            "task_profile_id": run.task_profile_id,
+            "task_profile_version": run.task_profile_version,
+            "status": run.status.value,
+            "expected_group_count": run.counts.expected,
+            "successful_group_count": run.counts.successful,
+            "failed_group_count": run.counts.failed,
+            "pending_group_count": run.counts.pending,
+            "context_pack_id": run.context_pack_id,
+            "context_pack_hash": run.context_pack_hash,
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "row_version": run.row_version,
+        }
 
 
 class SQLAlchemyCorporateActionRepository:
