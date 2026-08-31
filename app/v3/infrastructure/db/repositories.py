@@ -12,6 +12,7 @@ from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.audit import AuditEvent
+from app.v3.domain.context import CandidateComparisonMember, CandidateComparisonPack
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
@@ -80,6 +81,8 @@ from app.v3.infrastructure.db.models import (
     AgentTaskModel,
     AuditEventModel,
     BarSeriesRevisionModel,
+    CandidateComparisonMemberModel,
+    CandidateComparisonPackModel,
     CorporateActionModel,
     EvidenceConflictMemberModel,
     EvidenceConflictModel,
@@ -106,6 +109,10 @@ from app.v3.infrastructure.db.models import (
     UniverseMemberModel,
     UniverseSnapshotModel,
     UniverseSourceModel,
+)
+from app.v3.repositories.errors import (
+    RepositoryConflictError,
+    RepositoryNotFoundError,
 )
 
 
@@ -1990,6 +1997,185 @@ class SQLAlchemyRecallRepository:
             return tuple(payload["values"])
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid recall cursor") from exc
+
+
+class SQLAlchemyCandidateComparisonRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish(self, pack: CandidateComparisonPack) -> bool:
+        existing = await self.get_by_content_hash(pack.content_hash)
+        if existing is not None:
+            return False
+        await self._validate_references(pack)
+        inserted = (
+            await self._session.execute(
+                insert(CandidateComparisonPackModel)
+                .values(
+                    comparison_pack_id=pack.comparison_pack_id,
+                    candidate_set_id=pack.candidate_set_id,
+                    builder_version=pack.builder_version,
+                    schema_version=pack.schema_version,
+                    field_profile_version=pack.field_profile_version,
+                    universe_snapshot_id=pack.universe_snapshot_id,
+                    feature_run_id=pack.feature_run_id,
+                    recall_run_id=pack.recall_run_id,
+                    regime_snapshot_id=pack.regime_snapshot_id,
+                    as_of=pack.as_of,
+                    known_at=pack.known_at,
+                    candidate_count=len(pack.members),
+                    coverage=pack.coverage,
+                    missing_summary=pack.missing_summary,
+                    trim_summary=pack.trim_summary,
+                    content_hash=pack.content_hash,
+                )
+                .on_conflict_do_nothing()
+                .returning(CandidateComparisonPackModel.comparison_pack_id)
+            )
+        ).scalar_one_or_none()
+        if inserted is None:
+            replay = await self.get_by_content_hash(pack.content_hash)
+            if replay is not None:
+                return False
+            raise RepositoryConflictError(
+                "comparison_pack_id already refers to different immutable content"
+            )
+        self._session.add_all(
+            CandidateComparisonMemberModel(
+                comparison_pack_id=pack.comparison_pack_id,
+                security_id=member.security_id,
+                candidate_order=member.candidate_order,
+                compact_payload=member.model_dump(
+                    mode="json",
+                    exclude={
+                        "security_id",
+                        "candidate_order",
+                        "coverage",
+                        "stale",
+                        "missing_fields",
+                    },
+                ),
+                coverage=member.coverage,
+                stale=member.stale,
+                missing_fields=list(member.missing_fields),
+            )
+            for member in pack.members
+        )
+        return True
+
+    async def get(
+        self, comparison_pack_id: UUID
+    ) -> CandidateComparisonPack | None:
+        model = await self._session.get(
+            CandidateComparisonPackModel, comparison_pack_id
+        )
+        return None if model is None else await self._pack(model)
+
+    async def get_by_content_hash(
+        self, content_hash: str
+    ) -> CandidateComparisonPack | None:
+        model = await self._session.scalar(
+            select(CandidateComparisonPackModel).where(
+                CandidateComparisonPackModel.content_hash == content_hash
+            )
+        )
+        return None if model is None else await self._pack(model)
+
+    async def _validate_references(self, pack: CandidateComparisonPack) -> None:
+        feature = await self._session.get(FeatureRunModel, pack.feature_run_id)
+        if feature is None or feature.status != FeatureRunStatus.PUBLISHED.value:
+            raise RepositoryNotFoundError("published feature run does not exist")
+        if feature.universe_snapshot_id != pack.universe_snapshot_id:
+            raise ValueError("feature run does not belong to universe snapshot")
+        if (
+            feature.completed_at is None
+            or feature.as_of > pack.as_of
+            or feature.completed_at > pack.as_of
+        ):
+            raise ValueError("feature run was not available at comparison as_of")
+        universe = await self._session.get(
+            UniverseSnapshotModel, pack.universe_snapshot_id
+        )
+        if universe is None:
+            raise RepositoryNotFoundError("universe snapshot does not exist")
+        if universe.known_at > pack.as_of:
+            raise ValueError("universe snapshot was not available at comparison as_of")
+        if pack.recall_run_id is not None:
+            recall = await self._session.get(RecallRunModel, pack.recall_run_id)
+            if recall is None or recall.status != RecallRunStatus.PUBLISHED.value:
+                raise RepositoryNotFoundError("published recall run does not exist")
+            if recall.feature_run_id != pack.feature_run_id:
+                raise ValueError("recall run does not belong to feature run")
+            if recall.known_at > pack.as_of:
+                raise ValueError("recall run was not available at comparison as_of")
+        if pack.regime_snapshot_id is not None:
+            regime = await self._session.get(
+                MarketRegimeSnapshotModel, pack.regime_snapshot_id
+            )
+            if regime is None:
+                raise RepositoryNotFoundError("market regime snapshot does not exist")
+            if regime.feature_run_id != pack.feature_run_id:
+                raise ValueError("market regime does not belong to feature run")
+            if regime.known_at > pack.as_of:
+                raise ValueError("market regime was not available at comparison as_of")
+        member_ids = tuple(member.security_id for member in pack.members)
+        available_count = await self._session.scalar(
+            select(func.count())
+            .select_from(UniverseMemberModel)
+            .where(
+                UniverseMemberModel.snapshot_id == pack.universe_snapshot_id,
+                UniverseMemberModel.security_id.in_(member_ids),
+            )
+        )
+        if available_count != len(member_ids):
+            raise RepositoryNotFoundError(
+                "comparison member is not part of universe snapshot"
+            )
+
+    async def _pack(
+        self, model: CandidateComparisonPackModel
+    ) -> CandidateComparisonPack:
+        member_models = (
+            await self._session.execute(
+                select(CandidateComparisonMemberModel)
+                .where(
+                    CandidateComparisonMemberModel.comparison_pack_id
+                    == model.comparison_pack_id
+                )
+                .order_by(CandidateComparisonMemberModel.candidate_order)
+            )
+        ).scalars().all()
+        if len(member_models) != model.candidate_count:
+            raise RuntimeError("comparison pack member count is inconsistent")
+        members = tuple(
+            CandidateComparisonMember(
+                security_id=member.security_id,
+                candidate_order=member.candidate_order,
+                coverage=float(member.coverage),
+                stale=member.stale,
+                missing_fields=tuple(member.missing_fields),
+                **member.compact_payload,
+            )
+            for member in member_models
+        )
+        return CandidateComparisonPack(
+            comparison_pack_id=model.comparison_pack_id,
+            candidate_set_id=model.candidate_set_id,
+            builder_version=model.builder_version,
+            schema_version=model.schema_version,
+            field_profile_version=model.field_profile_version,
+            universe_snapshot_id=model.universe_snapshot_id,
+            feature_run_id=model.feature_run_id,
+            recall_run_id=model.recall_run_id,
+            regime_snapshot_id=model.regime_snapshot_id,
+            as_of=model.as_of,
+            known_at=model.known_at,
+            coverage=float(model.coverage),
+            missing_summary=model.missing_summary,
+            trim_summary=model.trim_summary,
+            members=members,
+            content_hash=model.content_hash,
+        )
 
 
 class SQLAlchemyCorporateActionRepository:

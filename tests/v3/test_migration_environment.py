@@ -16,7 +16,7 @@ def test_alembic_environment_loads_without_database_credentials() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
     assert Path(scripts.dir).resolve() == ROOT / "migrations"
-    assert scripts.get_heads() == ["0005_multi_recall_foundation"]
+    assert scripts.get_heads() == ["0006_context_task_foundation"]
 
 
 def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
@@ -56,4 +56,8 @@ def test_v3_metadata_contains_phase1_and_phase2_foundation_tables() -> None:
         "v3.raw_opportunities",
         "v3.performance_observations",
         "v3.recall_miss_evaluations",
+        "v3.candidate_comparison_packs",
+        "v3.candidate_comparison_members",
+        "v3.context_packs",
+        "v3.context_evidence_selections",
     }

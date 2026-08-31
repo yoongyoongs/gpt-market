@@ -93,6 +93,11 @@ class CandidateComparisonPack(V3Contract):
     def validate_times(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
 
+    @field_validator("coverage")
+    @classmethod
+    def normalize_coverage(cls, value: float) -> float:
+        return round(value, 7)
+
     @model_validator(mode="after")
     def validate_pack(self) -> "CandidateComparisonPack":
         if self.schema_version != CANDIDATE_COMPARISON_SCHEMA_VERSION:
@@ -119,6 +124,7 @@ class CandidateComparisonPack(V3Contract):
         payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
             exclude={"content_hash"}
         )
+        payload["coverage"] = round(float(payload["coverage"]), 7)
         content_hash = canonical_hash(
             {
                 key: value
@@ -176,6 +182,11 @@ class ContextPack(V3Contract):
     def validate_times(cls, value: datetime, info) -> datetime:
         return require_aware(value, info.field_name)
 
+    @field_validator("coverage")
+    @classmethod
+    def normalize_coverage(cls, value: float) -> float:
+        return round(value, 7)
+
     @model_validator(mode="after")
     def validate_pack(self) -> "ContextPack":
         if self.schema_version != CONTEXT_PACK_SCHEMA_VERSION:
@@ -214,6 +225,7 @@ class ContextPack(V3Contract):
         payload = cls.model_construct(**values, content_hash="0" * 64).model_dump(
             exclude={"content_hash"}
         )
+        payload["coverage"] = round(float(payload["coverage"]), 7)
         content_hash = canonical_hash(
             {
                 key: value

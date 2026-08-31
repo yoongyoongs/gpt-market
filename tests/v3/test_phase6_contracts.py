@@ -108,6 +108,10 @@ def test_comparison_pack_preserves_20_to_100_contiguous_candidates() -> None:
     with pytest.raises(ValidationError, match="contiguous input order"):
         build_comparison(members=tuple(reordered))
 
+    integer_coverage = build_comparison(coverage=1)
+    assert integer_coverage.coverage == 1.0
+    assert integer_coverage.content_hash == integer_coverage.computed_content_hash()
+
 
 def test_comparison_member_rejects_final_score_fields() -> None:
     payload = comparison_members(1)[0].model_dump()
@@ -227,11 +231,17 @@ def test_phase6_repository_protocol_is_frozen() -> None:
     assert signature.parameters["expected_version"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_0006_design_is_incremental_and_not_implemented_in_p6_01() -> None:
+def test_0006_implementation_matches_frozen_incremental_design() -> None:
     design = (ROOT / "docs/Phase6上下文任务实施记录.md").read_text(encoding="utf-8")
     assert "0005_multi_recall_foundation" in design
     assert "candidate_comparison_packs" in design
     assert "context_evidence_selections" in design
     assert "trading_calendar_source" in design
     assert "prevent_mutation" in design
-    assert not (ROOT / "migrations/versions/0006_context_task_foundation.py").exists()
+    migration = (
+        ROOT / "migrations/versions/0006_context_task_foundation.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision: str = "0006_context_task_foundation"' in migration
+    assert '"0005_multi_recall_foundation"' in migration
+    assert "candidate_comparison_packs" in migration
+    assert "context_evidence_selections" in migration

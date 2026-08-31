@@ -8,6 +8,7 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyAgentTaskRepository,
     SQLAlchemyAuditRepository,
     SQLAlchemyBarRepository,
+    SQLAlchemyCandidateComparisonRepository,
     SQLAlchemyCorporateActionRepository,
     SQLAlchemyIngestionRunRepository,
     SQLAlchemyFeatureRepository,
@@ -35,6 +36,9 @@ class SQLAlchemyUnitOfWork:
         self.features = SQLAlchemyFeatureRepository(self._session)
         self.evidence = SQLAlchemyEvidenceRepository(self._session)
         self.recalls = SQLAlchemyRecallRepository(self._session)
+        self.candidate_comparisons = SQLAlchemyCandidateComparisonRepository(
+            self._session
+        )
         return self
 
     async def __aexit__(

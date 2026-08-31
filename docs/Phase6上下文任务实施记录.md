@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01 已完成；P6-02 已完成本地实现，等待隔离 PostgreSQL 17 验收
+> 当前状态：P6-01 已完成；P6-02 已完成本地实现，服务器 SSH 服务异常，等待隔离 PostgreSQL 17 验收
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -104,7 +104,8 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - 两项 Warning 为既有 Starlette/httpx 弃用提示和既有未 await 警告；
 - 本机未安装 Ruff，未宣称 Ruff 通过；
 - 尚需在服务器隔离 PostgreSQL 17 执行同等迁移往返、Repository 集成和完整回归；不对生产数据库执行 Migration。
+- 2026-08-31 服务器复验：公网 TCP 22 可以建立连接，但 SSH 在返回协议 Banner 前持续超时或被远端重置；公网 `/health` 同时返回 HTTP 502。尚未登录服务器，未执行任何远端命令或数据库操作。
 
 ## 7. 下一步
 
-用户允许并切换服务器网络后，仅完成 P6-02 的隔离 PostgreSQL 17 验收。验收通过后更新本实施记录和工作状态，使用中文提交并推送，然后停止；不自动进入 P6-03。
+服务器恢复 SSH Banner 和健康状态后，仅完成 P6-02 的隔离 PostgreSQL 17 验收。验收通过后更新本实施记录和工作状态，使用中文提交并推送，然后停止；不自动进入 P6-03。

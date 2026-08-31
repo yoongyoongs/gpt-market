@@ -336,7 +336,16 @@ class TaskProfileModel(Base):
         CheckConstraint("version > 0", name="positive_version"),
         CheckConstraint("expected_group_count > 0", name="positive_expected_groups"),
         CheckConstraint("grace_seconds >= 0", name="nonnegative_grace"),
+        CheckConstraint(
+            "(comparison_first AND candidate_limit BETWEEN 20 AND 100 "
+            "AND topk_limit BETWEEN 1 AND candidate_limit "
+            "AND topk_context_level IN ('NORMAL','DEEP')) OR "
+            "(NOT comparison_first AND candidate_limit IS NULL "
+            "AND topk_limit IS NULL AND topk_context_level IS NULL)",
+            name="valid_comparison_settings",
+        ),
         UniqueConstraint("profile_code", "version", name="uq_task_profiles_code_version"),
+        UniqueConstraint("content_hash", name="uq_task_profiles_content_hash"),
         {"schema": V3_SCHEMA},
     )
 
@@ -346,12 +355,28 @@ class TaskProfileModel(Base):
     schedule: Mapped[str | None] = mapped_column(String(128))
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     trading_calendar: Mapped[str] = mapped_column(String(128), nullable=False, server_default="UNKNOWN")
+    trading_calendar_source: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default="UNKNOWN"
+    )
+    trading_calendar_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="UNKNOWN"
+    )
     context_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    comparison_first: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    candidate_limit: Mapped[int | None] = mapped_column(Integer)
+    topk_limit: Mapped[int | None] = mapped_column(Integer)
+    topk_context_level: Mapped[str | None] = mapped_column(String(16))
     output_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     expected_group_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     grace_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    strategy_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="UNKNOWN"
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    pre_phase6_content_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -359,7 +384,9 @@ class ExpectedRunModel(Base):
     __tablename__ = "expected_runs"
     __table_args__ = (
         CheckConstraint("window_end >= scheduled_for", name="valid_window"),
+        CheckConstraint("status IN ('EXPECTED','CANCELLED')", name="valid_status"),
         UniqueConstraint("task_profile_id", "scheduled_for", name="uq_expected_runs_profile_schedule"),
+        UniqueConstraint("content_hash", name="uq_expected_runs_content_hash"),
         {"schema": V3_SCHEMA},
     )
 
@@ -367,9 +394,15 @@ class ExpectedRunModel(Base):
     task_profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey(f"{V3_SCHEMA}.task_profiles.task_profile_id"), nullable=False
     )
+    task_profile_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="EXPECTED")
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -388,6 +421,14 @@ class TaskRunModel(Base):
             "status IN ('PENDING_IMPORT','PARTIAL_COMPLETED','COMPLETED','MISSED','CANCELLED')",
             name="valid_status",
         ),
+        CheckConstraint(
+            "(status = 'COMPLETED' AND successful_group_count = expected_group_count) OR "
+            "(status = 'PARTIAL_COMPLETED' AND successful_group_count > 0 "
+            "AND successful_group_count < expected_group_count) OR "
+            "(status IN ('PENDING_IMPORT','MISSED') AND successful_group_count = 0) OR "
+            "status = 'CANCELLED'",
+            name="status_count_consistency",
+        ),
         {"schema": V3_SCHEMA},
     )
 
@@ -398,17 +439,190 @@ class TaskRunModel(Base):
     task_profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey(f"{V3_SCHEMA}.task_profiles.task_profile_id"), nullable=False
     )
+    task_profile_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="PENDING_IMPORT")
     expected_group_count: Mapped[int] = mapped_column(Integer, nullable=False)
     successful_group_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     failed_group_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     pending_group_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    context_pack_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    context_pack_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id")
+    )
     context_pack_hash: Mapped[str | None] = mapped_column(String(64))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CandidateComparisonPackModel(Base):
+    __tablename__ = "candidate_comparison_packs"
+    __table_args__ = (
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        CheckConstraint("candidate_count BETWEEN 20 AND 100", name="candidate_count_range"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("content_hash", name="uq_candidate_comparison_packs_content_hash"),
+        Index("ix_candidate_comparison_packs_as_of", "as_of", "known_at"),
+        Index("ix_candidate_comparison_packs_feature_as_of", "feature_run_id", "as_of"),
+        Index("ix_candidate_comparison_packs_recall", "recall_run_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    comparison_pack_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    candidate_set_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    builder_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    field_profile_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    universe_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.universe_snapshots.snapshot_id"), nullable=False
+    )
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.feature_runs.feature_run_id"), nullable=False
+    )
+    recall_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.recall_runs.recall_run_id")
+    )
+    regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.market_regime_snapshots.regime_snapshot_id")
+    )
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    missing_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    trim_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CandidateComparisonMemberModel(Base):
+    __tablename__ = "candidate_comparison_members"
+    __table_args__ = (
+        CheckConstraint("candidate_order BETWEEN 1 AND 100", name="candidate_order_range"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint(
+            "comparison_pack_id",
+            "candidate_order",
+            name="uq_candidate_comparison_members_pack_order",
+        ),
+        Index("ix_candidate_comparison_members_security", "security_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    comparison_pack_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.candidate_comparison_packs.comparison_pack_id"),
+        primary_key=True,
+    )
+    security_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.securities.security_id"), primary_key=True
+    )
+    candidate_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    compact_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+
+class ContextPackModel(Base):
+    __tablename__ = "context_packs"
+    __table_args__ = (
+        CheckConstraint("context_level IN ('FAST','NORMAL','DEEP')", name="valid_level"),
+        CheckConstraint("subject_type IN ('SECURITY','MARKET')", name="valid_subject_type"),
+        CheckConstraint("task_profile_version > 0", name="positive_profile_version"),
+        CheckConstraint("known_at >= as_of", name="known_after_as_of"),
+        CheckConstraint(
+            "actual_tokens >= 0 AND actual_tokens <= token_budget", name="valid_token_count"
+        ),
+        CheckConstraint(
+            "(context_level = 'FAST' AND token_budget BETWEEN 2000 AND 4000) OR "
+            "(context_level = 'NORMAL' AND token_budget BETWEEN 5000 AND 8000) OR "
+            "(context_level = 'DEEP' AND token_budget BETWEEN 10000 AND 14000)",
+            name="valid_token_budget",
+        ),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="coverage_range"),
+        UniqueConstraint("content_hash", name="uq_context_packs_content_hash"),
+        Index("ix_context_packs_subject_as_of", "subject_type", "subject_id", "as_of"),
+        Index("ix_context_packs_profile_as_of", "task_profile_id", "as_of"),
+        Index("ix_context_packs_comparison", "comparison_pack_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    context_level: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.task_profiles.task_profile_id"), nullable=False
+    )
+    task_profile_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    builder_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    universe_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.universe_snapshots.snapshot_id"), nullable=False
+    )
+    feature_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.feature_runs.feature_run_id"), nullable=False
+    )
+    recall_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.recall_runs.recall_run_id")
+    )
+    regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.market_regime_snapshots.regime_snapshot_id")
+    )
+    comparison_pack_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.candidate_comparison_packs.comparison_pack_id")
+    )
+    token_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    actual_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    trim_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    references: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ContextEvidenceSelectionModel(Base):
+    __tablename__ = "context_evidence_selections"
+    __table_args__ = (
+        CheckConstraint("side IN ('SUPPORT','CONTRARY','NEUTRAL')", name="valid_side"),
+        CheckConstraint(
+            "retrieval_score >= 0 AND retrieval_score <= 1", name="retrieval_score_range"
+        ),
+        CheckConstraint("relevance >= 0 AND relevance <= 1", name="relevance_range"),
+        CheckConstraint("source_priority >= 0", name="nonnegative_source_priority"),
+        CheckConstraint("final_order >= 1", name="positive_final_order"),
+        UniqueConstraint(
+            "context_pack_id",
+            "final_order",
+            name="uq_context_evidence_selections_pack_order",
+        ),
+        Index("ix_context_evidence_selections_evidence", "evidence_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), primary_key=True
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.evidence_records.evidence_id"), primary_key=True
+    )
+    evidence_known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    selection_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    side: Mapped[str] = mapped_column(String(16), nullable=False)
+    retrieval_score: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    relevance: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    source_priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    final_order: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class AgentTaskModel(Base):
