@@ -15,7 +15,7 @@
 
 | Task ID | Task Name | Status | Commit | Tests | Interface/Migration | Follow-up |
 |---|---|---|---|---|---|---|
-| P6-01 | 冻结 Phase 6 Domain/Repository Contract 与 0006 Migration 设计 | DONE | 本提交 | 20 个聚焦测试；全量 197 passed / 23 skipped | 新增 Phase 6 Domain/Repository Contract；冻结 0006 设计，未创建 Migration | 无 |
+| P6-01 | 冻结 Phase 6 Domain/Repository Contract 与 0006 Migration 设计 | DONE | `044da58` | 20 个聚焦测试；全量 197 passed / 23 skipped | 新增 Phase 6 Domain/Repository Contract；冻结 0006 设计，未创建 Migration | 无 |
 | P6-02 | CandidateComparisonPack Domain 与不可变持久化 | TODO | - | Domain/PostgreSQL | 0006 | 依赖 P6-01 |
 | P6-03 | Comparison Builder 与 N→TopK READ | TODO | - | Application/API | 新 READ | 依赖 P6-02 |
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | TODO | - | Builder/PostgreSQL | 0006 | 依赖 P6-01 |
@@ -31,6 +31,7 @@
 - **WRITE SCOPE**：Phase 6 新 Domain/Repository Contract、0006 Migration 设计、契约/设计静态测试、Phase 6 Capsule/状态；
 - **Forbidden Changes**：Migration 实施、Repository/Builder/API 实现、Phase 3–5 冻结 Contract、V1/V2、Provider、Scanner、评分和生产配置；
 - **Rollback Point**：`main@9506983`。
+- **Commit**：`044da58 Phase6：冻结Context与Task领域契约`；
 - **Result**：冻结 `candidate-comparison.v1`、`context-pack.v1`、Task Profile/Expected Run/Task Run Domain 与三个 Repository Protocol；明确 404/409/422/503 语义和 `0006_context_task_foundation` 表、ALTER、约束、索引、不可变 Trigger、Upgrade/Downgrade 顺序；
 - **Tests**：`tests/v3/test_phase6_contracts.py` 等聚焦 20 passed；完整本地回归 197 passed、23 skipped、2 个既有 Warning；`compileall` 与 48 组 Markdown/HTML 同步检查通过；
 - **Tooling Note**：当前虚拟环境未安装 Ruff，未宣称 Ruff 通过；
