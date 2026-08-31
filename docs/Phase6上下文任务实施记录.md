@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01 已完成；P6-02 已完成本地实现，服务器 SSH 服务异常，等待隔离 PostgreSQL 17 验收
+> 当前状态：P6-01、P6-02 已完成；等待用户确认后再启动 P6-03
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -21,7 +21,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | Task | 内容 | 状态 | 证据/后续 |
 |---|---|---|---|
 | P6-01 | 冻结 Context、Candidate Comparison、Task Domain/Repository 契约和 0006 设计 | DONE | `044da58`；状态提交 `1585be0` |
-| P6-02 | 完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化 | PARTIAL | 本地 PostgreSQL 16 完整回归通过；等待 PostgreSQL 17 验收后提交 |
+| P6-02 | 完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化 | DONE | `e669cac` 检查点；PostgreSQL 17.11 完整回归 `212 passed, 5 skipped` |
 | P6-03 | Comparison Builder 与 N→TopK READ | TODO | 依赖 P6-02；本轮不启动 |
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | TODO | 依赖 P6-01/P6-02 |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | TODO | 不实现 AI Import |
@@ -103,9 +103,13 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - 全新 PostgreSQL 16 数据库完整回归：`217 passed, 5 skipped, 2 warnings`；
 - 两项 Warning 为既有 Starlette/httpx 弃用提示和既有未 await 警告；
 - 本机未安装 Ruff，未宣称 Ruff 通过；
-- 尚需在服务器隔离 PostgreSQL 17 执行同等迁移往返、Repository 集成和完整回归；不对生产数据库执行 Migration。
-- 2026-08-31 服务器复验：公网 TCP 22 可以建立连接，但 SSH 在返回协议 Banner 前持续超时或被远端重置；公网 `/health` 同时返回 HTTP 502。尚未登录服务器，未执行任何远端命令或数据库操作。
+- 服务器重启后 SSH 恢复；隔离 PostgreSQL 17.11 完成 `0005 → 0006 → 0005 → 0006`，4 张新表完整，旧 Profile Hash 在 Downgrade 后恢复，Expected Run/Task Run 样本全程保留；
+- Candidate Comparison、迁移环境和契约专项测试：`12 passed`；
+- 全新 `p6final` 数据库一次性完整回归：`212 passed, 5 skipped, 2 warnings`；两项 Warning 为既有 Starlette/httpx 弃用提示和既有未 await 警告；
+- 首次全量尝试因临时镜像 `/data` 不可写失败 1 项；修正测试容器缓存路径后，复用已写入数据的数据库产生 2 项固定时点污染。最终验收改用全新数据库一次运行并全部通过，未修改业务代码掩盖测试环境问题；
+- PostgreSQL 容器未发布宿主端口、未挂载生产目录；验收结束后已删除临时容器、网络、镜像、上传包和 `/tmp` 目录；
+- 生产 `market-mcp` 全程保持 healthy，服务器本机 `127.0.0.1:8000/health` 与 Nginx `127.0.0.1/health` 均为 HTTP 200；未执行生产 Migration。
 
 ## 7. 下一步
 
-服务器恢复 SSH Banner 和健康状态后，仅完成 P6-02 的隔离 PostgreSQL 17 验收。验收通过后更新本实施记录和工作状态，使用中文提交并推送，然后停止；不自动进入 P6-03。
+P6-02 完成后停止，等待用户确认。下一 Task 为 P6-03 Comparison Builder 与 N→TopK READ；不得自动启动。
