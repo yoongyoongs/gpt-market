@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="a134e61b018ef6f8bb79ab2ba4e3ba41f745019302f223c8e7dc154a92001a76"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="5154c45c52cb0ba8d66cc03c0a54d385a3b57ef9226df26a1fb2c08285ca4ce0"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -7,182 +7,99 @@
 <body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
 <ul>
 <li><a href="#_1">当前结论</a></li>
-<li><a href="#_2">已完成</a></li>
-<li><a href="#_3">正在进行</a></li>
-<li><a href="#_4">未开始</a></li>
+<li><a href="#_2">已验收基线</a></li>
+<li><a href="#_3">最近完成：开发上下文治理</a></li>
 <li><a href="#unknown">阻塞与 UNKNOWN</a></li>
-<li><a href="#_5">最近验证</a></li>
-<li><a href="#_6">下一步</a></li>
-<li><a href="#_7">接手关键文件</a></li>
+<li><a href="#_4">最近验证</a></li>
+<li><a href="#_5">下一步</a></li>
+<li><a href="#_6">新环境接手入口</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：a134e61b018e</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：5154c45c52cb</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>最后更新：2026-08-31（Asia/Shanghai）
-当前分支：<code>codex/phase5-multi-recall</code>
-当前稳定基线：<code>v3-phase5-multi-recall-20260831</code>
-状态对应提交：以本文件所在的当前 Phase 5 分支最新提交为准</p>
+<p>最后更新：2026-08-31（Asia/Shanghai）</p>
+<p>当前稳定基线：<code>main@4e80755</code> / <code>v3-phase5-multi-recall-20260831</code></p>
+<p>当前状态：开发上下文治理已完成；等待用户确认后再启动 Phase 6</p>
 </blockquote>
 <h2 id="_1">当前结论<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
-<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1–5 已完成技术验收；Phase 5 的 12 个首批 Recall Channel、Run/Raw、全 Universe PENDING Observation、追加式成熟基础和 Recall/Raw/Miss READ 已通过修改后 Migration、独立空库完整回归与 5,551 只全市场验收。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。下一阶段是 Phase 6 Context/Comparison/Task/READ JSON；Phase 6 至 Phase 11 未完成前，不能将当前状态表述为整个 V3 完成。</p>
-<h2 id="_2">已完成<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>V3 Architecture Baseline 1.0 保持冻结。Phase 1–5 已完成技术验收，生产仍运行 V1/V2 + Phase2A，V3 默认关闭且未执行生产 Migration。开发上下文治理已经完成，本轮未开发 Phase 6 业务；下一个独立 Task 为 Phase 6 <code>P6-01</code>。</p>
+<p>普通开发状态已迁移到 <a href="phases/phase6/STATUS.html">Phase 6 STATUS</a>。历史细节由 Phase 1–5 实施记录、Git 提交和稳定标签承担，本文件不再复制完整流水账。</p>
+<h2 id="_2">已验收基线<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Phase</th>
+<th>稳定标签/证据</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td><code>v2-phase2a-baseline-20260829</code></td>
+<td>DONE</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td><code>v3-phase1-foundation-20260829</code> / <code>Phase1基础验收记录</code></td>
+<td>ACCEPTED</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td><code>Phase2行情底座实施记录</code>：Universe/Bar/Factor 5,551/5,551</td>
+<td>ACCEPTED</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code>v3-phase3-full-market-features-20260830</code>：Feature 5,551/5,551</td>
+<td>ACCEPTED</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td><code>v3-phase4-core-evidence-20260831</code>：Core Evidence 真实 PostgreSQL</td>
+<td>ACCEPTED</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td><code>v3-phase5-multi-recall-20260831</code>：12 通道、3,492 命中、幂等/性能</td>
+<td>ACCEPTED</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_3">最近完成：开发上下文治理<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>V2/Phase2A 基线提交：<code>556a335</code>；</li>
-<li>基线标签：<code>v2-phase2a-baseline-20260829</code>；</li>
-<li>V3 架构经过 v0.1、v0.2 和最终收口 Review；</li>
-<li>完整架构实施稿：<code>docs/架构设计实施稿.md</code> / <code>.html</code>；</li>
-<li>V3 设计输入和 V2 历史过程文档已分类归档；</li>
-<li>开发工作规范和跨电脑/跨模型接手规则已建立；</li>
-<li>README 已提供统一接手入口。</li>
-<li>V3 需求规格说明和系统功能架构已补齐；</li>
-<li>V3 技术架构、数据库逻辑设计、详细设计和功能状态矩阵已补齐；</li>
-<li><code>scripts/build_docs_html.py</code> 已建立 Markdown → HTML 自动生成与 Hash 同步检查；</li>
-<li>V3 历史蓝图与 Review 输入已转换为 Markdown/HTML 并归档；</li>
-<li>五份核心 V3 设计文档及架构实施稿已完成五项一致性修补；</li>
-<li>《需求追踪矩阵》已覆盖全部 49 项 P0/P1，并映射 Phase、模块、表/存储、API/Job、测试、状态和证据；</li>
-<li>《Baseline 一致性修补摘要》已建立，最新审查输入已归档。</li>
-<li>Phase 1 启动检查点已创建并推送：<code>ca754f3</code>；</li>
-<li>已审计配置、Container、Compose、依赖、SQLite/JSONL 和测试结构；</li>
-<li>ADR-0001 已确认 PostgreSQL 17 + SQLAlchemy 2.0 async + asyncpg + Alembic async，V3 默认关闭并与 Legacy 生命周期隔离。</li>
-<li>已增加 V3 Feature Flag、数据库配置、PostgreSQL Compose Profile、SQLAlchemy async 生命周期和禁用态 Container；</li>
-<li>默认禁用与配置约束测试已通过，现有 Container 只增加隔离的 V3 生命周期挂点。</li>
-<li>已建立 Alembic async 环境、统一 SQLAlchemy Metadata、离线 Migration 能力和独立迁移说明；应用启动不会自动运行 Migration。</li>
-<li>已实现 Canonical JSON/Hash、时区与 <code>known_at</code> 契约、AgentTask/AIResultEnvelope、Evidence Contract 和 Task Group Count 状态机；</li>
-<li>首个 Migration 已定义 Evidence、Task、Agent Envelope 和 Audit 共 9 张基础表，并为 Raw/Evidence/Task/Envelope/Audit 关键事实增加数据库不可变触发器。</li>
-<li>已在服务器隔离网络和隔离目录完成 Python 3.12 镜像构建及 PostgreSQL 17 真实验收；Upgrade、9 表检查、<code>known_at</code>/组计数约束、不可变触发器、Downgrade、Backup/Restore 均通过，未改动生产容器。</li>
-<li>已完成 Repository Protocol、SQLAlchemy Repository、Unit of Work、Audit Contract 和 AgentTask 注册用例；Task 与 Audit 同事务提交，失败整体回滚。</li>
-<li>Phase 1 技术验收记录已建立；用户已确认验收并授权继续完成全部 V3。</li>
-<li>Phase 1 已合并 <code>main@f20cc10</code> 并推送标签 <code>v3-phase1-foundation-20260829</code>；Phase 2 分支已创建。</li>
-<li>Phase 2 已建立证券、Universe、Ingestion Run、Bar/Factor Revision、Market Bar 和 Corporate Action 的 Domain/ORM/<code>0002</code> 基础；真实 PostgreSQL 17 Upgrade、约束、不可变触发器和降回 Phase 1 已通过。</li>
-<li>Phase 2 Universe 数据层已实现：Legacy 东方财富主源、上交所 + 深交所 + 北交所分页组合的独立官方备用源、覆盖骤降拒绝、显式 Secondary 接管、双源失败 LKG stale 和无 LKG 明确报错。</li>
-<li>Universe Repository 已在单事务内发布 Source/Snapshot/Security/Member/Diff，并可读取最新不可变快照；网络请求不占用数据库事务。</li>
-<li>Phase 2 日 K 单股链路已实现 RAW/QFQ 成对获取、Factor Revision、QFQ-only LIMITED、陈旧门禁、partial 隔离、交易日历驱动的周/月聚合及同事务发布；实现记录见 <code>docs/Phase2行情底座实施记录.md</code>。</li>
-<li>Phase 2 历史 Backfill 已实现不可变 Universe 绑定、批次 checkpoint、紧凑高水位/失败游标、失败目标重试、发布后崩溃恢复、已完成运行幂等返回和 <code>row_version</code> 并发冲突保护；真实 PostgreSQL 17 端到端重放保持 8 个序列零重复。</li>
-<li>Phase 2 严格交易日历已接入 <code>exchange_calendars:XSHG</code>，记录版本与覆盖边界，越界硬失败；已按上交所 2026 春节休市安排验证节后短周聚合，本地及服务器 Python 3.12 均通过。</li>
-<li>Phase 2 Backfill 已支持默认 16、上限 32 的受控并发；网络/发布并行但 checkpoint 单协调器串行，3 并发上限及真实 PostgreSQL 并发重放均通过。</li>
-<li>Phase 2 可执行行情 Job 已接线：官方 Universe PRIMARY、东方财富 SECONDARY，支持 Universe/Backfill/All、run ID 恢复、分段执行和结构化报告；异常扩张超过 LKG 5% 会拒绝。</li>
-<li>Universe/Bar 不可变 Hash 已统一成员排序、UTC datetime 和 DDL 数值精度，5,551 成员 PostgreSQL 存储 Hash 与重建 Hash 一致。</li>
-<li>东方财富历史 K 已增加连续失败熔断与冷却探测，熔断期间快速进入腾讯/Sina fallback，避免全市场任务产生上万次已知无效请求。</li>
-<li>Phase 2 官方 Universe 与东方财富状态组合 Provider 已验收：官方成员 5,551，东方财富只补充停牌/ST 状态并排除 354 条额外污染证券；最终停牌 4 只。</li>
-<li>Phase 2 全市场日 K 最终完成 5,551/5,551、失败 0；腾讯 5,122、Sina 429，全部具备 RAW/QFQ/Factor/FULL，周线 5,551，完整月线 5,534。</li>
-<li>覆盖检查已改为单次批量查询并按上海交易日比较；全市场已覆盖重放 12.966 秒完成且不再次调用行情 Provider。</li>
-<li>Corporate Action 已完成分页 Provider、标准化、语义 Hash、幂等和更正链；真实抓取 8,793 个逻辑事件，重复运行新增 0、unchanged 8,793。</li>
-<li>Bar/Factor/Corporate Action 均已建立不可变 <code>supersedes</code> 修订链，真实 PostgreSQL 已验证。</li>
-<li>Phase 2 Scheduler、独立 Compose <code>v3-worker</code> Profile、上海时区日调度、原子报告和 PostgreSQL advisory lock 已实现并通过配置、竞争锁和一次性路径验收。</li>
-<li>Phase 3 数据输入收口已补齐 HFQ：由 RAW 和 QFQ Factor 确定性派生并绑定同一 Factor Revision；旧库只有 QFQ 时不再判定覆盖完整，会自动触发补算。RAW/QFQ/HFQ 发布、幂等、修订链和上海交易日门禁已在真实 PostgreSQL 17 通过。</li>
-<li>Phase 3 <code>0003_full_market_features</code>、Feature Domain/Calculator/Repository、可重放 Feature Run、白名单 Universe Query、事实型 Market Regime、READ API 和独立 Job 已实现。</li>
-<li>Feature 统一绑定已发布 QFQ DAY Revision；长周期数据不足、行业/指数缺失和事实维度不可用均显式 <code>null/UNKNOWN</code>，不伪造数据，不引入 V2 评分或自动交易。</li>
-<li>空 PostgreSQL 17 已成功升级至 <code>0003</code>；2 只证券 × 260 日 K 的原子发布、幂等、Cursor、Regime 和不可变触发器集成验收通过；全项目真实库回归 <code>154 passed, 5 skipped</code>。</li>
-<li>Phase 3 全市场预验收发现非整比 HFQ 价格精度导致 Hash 漂移，已改为哈希前显式规范化并用真实 <code>600288</code> 验证；同时补齐无 LKG 冷启动的 5,700 成员绝对上限，官方失败时不再接受东方财富 5,905 条污染集合。</li>
-<li>Phase 3 隔离验收库回填 5,551/5,551、失败 0：日/周 RAW/QFQ/HFQ 各 5,551，月各 5,534，共 6,169,716 根 Bar、1,636,526 条 Factor。</li>
-<li>Phase 3 正式 Feature Run 5,551/5,551、失败 0、耗时 180.679 秒、峰值内存约 291 MiB；3/5/10/20/60/120/250 日收益覆盖依次为 5,550/5,549/5,543/5,534/5,511/5,469/5,397。</li>
-<li>Phase 3 查询 30 次实测 P95 为 6.511–14.688 ms；字段白名单、过滤、排序、Cursor、原子发布和不可变记录通过。特征覆盖分母已按实际 28 个字段修正。</li>
-<li>相同 Universe、<code>as_of</code>、Feature Version 和 Revision Set 全市场重跑返回原 Run，数据库保持 1 个 Run、5,551 条 Feature，无重复发布。</li>
-<li>腾讯 5,122 只与 Sina 429 只的历史日 K 均无可靠成交额；<code>amount</code> 和 Regime Turnover 明确缺失。指数/行业基准未绑定时相对强度保持 <code>null/UNKNOWN</code>，不估算、不伪造。</li>
-<li>Phase 3 已合并 <code>main@39058fc</code>，稳定标签 <code>v3-phase3-full-market-features-20260830</code> 已推送 GitHub。</li>
-<li>Phase 4 <code>0004_evidence_ingestion</code> 已补齐 Source/Raw/Evidence 扩展、Fetch Run、不可变 Parse Attempt、Entity Link、Relation、Conflict Set/Member；Raw/Evidence 去重约束保留跨来源独立事实。</li>
-<li>Phase 4 Raw 先提交再 Parse 的最小闭环已实现；Opinion 不升级 Fact、Untrusted、时点 Retrieval、Decay 和低置信 Link 契约已落地。</li>
-<li>Phase 4 Fetch Run 已支持游标 checkpoint、分段恢复、终态重放、Provider 失败终态和 <code>row_version</code> 并发冲突保护。</li>
-<li>Phase 4 已实现规范 Payload 精确/近似 Dedup Relation、同 Claim 多值 Conflict Set、全成员保留和按来源优先级/置信度/时点的临时选择解释。</li>
-<li>Phase 4 PostgreSQL 17 <code>0003 -&gt; 0004 -&gt; 0003 -&gt; 0004</code> 双往返通过；配置真实库的完整回归 <code>186 passed, 5 skipped</code>。</li>
-<li>Phase 4 首批 Core Provider 已接入巨潮公告、东方财富财务/业绩预告/快报、中国政府网政策和东方财富基础财经新闻；能力 Registry、按源限流、重试和结构硬校验已实现。</li>
-<li>七个真实入口 Fetch/Parse 探针全部请求成功；真实 PostgreSQL 端到端落库共 29 条 Raw/29 条 Evidence、失败 0；当前完整回归 <code>186 passed, 5 skipped</code>。</li>
-<li>上交所官方公告备用源已实测 2 日窗口 1,931 组；巨潮入口增加 A 股代码硬过滤，债券/基金不会再被通用市场映射误标为证券 Evidence。</li>
-<li>Registry Job 已支持真实 fallback、<code>PARTIAL</code> 后接管、能力级失败隔离、全源交叉采集、分段恢复参数和逐源计数；3 只真实证券隔离 Job 全能力成功。</li>
-<li>Phase 4 已基于 Published Universe 建立 Security 名称/代码目录，支持显式 Industry Catalog 和 Market 别名；唯一匹配为 <code>CONFIRMED</code>，同名歧义只落 <code>CANDIDATE</code>，解析器明确 Link 优先。</li>
-<li>Evidence READ 已提供 <code>GET /api/v3/evidence/{subject_type}/{subject_id}</code>，支持 <code>as_of</code>、Evidence/Source 类型、有效相关性、Candidate 开关和 Limit，并返回冲突状态及逐类型 <code>AVAILABLE/UNKNOWN</code> Coverage。</li>
-<li>真实 PostgreSQL 已验证 Link 查询、Candidate 默认隔离和过滤；50 条结果连续 100 次读取平均 7.438 ms、P95 10.385 ms、最大 11.195 ms。</li>
-<li>Phase 4 完整回归 <code>186 passed, 5 skipped</code>；2 条既有依赖/异步资源警告保留，相关文件 Ruff 与 <code>git diff --check</code> 通过。</li>
-<li>Phase 4 已合并 <code>main@afd1856</code> 并推送稳定标签 <code>v3-phase4-core-evidence-20260831</code>。</li>
-<li>Phase 5 <code>0005_multi_recall_foundation</code> 已建立 Channel/Run/Result、Raw Opportunity、未来观察和 Recall Miss 六张不可变表；PENDING 未来泄漏和未成熟评价由 Domain/DDL 双层拒绝。</li>
-<li>Phase 5 PostgreSQL 17 <code>0004 -&gt; 0005 -&gt; 0004 -&gt; 0005</code> 双往返及全新库 <code>base -&gt; 0005</code> 通过。</li>
-<li>Phase 5 已实现 9 个可解释 Feature Channel、缺字段/异常隔离、原子 Run/Result/Raw/全 Universe Observation、稳定 Cursor Recall/Raw READ 和可执行 Job。</li>
-<li>成熟 Feature 实际 Job 为 6/9 通道成功，周线/指数/行业输入缺失的 3 个明确 <code>UNAVAILABLE</code>；相同输入重放返回同一 Run，未来 Feature 在发布 Channel 前被拒绝。</li>
-<li>真实 PostgreSQL 2 证券闭环为 2 Result、2 Raw、6 PENDING Observation，UPDATE Trigger 实际拒绝；全新测试库完整回归 <code>197 passed, 5 skipped</code>。</li>
-<li>Phase 5 已补齐财务改善、业绩拐点和官方催化事件 3 个 Evidence Channel，共 12 个首批通道；规则只读取明确结构化字段或官方事件词并返回 Evidence ID。</li>
-<li>12 通道真实 Job 在缺输入夹具上为 6 成功/6 <code>UNAVAILABLE</code>、Coverage 0.5；第三个全新 PostgreSQL 库完整回归 <code>199 passed, 5 skipped</code>。</li>
-<li>修正 Observation append-only 闭环：PENDING 不再与终态争用同一唯一记录，MATURED/UNAVAILABLE 必须通过 <code>supersedes_observation_id</code> 追加且一个 PENDING 最多一个终态。</li>
-<li>新增 <code>MatureRecallObservationsService</code>、Outcome Provider 契约、阈值版本化基础分类和 <code>GET /api/v3/recalls/misses</code> Cursor READ；Outcome 获取不占用数据库事务。</li>
-<li>新增收益一致性、Outcome 完整性、不可用原因、重复执行零新增和异常未召回分类测试；本地完整回归 <code>184 passed, 23 skipped</code>，2 条既有警告保留。</li>
-<li>PostgreSQL 集成回归已通过“Recall 仅命中 1/2，但 Full Universe 仍返回 2/2”、追加成熟链、三 Horizon Miss READ 和幂等；修改后的 <code>0005</code> 在隔离 PostgreSQL 17 完成 <code>0003 -&gt; 0005 -&gt; 0003 -&gt; 0005</code>，5,551 条 Feature 全程保留。</li>
-<li>Phase 5 独立空库完整回归 <code>202 passed, 5 skipped</code>；真实 5,551 证券 Run 为 12 通道中 6 成功/6 明确 <code>UNAVAILABLE</code>，命中 3,492，发布 5,726 Result、3,492 Raw 和 16,653 PENDING Observation。</li>
-<li>Phase 5 全市场首次执行 14.971 秒，幂等重放 3.539 秒且返回同一 Run；2,059 只未命中证券仍可由 Full Universe Query 读取。20 次 READ P95 为 Feature 12.273ms、Raw 11.858ms、Result 10.600ms、Miss 1.081ms。</li>
-<li>Phase 5 已完成技术验收；稳定标签为 <code>v3-phase5-multi-recall-20260831</code>。生产 V3 未启用，生产数据库未执行 <code>0005</code>。</li>
-</ul>
-<h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Phase 5 已收口，下一开发步骤为 Phase 6 Context、Candidate Comparison、Task 和 READ JSON；</li>
-<li>point-in-time-safe Outcome Provider 不阻塞 Phase 6，严格未来收益实现按 Baseline 留在 Phase 10；无法证明同口径时必须写 <code>UNAVAILABLE</code>。</li>
-</ul>
-<h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Phase 6 至 Phase 11；</li>
-<li>生产环境 V3 PostgreSQL 部署和正式 Migration；</li>
-<li>V3 Context、AI Import 和 Portfolio 实现；</li>
-<li>服务器 V3 部署。</li>
+<li><strong>Goal</strong>：把跨机器开发规则、最小上下文、Task/Phase 状态和架构红线持久化到 Git；</li>
+<li><strong>WRITE SCOPE</strong>：<code>AGENTS.md</code>、治理/导航/状态文档、Phase Capsule 和轻量治理测试；</li>
+<li><strong>Forbidden Changes</strong>：业务代码、Migration、API、Provider、Scanner、评分、缓存、MCP 和生产配置；</li>
+<li><strong>完成条件</strong>：MD/HTML 配对、治理结构检查、最小业务回归、中文提交并推送；</li>
+<li><strong>停止条件</strong>：提交后停止，不自动开始 Phase 6。</li>
 </ul>
 <h2 id="unknown">阻塞与 UNKNOWN<a class="headerlink" href="#unknown" title="Permanent link">&para;</a></h2>
 <ul>
-<li>当前日历版本覆盖至 2026-12-31；进入 2027 年前必须升级数据包并按交易所公告复验，越界时系统会显式失败；</li>
-<li>当前验收全市场数据均取得 RAW/QFQ/Factor/FULL；其他时间或上游只能返回 QFQ 时仍按设计降为 <code>LIMITED</code>；</li>
-<li>当前行情 fallback 能保证价格/成交量序列，但不能补齐可靠历史成交额；成熟样本特征覆盖为 25/28，缺失字段均在记录中显式标注；</li>
-<li>当前全市场 Recall 的周底日强、相对指数、相对行业和三类 Evidence 通道因历史输入缺失明确 <code>UNAVAILABLE</code>；Coverage 0.5 是通道执行覆盖，不是证券行情覆盖，也不应被伪装为零命中；</li>
-<li>本状态不代表当前服务器部署版本已经包含 V3，服务器仍以现有部署事实为准。</li>
+<li>治理输入中的 <code>known_at &lt;= as_of</code> 孤立示例与正式时点语义冲突，已按 Baseline 拆分为“记录 <code>known_at &gt;= fetch_time</code>；Replay 选择 <code>known_at &lt;= replay_as_of</code>”；</li>
+<li>Phase 6 的正式 Schema/Builder Version 尚未由 P6-01 冻结；</li>
+<li>服务器在 Phase 5 收尾后曾再次出现 SSH banner 超时和公网 502；这是独立运维问题，治理 Task 不修改生产。</li>
 </ul>
-<h2 id="_5">最近验证<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h2 id="_4">最近验证<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
-<li>架构 Markdown 与离线 HTML 均包含 Baseline 1.0；</li>
-<li>AIResultBundle 已采用逻辑 <code>atomic_group</code>，不存在整包 <code>ALL_OR_NOTHING</code> 旧语义；</li>
-<li>Bundle 示例 JSON 已通过解析；</li>
-<li>当前文档整理没有修改行情、扫描、评分、Provider、缓存、MCP 或 Web API 业务逻辑。</li>
-<li>文档生成检查：32 组 Markdown/HTML 内容 Hash 同步（包含根 README、CONTRIBUTING 与 <code>docs</code>）；</li>
-<li>需求追踪检查：需求规格中的 49 项 P0/P1 与矩阵 49 项一一对应，无缺失、无重复、无额外编号；</li>
-<li>术语检查：正式文档不存在 <code>corporate_action_adjustments</code> 或整包 <code>ALL_OR_NOTHING</code> 旧设计；</li>
-<li>当前本地 <code>.venv</code> 使用 Python 3.13；Phase 1 应用镜像已在服务器使用 Python 3.12 构建通过。</li>
-<li>Phase 1 启动前全套测试：<code>72 passed, 5 skipped</code>；</li>
-<li>本机 Docker/Compose 可用；仓库内不存在既有 SQLAlchemy/Alembic/PostgreSQL 实现；</li>
-<li>SQLAlchemy/Alembic/asyncpg 选型已对照官方 async 文档核验。</li>
-<li>V3 数据库基础单元与 Legacy 回归：<code>75 passed, 5 skipped</code>；</li>
-<li>Compose YAML 结构检查通过；本机 Docker CLI 可用但守护进程未运行，改在服务器隔离环境完成 Python 3.12 镜像和 PostgreSQL 17 验收。</li>
-<li>Alembic 环境、Metadata 和离线 SQL 验证通过；全套测试：<code>77 passed, 5 skipped</code>。</li>
-<li>Contract、Task 状态、Metadata 与首个 Migration 离线验证通过；全套测试：<code>83 passed, 5 skipped</code>；</li>
-<li>真实 PostgreSQL 17 验收：Upgrade 至 <code>0001_phase1_foundation</code> 成功，<code>v3</code> 下 9 张表齐全；不可变触发器、<code>known_at &gt;= fetch_time</code> 和任务组计数不变量均实际拒绝非法写入。</li>
-<li>Migration 可逆性与灾备验收：Downgrade 至 <code>base</code> 后 <code>v3</code> schema 和版本记录均为空；<code>pg_dump</code> 恢复后 9 张表、版本号、测试数据和不可变触发器均正常。</li>
-<li>PostgreSQL 集成测试入口：<code>tests/v3/test_postgres_integration.py</code>，由 <code>V3_TEST_DATABASE_URL</code> 显式启用；未配置真实数据库时跳过，禁止伪装为已通过。</li>
-<li>当前全套本地回归：<code>86 passed, 8 skipped</code>；3 项 PostgreSQL 集成测试因本机未配置 <code>V3_TEST_DATABASE_URL</code> 明确跳过，其等价断言已在服务器隔离 PostgreSQL 17 上通过。</li>
-<li>Repository/Audit Fake 测试覆盖同事务提交、顺序幂等和 Audit 失败回滚；真实 PostgreSQL 进一步通过相同 Task ID 内容冲突及 8 并发幂等验证。</li>
-<li>Phase 2 Domain、Metadata、Migration 与 Legacy 完整回归：<code>90 passed, 9 skipped</code>；新增 PostgreSQL 集成项在本机无真实库时明确跳过，等价断言已在服务器 PostgreSQL 17 通过。</li>
-<li>官方备用 Universe 在服务器实际抓取 5,551 只：上交所 2,315、深交所 2,897、北交所 339，解析数、唯一代码数均等于上游声明数，覆盖率 100%，耗时 5.309 秒；北交所全部为当前 <code>920xxx</code> 代码。深交所 XLSX 虽返回 HTTP 200 但只有表头，已拒绝该伪成功并采用受控 JSON 分页。</li>
-<li>Universe fallback 单测覆盖主源失败后 Secondary 接管、覆盖骤降后 LKG、无 LKG 显式失败和主源正常发布；真实 PostgreSQL 17 验证两版快照、最新读取及 <code>ADDED/CHANGED/REMOVED</code> 差异各 1 条。</li>
-<li>Universe 单元完成后的全套本地回归：<code>98 passed, 10 skipped</code>；其中 5 项 PostgreSQL 集成测试未配置本地数据库而明确跳过，新增 Repository 集成项已在服务器隔离 PostgreSQL 17 通过。</li>
-<li>日 K 真实探针 20/20 成功：东方财富 0、腾讯接管 14、新浪接管 6；全部取得 300 日 RAW/Factor/FULL Revision，最后 Bar 均为 2026-08-28，平均 1.057 秒，4 并发墙钟 5.872 秒。</li>
-<li>Bar Bundle 在隔离 PostgreSQL 17 通过 nullable 成交额、Factor 外键、首次发布、重复零新增和不可变约束；全套本地回归 <code>114 passed, 11 skipped</code>。</li>
-<li>Backfill/Resume V3 专项测试 <code>43 passed, 7 skipped</code>；服务器隔离 PostgreSQL 17 端到端验证 Universe 目标读取、2/2 checkpoint、日周月 RAW/QFQ 发布及同 run 重放零新增。</li>
-<li>严格交易日历对照上交所 2026 春节公告验证 2 月 23 日休市、2 月 24 日开市和节后四交易日短周；服务器 Python 3.12 日历/聚合测试 <code>6 passed</code>。</li>
-<li>Backfill 6 目标并发测试确认配置 3 时最大活跃数为 3，两个批次 checkpoint 完整且成功态游标保持常量大小；服务器真实 PostgreSQL 默认并发发布和同 run 重放 <code>1 passed</code>。</li>
-<li>东方财富与官方 Universe 集合实测：主源 5,905、官方 5,551，主源多出的 354 条包含定转、旧代码及退市证券，官方无反向缺口；据此调整为官方 PRIMARY 并新增 5% 异常扩张门禁。</li>
-<li>Phase 2 Job 在全新 PostgreSQL 库从 <code>0001 -&gt; 0002</code> 冷启动：官方 5,551 发布成功，首段 20/20；同 run 恢复至 40/40，两个分段均 0 失败；数据库重建 Hash 等于存储 Hash。</li>
-<li>Phase 2 最终全市场任务：<code>5,551/5,551</code>、失败 0；发现并修复 UTC <code>.date()</code> 导致上海零点退一天的覆盖误判，边界测试与 12.966 秒全市场幂等重放通过。</li>
-<li>最新 Revision Set：日 RAW/QFQ 各 5,551、周 RAW/QFQ 各 5,551、月 RAW/QFQ 各 5,534；17 只当月新股无完整月，不发布 partial 月 Bar。</li>
-<li>Corporate Action 2025-01-01 起抓取 8,793 个逻辑事件，第三次同事实同步新增 0、unchanged 8,793；现金 8,033、现金加送转 700、送转 60。</li>
-<li>Scheduler <code>--once</code> 服务器端到端路径在 23.627 秒完成：Universe 5,551、Backfill 5,551/5,551、400 日公司行动窗口 5,113 条 unchanged，原子 JSON 报告有效；挂载目录 UID 10001 权限门禁已实测。</li>
-<li>当前全套本地回归：<code>137 passed, 16 skipped</code>；新增上海交易日、修订链、公司行动和 advisory lock 真实 PostgreSQL 项均在服务器通过。</li>
-<li>生产 <code>market-mcp</code> 在 Phase 1/2 隔离验收期间持续为 <code>healthy</code>；Phase 1 已合并，生产 V3 仍未启用。</li>
+<li>Phase 5 本地回归：<code>184 passed, 23 skipped</code>；</li>
+<li>Phase 5 隔离 PostgreSQL 17 全量回归：<code>202 passed, 5 skipped</code>；</li>
+<li>5,551 只全市场 Recall：12 通道中 6 成功/6 明确 UNAVAILABLE，3,492 命中；READ P95 1.081–12.273ms；</li>
+<li>Phase 5 已合并 GitHub <code>main@4e80755</code> 并推送稳定标签。</li>
+<li>治理结构专项测试：<code>5 passed</code>；Guardrail 编号 G-001–G-048 连续唯一，根/局部 AGENTS 和 Phase Capsule 入口完整；</li>
+<li>完整本地回归：<code>189 passed, 23 skipped</code>，两条既有依赖/异步资源警告保留；</li>
+<li>文档生成与同步检查：47 组 Markdown/HTML 通过；<code>git diff --check</code> 通过；本地环境未安装 Ruff，因此未把 Ruff 表述为通过。</li>
 </ul>
-<h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h2 id="_5">下一步<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
 <ol>
-<li>按 Phase 6 验收范围先建立 CandidateComparisonPack / Candidate Comparison Context 的紧凑 READ；</li>
-<li>实现 N→TopK 后的单股 NORMAL/DEEP Context Pack、Task 读取和时点/Hash 绑定；</li>
-<li>保持生产 V3 关闭，每个小步骤完成测试、状态记录、中文提交并推送后再进入下一步。</li>
+<li>停止并等待用户确认；</li>
+<li>下一次独立 Task 按 <a href="development/TASK_TEMPLATE.html">Task 模板</a>启动 <code>P6-01</code>，只冻结 Phase 6 Contract 与 0006 Migration 设计；</li>
+<li>P6-01 完成测试、STATUS、中文提交和推送后停止，不自动开始 P6-02。</li>
 </ol>
-<p>当前开发稳定基线为标签 <code>v3-phase5-multi-recall-20260831</code>；生产仍运行 V1/V2 基线，在后续 Phase 和最终生产部署前不启用 V3。</p>
-<h2 id="_7">接手关键文件<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
-<pre><code class="language-text">README.md
-docs/架构设计实施稿.md
-docs/开发规范.md
+<h2 id="_6">新环境接手入口<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">AGENTS.md
+docs/ARCHITECTURE_GUARDRAILS.md
+docs/development/CONTEXT_POLICY.md
 docs/工作状态.md
-docs/README.md
-app/
-tests/
-</code></pre>
-<p>默认无需阅读 <code>docs/archive/</code>。需要追溯 V1/V2 行为或 V3 设计决策时，再根据 <code>docs/README.md</code> 定向查看。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
+docs/phases/phase6/{SCOPE,CONTRACTS,ACCEPTANCE,STATUS}.md
+</code></pre></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

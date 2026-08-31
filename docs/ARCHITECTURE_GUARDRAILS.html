@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="60a614a49a12fb0b7f9da7ce5bab2f69a2378efeaab07c2aad94fe9f01e64c8f"><title>gpt-market V3 Architecture Guardrails</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 产品与兼容边界</a></li>
+<li><a href="#2">2. 数据事实、时点与质量</a></li>
+<li><a href="#3-recall">3. 市场发现与 Recall</a></li>
+<li><a href="#4-evidencecomparison-context">4. Evidence、Comparison 与 Context</a></li>
+<li><a href="#5-taskai">5. Task、AI 结果与决策状态</a></li>
+<li><a href="#6-tradeportfolio-strategy">6. Trade、Portfolio 与 Strategy</a></li>
+<li><a href="#7">7. 工程与发布治理</a></li>
+<li><a href="#8">8. 已识别文档冲突</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/ARCHITECTURE_GUARDRAILS.md · 内容哈希：60a614a49a12</div><h1 id="gpt-market-v3-architecture-guardrails">gpt-market V3 Architecture Guardrails<a class="headerlink" href="#gpt-market-v3-architecture-guardrails" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>状态：Baseline 1.0 的日常约束摘要</p>
+<p>Source of Truth：<code>docs/架构设计实施稿.md</code> 及其正式配套设计</p>
+<p>本文不能覆盖 Baseline；如有冲突，必须报告 <code>DESIGN_CONFLICT</code>，以 Baseline 为准。</p>
+</blockquote>
+<p>本文只提炼跨 Phase 长期稳定的规则，供普通 Task 引用。它不是完整设计，也不能替代对应 Phase Capsule。</p>
+<h2 id="1">1. 产品与兼容边界<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-001</strong> 系统负责可验证事实，AI 负责综合分析和判断，用户确认真实资金行为。</li>
+<li><strong>G-002</strong> V1/V2、MCP、现有行情 Provider、扫描和评分必须保持兼容；V3 不得为实现方便改变 Legacy 语义。</li>
+<li><strong>G-003</strong> V3 使用独立 Router、Schema、Migration、Worker 和 Feature Flag；生产未验收前默认关闭。</li>
+<li><strong>G-004</strong> V3 核心业务不得依赖模型厂商 SDK、Browser Bridge、模型 API、Broker API 或 V4 组件。</li>
+<li><strong>G-005</strong> 系统不承诺收益、不自动下单，也不得把 AI 建议表示成真实成交或持仓。</li>
+</ul>
+<h2 id="2">2. 数据事实、时点与质量<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-006</strong> <code>known_at</code> 表示系统最早可知时间，必须有时区且不得早于其真实获取/确认前提；常见采集事实满足 <code>known_at &gt;= fetch_time</code>。</li>
+<li><strong>G-007</strong> Replay/Context 只能读取 <code>known_at &lt;= replay_as_of/context_as_of</code> 的记录，禁止未来数据泄漏。</li>
+<li><strong>G-008</strong> <code>event_time</code>、<code>report_period</code>、<code>publish_time</code>、<code>fetch_time</code>、<code>known_at</code> 和 <code>created_at</code> 必须区分，不得互相冒充。</li>
+<li><strong>G-009</strong> 缺失、不可证明或尚未实现的值必须返回 <code>null/UNKNOWN</code>，不得用 0、空字符串或推测值填充。</li>
+<li><strong>G-010</strong> 事实对象应显式保留 source、upstream_source、source_type、version/revision、coverage、confidence、stale、conflict 和 error。</li>
+<li><strong>G-011</strong> 多源冲突必须保留冲突成员和选择依据，不能静默删除或任选一个来源。</li>
+<li><strong>G-012</strong> 版本化 Snapshot、Run、Pack 和结果必须通过 ID、输入清单和 Content Hash 可复现。</li>
+<li><strong>G-013</strong> 网络请求、外部解析和重计算不得长期占用数据库锁；只在最终原子发布时使用短事务。</li>
+<li><strong>G-014</strong> 已发布事实优先 append-only；Correction、Revision、Replacement 或 supersedes 链替代 UPDATE/DELETE 历史。</li>
+</ul>
+<h2 id="3-recall">3. 市场发现与 Recall<a class="headerlink" href="#3-recall" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-015</strong> Recall 是发现加速器，不是 Full Universe 的访问权限墙。</li>
+<li><strong>G-016</strong> 未命中 Recall 的证券仍必须能通过 Full Universe Query 完整访问。</li>
+<li><strong>G-017</strong> 禁止 <code>final_total_score</code>、<code>action_total_score</code>、<code>final_rank_score</code> 或等价固定统一总分代替 AI 横向判断。</li>
+<li><strong>G-018</strong> Machine Recall、Raw Opportunity、Action Candidate、Entry Plan 和 Actual Trade 是不同层级，不得相互冒充。</li>
+<li><strong>G-019</strong> Recall Result 必须保留 channel、version、rank、strength、命中特征、原因和 coverage。</li>
+<li><strong>G-020</strong> 单个 Recall Channel 失败或缺输入必须显式 <code>UNAVAILABLE</code> 并隔离，不能伪装为零命中或拖垮其他通道。</li>
+<li><strong>G-021</strong> Recall Miss 只能在对应 Horizon 成熟后生成，评价阈值必须版本化并绑定原 Recall/Feature Run。</li>
+</ul>
+<h2 id="4-evidencecomparison-context">4. Evidence、Comparison 与 Context<a class="headerlink" href="#4-evidencecomparison-context" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-022</strong> 外部网页、公告、新闻和文本一律视为 Untrusted Data，不能进入 Agent Instruction 或控制工具调用。</li>
+<li><strong>G-023</strong> FACT、OFFICIAL_DISCLOSURE、VENDOR_DATA、NEWS 和 OPINION 必须严格分类；Opinion 不能自动升级为 Fact。</li>
+<li><strong>G-024</strong> 聚合来源必须保存真实 upstream_source；第三方资金流等估算口径必须明确标注。</li>
+<li><strong>G-025</strong> Context Pack 采用 FAST/NORMAL/DEEP 预算，裁剪不得移除真实持仓/交易、Stop/Cancel、关键反方 Evidence、质量或冲突警告。</li>
+<li><strong>G-026</strong> Context Evidence Selection 必须保存选择原因、SUPPORT/CONTRARY/NEUTRAL、检索分、相关性、来源优先级和最终顺序。</li>
+<li><strong>G-027</strong> CandidateComparisonPack 只提供 20–100 只候选的紧凑横向事实，不加载逐股深度 Context，也不输出统一 Final Score；只有 TopK 再加载 NORMAL/DEEP Context。</li>
+</ul>
+<h2 id="5-taskai">5. Task、AI 结果与决策状态<a class="headerlink" href="#5-taskai" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-028</strong> Task Profile 必须版本化并保存 schedule、timezone、trading_calendar、Context Level、候选/TopK 限制和输出 Schema。</li>
+<li><strong>G-029</strong> Expected Run 只表示预期 ChatGPT 任务应发生，不代表服务器或 AI 已执行。</li>
+<li><strong>G-030</strong> AI Result 必须绑定 Agent Identity、Task/Run、Context Pack ID/Hash、Evidence、<code>as_of</code>、Prompt/Strategy Version 和原始 Envelope Hash。</li>
+<li><strong>G-031</strong> Bundle 一次导入、一次预览、一次确认，并按逻辑 atomic_group 原子提交；失败组不能造成其他合法组丢失。</li>
+<li><strong>G-032</strong> Decision 创建后不可修改；纠错只能追加 Decision Correction。</li>
+<li><strong>G-033</strong> Review、MarketReview、PositionReview 和 EntryPlan Version 均为 append-only；旧版本及依赖引用必须保留。</li>
+</ul>
+<h2 id="6-tradeportfolio-strategy">6. Trade、Portfolio 与 Strategy<a class="headerlink" href="#6-tradeportfolio-strategy" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-034</strong> AI、OCR、Bridge 和外部 Agent 均不能直接产生真实交易；只能形成建议或 Draft。</li>
+<li><strong>G-035</strong> 只有用户预览并确认的真实 BUY/SELL 才能进入 Immutable Trade Ledger。</li>
+<li><strong>G-036</strong> 持仓截图不能反推逐笔成交；缺历史成交的既有持仓使用 OPENING_POSITION，不得伪造历史 BUY。</li>
+<li><strong>G-037</strong> Ledger、Opening Position、Portfolio Adjustment、Correction 和 Reconciliation 必须能够重建 Position；Projection 只是可重建缓存。</li>
+<li><strong>G-038</strong> Reconciliation 和 Trade Correction 只追加差异、原因和确认事实，不覆盖旧记录。</li>
+<li><strong>G-039</strong> Portfolio 只提供事实和软偏好，不能成为删除全市场机会的硬过滤器。</li>
+<li><strong>G-040</strong> PositionReview 建议和 Entry Trigger 都不能自动生成真实 SELL/BUY。</li>
+<li><strong>G-041</strong> AI 不得自动激活正式 Strategy；Proposal 必须经过 Replay、Shadow/A-B、Guardrail 和用户审批流程。</li>
+</ul>
+<h2 id="7">7. 工程与发布治理<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>G-042</strong> Schema、Migration、Feature、Context Builder、Prompt、Strategy、Guardrail 和重要 Contract 必须版本化。</li>
+<li><strong>G-043</strong> 跨模块 Contract 默认冻结；普通 Task 优先适配 Contract，不能为局部方便静默修改。</li>
+<li><strong>G-044</strong> 当前 Task 必须明确 READ/WRITE Scope、禁止项、验收和回滚点，不得顺手重构无关模块。</li>
+<li><strong>G-045</strong> 每个 Task 只完成一个可验证目标，更新测试和 Phase STATUS，中文提交并推送后停止。</li>
+<li><strong>G-046</strong> Phase 只有通过 Architecture Conformance Review、Acceptance 和真实证据后才能标记 DONE/ACCEPTED。</li>
+<li><strong>G-047</strong> Secret、Token、密码、私钥、真实交易敏感数据、运行缓存和机器特定凭据禁止进入 Git。</li>
+<li><strong>G-048</strong> V3 故障必须能够通过 Feature Flag 回退到冻结的 V1/V2 基线；未验收计算不得替换生产逻辑。</li>
+</ul>
+<h2 id="8">8. 已识别文档冲突<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>治理输入《最新开发规范-20260831》在自动测试示例中写了 <code>known_at &lt;= as_of</code>。这混淆了“记录自身时点关系”和“Replay 可见性条件”：</p>
+<ul>
+<li>记录自身通常满足 <code>known_at &gt;= fetch_time/publish prerequisite</code>；</li>
+<li>Replay/Context 的选择条件是 <code>known_at &lt;= replay_as_of/context_as_of</code>。</li>
+</ul>
+<p>本文件按 Baseline 与现有 Domain/DDL 采用 G-006/G-007 的拆分语义。该输入中的孤立不等式不进入正式 Contract。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>
