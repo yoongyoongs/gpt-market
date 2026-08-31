@@ -653,6 +653,15 @@ class AIResultEnvelopeModel(Base):
     )
 
     result_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    import_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_imports.import_id")
+    )
+    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_bundles.bundle_id")
+    )
+    atomic_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_atomic_groups.atomic_group_id")
+    )
     task_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.agent_tasks.task_id"), nullable=False)
     task_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -1270,3 +1279,307 @@ class CorporateActionModel(Base):
         ForeignKey(f"{V3_SCHEMA}.corporate_actions.corporate_action_id")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AIResultImportModel(Base):
+    __tablename__ = "ai_result_imports"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PREVIEWED','CONFIRMED','PARTIAL_COMPLETED','FAILED')",
+            name="valid_status",
+        ),
+        UniqueConstraint("bundle_hash", "preview_revision", name="uq_ai_import_bundle_revision"),
+        UniqueConstraint("idempotency_key", name="uq_ai_import_idempotency"),
+        {"schema": V3_SCHEMA},
+    )
+
+    import_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    bundle_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    preview_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    preview_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    confirmed_by: Mapped[str | None] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AIResultBundleModel(Base):
+    __tablename__ = "ai_result_bundles"
+    __table_args__ = (
+        UniqueConstraint("bundle_hash", name="uq_ai_result_bundles_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    bundle_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    import_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_imports.import_id"), nullable=False, unique=True
+    )
+    agent_identity: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    task_run_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class AIResultAtomicGroupModel(Base):
+    __tablename__ = "ai_result_atomic_groups"
+    __table_args__ = (
+        CheckConstraint(
+            "validation_status IN ('VALID','INVALID')", name="valid_validation_status"
+        ),
+        CheckConstraint(
+            "commit_status IN ('PENDING','COMMITTED','FAILED')", name="valid_commit_status"
+        ),
+        UniqueConstraint("bundle_id", "group_key", name="uq_ai_atomic_groups_bundle_key"),
+        UniqueConstraint("group_hash", name="uq_ai_atomic_groups_hash"),
+        Index("ix_ai_atomic_groups_task_run", "task_run_id", "commit_status"),
+        {"schema": V3_SCHEMA},
+    )
+
+    atomic_group_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    bundle_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_bundles.bundle_id"), nullable=False
+    )
+    group_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False
+    )
+    subject: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    group_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    commit_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    retry_of_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_atomic_groups.atomic_group_id")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIResultDependencyModel(Base):
+    __tablename__ = "ai_result_dependencies"
+    __table_args__ = (
+        CheckConstraint("result_id <> depends_on_result_id", name="distinct_results"),
+        {"schema": V3_SCHEMA},
+    )
+
+    result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), primary_key=True
+    )
+    depends_on_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), primary_key=True
+    )
+
+
+class WatchlistModel(Base):
+    __tablename__ = "watchlists"
+    __table_args__ = (
+        UniqueConstraint("security_id", name="uq_watchlists_security"),
+        Index("ix_watchlists_state", "state", "updated_at"),
+        {"schema": V3_SCHEMA},
+    )
+
+    watchlist_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    security_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    latest_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WatchlistEventModel(Base):
+    __tablename__ = "watchlist_events"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_watchlist_events_hash"),
+        Index("ix_watchlist_events_watchlist", "watchlist_id", "event_time"),
+        {"schema": V3_SCHEMA},
+    )
+
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    watchlist_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.watchlists.watchlist_id"), nullable=False
+    )
+    from_state: Mapped[str | None] = mapped_column(String(32))
+    to_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id")
+    )
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class WatchlistProposalModel(Base):
+    __tablename__ = "watchlist_proposals"
+    __table_args__ = (
+        UniqueConstraint("source_result_id", name="uq_watchlist_proposals_source_result"),
+        UniqueConstraint("content_hash", name="uq_watchlist_proposals_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    proposal_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    security_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False
+    )
+    source_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False
+    )
+    proposed_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DecisionModel(Base):
+    __tablename__ = "decisions"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_decisions_hash"),
+        Index("ix_decisions_security_as_of", "security_id", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+
+    decision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    security_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False
+    )
+    task_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False
+    )
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), nullable=False
+    )
+    context_pack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False, unique=True
+    )
+    agent_identity: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    original_entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    original_entry_plan_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    original_entry_plan_hash: Mapped[str | None] = mapped_column(String(64))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class DecisionCorrectionModel(Base):
+    __tablename__ = "decision_corrections"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_decision_corrections_hash"),
+        {"schema": V3_SCHEMA},
+    )
+
+    correction_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"), nullable=False
+    )
+    old_values: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    new_values: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    corrected_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    corrected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class EntryPlanModel(Base):
+    __tablename__ = "entry_plans"
+    __table_args__ = (
+        CheckConstraint("version > 0", name="positive_version"),
+        UniqueConstraint("decision_id", "version", name="uq_entry_plans_decision_version"),
+        UniqueConstraint("content_hash", name="uq_entry_plans_hash"),
+        Index("ix_entry_plans_decision_effective", "decision_id", "effective_from"),
+        {"schema": V3_SCHEMA},
+    )
+
+    entry_plan_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"), unique=True
+    )
+    created_by_review_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    created_by_position_review_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    source_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False
+    )
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expected_horizon: Mapped[str] = mapped_column(String(16), nullable=False)
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ReviewModel(Base):
+    __tablename__ = "reviews"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_reviews_hash"),
+        Index("ix_reviews_decision_as_of", "decision_id", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+
+    review_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"), nullable=False
+    )
+    previous_review_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.reviews.review_id"), unique=True
+    )
+    task_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False
+    )
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), nullable=False
+    )
+    context_pack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False, unique=True
+    )
+    agent_identity: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    thesis_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    time_efficiency: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class MarketReviewModel(Base):
+    __tablename__ = "market_reviews"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_market_reviews_hash"),
+        Index("ix_market_reviews_as_of", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+
+    market_review_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    previous_market_review_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.market_reviews.market_review_id"), unique=True
+    )
+    task_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False
+    )
+    market_regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.market_regime_snapshots.regime_snapshot_id")
+    )
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), nullable=False
+    )
+    context_pack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_result_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False, unique=True
+    )
+    agent_identity: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

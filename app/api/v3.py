@@ -15,9 +15,14 @@ from app.v3.application.build_context_pack import (
     BuildContextPackService,
 )
 from app.v3.application.read_evidence import ReadEvidenceService
+from app.v3.application.import_ai_results import (
+    ConfirmAIResultImportService,
+    PreviewAIResultImportService,
+)
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
+from app.v3.domain.ai_import import AIResultBundle, AIResultConfirmCommand
 from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
@@ -337,3 +342,23 @@ async def task_run_by_id(task_run_id: UUID):
     if run is None:
         raise HTTPException(status_code=404, detail="task run not found")
     return run
+
+
+@router.post("/ai-results/imports/preview")
+async def preview_ai_result_import(bundle: AIResultBundle):
+    try:
+        return await PreviewAIResultImportService(_uow).execute(bundle)
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/ai-results/imports/{import_id}/confirm")
+async def confirm_ai_result_import(import_id: UUID, command: AIResultConfirmCommand):
+    try:
+        return await ConfirmAIResultImportService(_uow).execute(import_id, command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
