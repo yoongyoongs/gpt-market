@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="04e059cd674e0c55b1368a5f0af1b08d63ad19b0e6b1aeab654a1aa2b28330bb"><title>gpt-market 工作状态</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="a134e61b018ef6f8bb79ab2ba4e3ba41f745019302f223c8e7dc154a92001a76"><title>gpt-market 工作状态</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -16,15 +16,15 @@
 <li><a href="#_7">接手关键文件</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：04e059cd674e</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/工作状态.md · 内容哈希：a134e61b018e</div><h1 id="gpt-market">gpt-market 工作状态<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>最后更新：2026-08-31（Asia/Shanghai）
 当前分支：<code>codex/phase5-multi-recall</code>
-当前稳定基线：<code>v3-phase4-core-evidence-20260831</code>
+当前稳定基线：<code>v3-phase5-multi-recall-20260831</code>
 状态对应提交：以本文件所在的当前 Phase 5 分支最新提交为准</p>
 </blockquote>
 <h2 id="_1">当前结论<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
-<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1–4 已完成技术验收；Phase 5 已实现 12 个首批 Recall Channel、Run/Raw、全 Universe PENDING Observation、追加式成熟基础和 Recall/Raw/Miss READ，当前等待修改后 <code>0005</code> 的真实 PostgreSQL 复验与全市场验收。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。Phase 6 至 Phase 11 尚未开发，不能将当前状态表述为整个 V3 完成。</p>
+<p>V3 架构设计已经冻结为 Baseline 1.0。Phase 1–5 已完成技术验收；Phase 5 的 12 个首批 Recall Channel、Run/Raw、全 Universe PENDING Observation、追加式成熟基础和 Recall/Raw/Miss READ 已通过修改后 Migration、独立空库完整回归与 5,551 只全市场验收。继续保持 V1/V2 兼容，不修改其评分规则；生产仍以现有 V1/V2 + Phase2A 为运行基线，V3 尚未启用。下一阶段是 Phase 6 Context/Comparison/Task/READ JSON；Phase 6 至 Phase 11 未完成前，不能将当前状态表述为整个 V3 完成。</p>
 <h2 id="_2">已完成<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
 <ul>
 <li>V2/Phase2A 基线提交：<code>556a335</code>；</li>
@@ -104,17 +104,19 @@
 <li>修正 Observation append-only 闭环：PENDING 不再与终态争用同一唯一记录，MATURED/UNAVAILABLE 必须通过 <code>supersedes_observation_id</code> 追加且一个 PENDING 最多一个终态。</li>
 <li>新增 <code>MatureRecallObservationsService</code>、Outcome Provider 契约、阈值版本化基础分类和 <code>GET /api/v3/recalls/misses</code> Cursor READ；Outcome 获取不占用数据库事务。</li>
 <li>新增收益一致性、Outcome 完整性、不可用原因、重复执行零新增和异常未召回分类测试；本地完整回归 <code>184 passed, 23 skipped</code>，2 条既有警告保留。</li>
-<li>PostgreSQL 集成回归已补“Recall 仅命中 1/2，但 Full Universe 仍返回 2/2”、追加成熟链、三 Horizon Miss READ 和幂等；本地无 <code>V3_TEST_DATABASE_URL</code> 时明确跳过，必须在隔离 PostgreSQL 17 复验后才可宣称本轮数据库验收完成。</li>
+<li>PostgreSQL 集成回归已通过“Recall 仅命中 1/2，但 Full Universe 仍返回 2/2”、追加成熟链、三 Horizon Miss READ 和幂等；修改后的 <code>0005</code> 在隔离 PostgreSQL 17 完成 <code>0003 -&gt; 0005 -&gt; 0003 -&gt; 0005</code>，5,551 条 Feature 全程保留。</li>
+<li>Phase 5 独立空库完整回归 <code>202 passed, 5 skipped</code>；真实 5,551 证券 Run 为 12 通道中 6 成功/6 明确 <code>UNAVAILABLE</code>，命中 3,492，发布 5,726 Result、3,492 Raw 和 16,653 PENDING Observation。</li>
+<li>Phase 5 全市场首次执行 14.971 秒，幂等重放 3.539 秒且返回同一 Run；2,059 只未命中证券仍可由 Full Universe Query 读取。20 次 READ P95 为 Feature 12.273ms、Raw 11.858ms、Result 10.600ms、Miss 1.081ms。</li>
+<li>Phase 5 已完成技术验收；稳定标签为 <code>v3-phase5-multi-recall-20260831</code>。生产 V3 未启用，生产数据库未执行 <code>0005</code>。</li>
 </ul>
 <h2 id="_3">正在进行<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <ul>
-<li>修改后 <code>0005</code> 的隔离 PostgreSQL 17 Migration/Repository/不可变触发器复验；</li>
-<li>Phase 5 真实全市场召回覆盖、性能、幂等和未命中证券可访问验收；</li>
-<li>point-in-time-safe Outcome Provider 方案验证；无法证明同口径时必须写 UNAVAILABLE。</li>
+<li>Phase 5 已收口，下一开发步骤为 Phase 6 Context、Candidate Comparison、Task 和 READ JSON；</li>
+<li>point-in-time-safe Outcome Provider 不阻塞 Phase 6，严格未来收益实现按 Baseline 留在 Phase 10；无法证明同口径时必须写 <code>UNAVAILABLE</code>。</li>
 </ul>
 <h2 id="_4">未开始<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Phase 5 完成验收及 Phase 6 至 Phase 11；</li>
+<li>Phase 6 至 Phase 11；</li>
 <li>生产环境 V3 PostgreSQL 部署和正式 Migration；</li>
 <li>V3 Context、AI Import 和 Portfolio 实现；</li>
 <li>服务器 V3 部署。</li>
@@ -124,6 +126,7 @@
 <li>当前日历版本覆盖至 2026-12-31；进入 2027 年前必须升级数据包并按交易所公告复验，越界时系统会显式失败；</li>
 <li>当前验收全市场数据均取得 RAW/QFQ/Factor/FULL；其他时间或上游只能返回 QFQ 时仍按设计降为 <code>LIMITED</code>；</li>
 <li>当前行情 fallback 能保证价格/成交量序列，但不能补齐可靠历史成交额；成熟样本特征覆盖为 25/28，缺失字段均在记录中显式标注；</li>
+<li>当前全市场 Recall 的周底日强、相对指数、相对行业和三类 Evidence 通道因历史输入缺失明确 <code>UNAVAILABLE</code>；Coverage 0.5 是通道执行覆盖，不是证券行情覆盖，也不应被伪装为零命中；</li>
 <li>本状态不代表当前服务器部署版本已经包含 V3，服务器仍以现有部署事实为准。</li>
 </ul>
 <h2 id="_5">最近验证<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
@@ -168,11 +171,11 @@
 </ul>
 <h2 id="_6">下一步<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <ol>
-<li>在隔离 PostgreSQL 17 重新执行修改后的 <code>0005</code> 双向迁移、完整回归和追加成熟链验收；</li>
-<li>在真实 5,551 只 Feature Run 上执行 12 通道召回，记录覆盖、UNAVAILABLE、命中数、耗时和幂等结果；</li>
-<li>验证未命中证券 Full Universe Query、Recall/Raw/Miss READ 性能，完成文档收口、合并 <code>main</code> 并建立 Phase 5 稳定标签。</li>
+<li>按 Phase 6 验收范围先建立 CandidateComparisonPack / Candidate Comparison Context 的紧凑 READ；</li>
+<li>实现 N→TopK 后的单股 NORMAL/DEEP Context Pack、Task 读取和时点/Hash 绑定；</li>
+<li>保持生产 V3 关闭，每个小步骤完成测试、状态记录、中文提交并推送后再进入下一步。</li>
 </ol>
-<p>当前开发稳定基线为标签 <code>v3-phase4-core-evidence-20260831</code>；生产仍运行 V1/V2 基线，在后续 Phase 和最终生产部署前不启用 V3。</p>
+<p>当前开发稳定基线为标签 <code>v3-phase5-multi-recall-20260831</code>；生产仍运行 V1/V2 基线，在后续 Phase 和最终生产部署前不启用 V3。</p>
 <h2 id="_7">接手关键文件<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
 <pre><code class="language-text">README.md
 docs/架构设计实施稿.md

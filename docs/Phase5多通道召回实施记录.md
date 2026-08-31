@@ -2,7 +2,7 @@
 
 > 日期：2026-08-31（Asia/Shanghai）
 > 分支：`codex/phase5-multi-recall`
-> 状态：12 个首批 Channel、Run/Raw/Observation、追加式成熟基础和 READ 已完成；真实 PostgreSQL 复验与全市场验收待执行
+> 状态：Phase 5 技术验收完成；生产 V3 仍保持关闭
 
 ## 1. 范围
 
@@ -47,15 +47,20 @@ Phase 5 按《架构设计实施稿》实现 Multi-Recall、Raw Opportunity、�
 - 12 通道真实 Job 探针成功发布：2 股夹具中 6 个 Feature 通道成功，周线/指数/行业及三类 Evidence 因确实缺输入明确 `UNAVAILABLE`，Coverage `0.5`；
 - Evidence Channel 专项验证跨年同报告期、预告/快报同比、官方催化词和普通公告不命中；第三个全新 PostgreSQL 库完整回归 `199 passed, 5 skipped`；
 - 相关文件 Ruff 和 `git diff --check` 通过。
-- 本地新增成熟链、Outcome 完整性、收益一致性、幂等和漏召回分类测试；当前不配置真实 PostgreSQL 的完整回归为 `184 passed, 23 skipped`。
-- 真实 PostgreSQL 集成用例已补齐：将验证追加终态、Recall Miss READ、未召回证券仍由 Full Universe Query 返回，以及成熟重放零新增；本轮修改后的 `0005` 尚需在隔离 PostgreSQL 17 重新执行，不沿用修改前的迁移结论。
+- 本地新增成熟链、Outcome 完整性、收益一致性、幂等和漏召回分类测试；不配置真实 PostgreSQL 的完整回归为 `184 passed, 23 skipped`。
+- 修改后的 `0005` 已在服务器隔离 PostgreSQL 17 完成 `0003 -> 0005 -> 0003 -> 0005` 双向迁移；5,551 条 Feature 全程保留，六张 Phase 5 表创建完整。
+- 独立空库从 `base -> 0005` 后执行完整回归：`202 passed, 5 skipped`；两条既有依赖/异步资源警告保留。真实 PostgreSQL 专项用例同时通过追加终态、Recall Miss READ、未召回证券仍由 Full Universe Query 返回和成熟重放零新增。
+- 真实 5,551 证券 Feature Run 执行 12 通道：6 个成功、6 个因输入确实缺失明确 `UNAVAILABLE`，发布状态 `PUBLISHED`，通道 Coverage `0.5`，命中 3,492 只。
+- 全市场 Run 生成 5,726 条 Recall Result、3,492 条 Raw Opportunity 和 16,653 条全 Universe PENDING Observation；首次耗时 14.971 秒，第二次耗时 3.539 秒并返回同一 `recall_run_id=8866cd57-f68e-4ffd-9275-83f1e55ce4f1`，数据库只保留一个 Run。
+- 2,059 只未命中证券仍存在于 5,551 条 Full Universe Query；抽样 `BJ 920001 纬达光电` 可读取，证明 Recall 不是 Universe 权限墙。
+- READ 20 次服务器实测 P95：Feature 12.273ms、Raw 11.858ms、Recall Result 10.600ms、Recall Miss 1.081ms；所有接口均为数据库读取，没有触发行情采集。
+- 验收期间生产 `market-mcp`、Nginx 本机入口和公网 `106.13.171.166:80` 健康检查均为 HTTP 200；隔离数据库未挂载生产，V3 未启用。
 - Phase 5 只定义 Outcome Provider 契约和基础漏召回分类；严格同口径未来收益、MFE/MAE、Target/Stop 与七类归因仍属于 Phase 10，禁止用不一致复权价格冒充严格评价。
 
-## 4. 待完成
+## 4. 验收边界与后续
 
-1. 在隔离 PostgreSQL 17 对修改后的 `0005` 执行 Upgrade/Downgrade、追加成熟链和完整回归；
-2. 运行真实全市场 Recall，验收 12 通道覆盖、失败隔离、耗时、幂等和未命中证券可访问；
-3. 为生产 Job 选择并验证 point-in-time-safe Outcome Provider；若同口径收益无法证明则返回 UNAVAILABLE，不伪造；
-4. 文档收口、合并与 Phase 5 稳定标签。
+1. Phase 6 开始实现 Candidate Comparison Context、Context Pack、Task 和 READ JSON；
+2. Phase 10 再选择并验证 point-in-time-safe Outcome Provider；若同口径收益无法证明则追加 `UNAVAILABLE`，不得伪造；
+3. 生产 PostgreSQL Migration 和 V3 启用仍须等待后续 Phase 与最终部署验收，本轮不部署 V3。
 
-本记录不表示 Phase 5 或整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 `0005`。
+Phase 5 技术验收通过，但不表示整个 V3 已完成。生产 V3 仍关闭，生产数据库尚未执行 `0005`。
