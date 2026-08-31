@@ -12,7 +12,13 @@ from app.utils.time import SHANGHAI
 from app.v3.contracts.agent import AgentTask
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.context import CandidateComparisonMember, CandidateComparisonPack
+from app.v3.domain.context import (
+    CandidateComparisonMember,
+    CandidateComparisonPack,
+    CandidateComparisonRecallHit,
+    CandidateComparisonSource,
+    CandidateComparisonSourceMember,
+)
 from app.v3.domain.evidence import (
     DecayModel,
     EntityLink,
@@ -2080,6 +2086,248 @@ class SQLAlchemyCandidateComparisonRepository:
             )
         )
         return None if model is None else await self._pack(model)
+
+    async def latest_for_candidate_set(
+        self,
+        candidate_set_id: UUID,
+        *,
+        field_profile_version: str,
+        as_of: datetime,
+    ) -> CandidateComparisonPack | None:
+        model = await self._session.scalar(
+            select(CandidateComparisonPackModel)
+            .where(
+                CandidateComparisonPackModel.candidate_set_id == candidate_set_id,
+                CandidateComparisonPackModel.field_profile_version
+                == field_profile_version,
+                CandidateComparisonPackModel.known_at <= as_of,
+            )
+            .order_by(
+                CandidateComparisonPackModel.known_at.desc(),
+                CandidateComparisonPackModel.comparison_pack_id.desc(),
+            )
+            .limit(1)
+        )
+        return None if model is None else await self._pack(model)
+
+    async def load_source(
+        self,
+        codes: tuple[str, ...],
+        *,
+        as_of: datetime,
+        feature_run_id: UUID | None = None,
+        recall_run_id: UUID | None = None,
+    ) -> CandidateComparisonSource | None:
+        feature_filters = (
+            FeatureRunModel.status == FeatureRunStatus.PUBLISHED.value,
+            FeatureRunModel.as_of <= as_of,
+            FeatureRunModel.completed_at.is_not(None),
+            FeatureRunModel.completed_at <= as_of,
+        )
+        if feature_run_id is None:
+            feature_run_model = await self._session.scalar(
+                select(FeatureRunModel)
+                .where(*feature_filters)
+                .order_by(
+                    FeatureRunModel.as_of.desc(),
+                    FeatureRunModel.completed_at.desc(),
+                    FeatureRunModel.feature_run_id.desc(),
+                )
+                .limit(1)
+            )
+        else:
+            feature_run_model = await self._session.scalar(
+                select(FeatureRunModel).where(
+                    FeatureRunModel.feature_run_id == feature_run_id,
+                    *feature_filters,
+                )
+            )
+        if feature_run_model is None:
+            return None
+
+        parsed_codes = tuple(self._parse_candidate_code(value) for value in codes)
+        bare_codes = tuple(dict.fromkeys(code for _, code in parsed_codes))
+        rows = (
+            await self._session.execute(
+                select(SecurityModel, SecurityFeatureModel)
+                .join(
+                    SecurityFeatureModel,
+                    SecurityFeatureModel.security_id == SecurityModel.security_id,
+                )
+                .where(
+                    SecurityFeatureModel.feature_run_id
+                    == feature_run_model.feature_run_id,
+                    SecurityModel.code.in_(bare_codes),
+                )
+            )
+        ).all()
+        by_code: dict[str, list[tuple[SecurityModel, SecurityFeatureModel]]] = {}
+        for security, feature in rows:
+            by_code.setdefault(security.code, []).append((security, feature))
+        ordered_rows = []
+        for requested, (market, code) in zip(codes, parsed_codes, strict=True):
+            matches = [
+                row for row in by_code.get(code, ())
+                if market is None or row[0].market == market
+            ]
+            if not matches:
+                raise RepositoryNotFoundError(
+                    f"candidate {requested} has no feature in selected run"
+                )
+            if len(matches) != 1:
+                raise ValueError(
+                    f"candidate code {requested} is ambiguous; use MARKET:CODE"
+                )
+            ordered_rows.append(matches[0])
+
+        recall_model = None
+        recall_filters = (
+            RecallRunModel.feature_run_id == feature_run_model.feature_run_id,
+            RecallRunModel.status == RecallRunStatus.PUBLISHED.value,
+            RecallRunModel.known_at <= as_of,
+        )
+        if recall_run_id is None:
+            recall_model = await self._session.scalar(
+                select(RecallRunModel)
+                .where(*recall_filters)
+                .order_by(
+                    RecallRunModel.known_at.desc(),
+                    RecallRunModel.recall_run_id.desc(),
+                )
+                .limit(1)
+            )
+        else:
+            recall_model = await self._session.scalar(
+                select(RecallRunModel).where(
+                    RecallRunModel.recall_run_id == recall_run_id,
+                    *recall_filters,
+                )
+            )
+            if recall_model is None:
+                raise RepositoryNotFoundError(
+                    "published recall run is unavailable for selected feature run/as_of"
+                )
+
+        security_ids = tuple(row[0].security_id for row in ordered_rows)
+        hits_by_security: dict[UUID, list[CandidateComparisonRecallHit]] = {}
+        if recall_model is not None:
+            recall_rows = (
+                await self._session.execute(
+                    select(RecallResultModel, RecallChannelModel.code)
+                    .join(
+                        RecallChannelModel,
+                        RecallChannelModel.channel_id == RecallResultModel.channel_id,
+                    )
+                    .where(
+                        RecallResultModel.recall_run_id
+                        == recall_model.recall_run_id,
+                        RecallResultModel.security_id.in_(security_ids),
+                    )
+                    .order_by(
+                        RecallResultModel.security_id,
+                        RecallChannelModel.code,
+                        RecallResultModel.channel_rank,
+                    )
+                )
+            ).all()
+            for result, channel_code in recall_rows:
+                hits_by_security.setdefault(result.security_id, []).append(
+                    CandidateComparisonRecallHit(
+                        channel_code=channel_code,
+                        channel_rank=result.channel_rank,
+                        strength=float(result.strength),
+                        reasons=tuple(result.reasons),
+                        coverage=float(result.coverage),
+                    )
+                )
+
+        regime_snapshot_id = await self._session.scalar(
+            select(MarketRegimeSnapshotModel.regime_snapshot_id).where(
+                MarketRegimeSnapshotModel.feature_run_id
+                == feature_run_model.feature_run_id,
+                MarketRegimeSnapshotModel.known_at <= as_of,
+            )
+        )
+        members = tuple(
+            CandidateComparisonSourceMember(
+                security_id=security.security_id,
+                market=security.market,
+                code=security.code,
+                name=security.name,
+                feature=self._comparison_feature(feature),
+                recall_hits=tuple(hits_by_security.get(security.security_id, ())),
+            )
+            for security, feature in ordered_rows
+        )
+        return CandidateComparisonSource(
+            feature_run=SQLAlchemyFeatureRepository._run(feature_run_model),
+            recall_run_id=None if recall_model is None else recall_model.recall_run_id,
+            regime_snapshot_id=regime_snapshot_id,
+            members=members,
+        )
+
+    @staticmethod
+    def _parse_candidate_code(value: str) -> tuple[str | None, str]:
+        normalized = value.strip().upper().replace(".", ":")
+        if ":" in normalized:
+            market, code = normalized.split(":", 1)
+            if market not in {"SH", "SZ", "BJ"}:
+                raise ValueError(f"unsupported candidate market: {market}")
+        else:
+            market, code = None, normalized
+        if len(code) != 6 or not code.isdigit():
+            raise ValueError(f"invalid candidate code: {value}")
+        return market, code
+
+    @staticmethod
+    def _comparison_feature(model: SecurityFeatureModel) -> SecurityFeature:
+        def number(value):
+            return None if value is None else float(value)
+
+        return SecurityFeature(
+            feature_run_id=model.feature_run_id,
+            security_id=model.security_id,
+            series_revision_id=model.series_revision_id,
+            factor_revision_id=model.factor_revision_id,
+            as_of=model.as_of,
+            close=float(model.close),
+            return_3d=number(model.return_3d),
+            return_5d=number(model.return_5d),
+            return_10d=number(model.return_10d),
+            return_20d=number(model.return_20d),
+            return_60d=number(model.return_60d),
+            return_120d=number(model.return_120d),
+            return_250d=number(model.return_250d),
+            position_60d=number(model.position_60d),
+            position_120d=number(model.position_120d),
+            position_250d=number(model.position_250d),
+            ma5=number(model.ma5),
+            ma10=number(model.ma10),
+            ma20=number(model.ma20),
+            ma60=number(model.ma60),
+            ma20_slope=number(model.ma20_slope),
+            ma60_slope=number(model.ma60_slope),
+            atr14=number(model.atr14),
+            atr_pct=number(model.atr_pct),
+            volatility20=number(model.volatility20),
+            distance_60d_high=number(model.distance_60d_high),
+            distance_60d_low=number(model.distance_60d_low),
+            breakout_20d=model.breakout_20d,
+            pullback_20d=model.pullback_20d,
+            amount=number(model.amount),
+            volume_ratio_5d=number(model.volume_ratio_5d),
+            volume_expansion=model.volume_expansion,
+            relative_index_strength=number(model.relative_index_strength),
+            relative_industry_strength=number(model.relative_industry_strength),
+            coverage=float(model.coverage),
+            stale=model.stale,
+            missing_fields=tuple(model.missing_fields),
+            source_errors=tuple(model.source_errors),
+            quality=model.quality,
+            features=model.features,
+            input_hash=model.input_hash,
+            content_hash=model.content_hash,
+        )
 
     async def _validate_references(self, pack: CandidateComparisonPack) -> None:
         feature = await self._session.get(FeatureRunModel, pack.feature_run_id)

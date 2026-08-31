@@ -7,7 +7,11 @@ from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
-from app.v3.domain.context import CandidateComparisonPack, ContextPack
+from app.v3.domain.context import (
+    CandidateComparisonPack,
+    CandidateComparisonSource,
+    ContextPack,
+)
 from app.v3.domain.evidence import (
     EntityLink,
     EvidenceConflict,
@@ -223,6 +227,23 @@ class CandidateComparisonRepository(Protocol):
     async def get(self, comparison_pack_id: UUID) -> CandidateComparisonPack | None: ...
 
     async def get_by_content_hash(self, content_hash: str) -> CandidateComparisonPack | None: ...
+
+    async def latest_for_candidate_set(
+        self,
+        candidate_set_id: UUID,
+        *,
+        field_profile_version: str,
+        as_of: datetime,
+    ) -> CandidateComparisonPack | None: ...
+
+    async def load_source(
+        self,
+        codes: tuple[str, ...],
+        *,
+        as_of: datetime,
+        feature_run_id: UUID | None = None,
+        recall_run_id: UUID | None = None,
+    ) -> CandidateComparisonSource | None: ...
 
 
 class ContextPackRepository(Protocol):

@@ -6,10 +6,18 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 
 from app.container import container
+from app.v3.application.build_candidate_comparison import (
+    BuildCandidateComparisonService,
+    CandidateComparisonQuery,
+)
 from app.v3.application.read_evidence import ReadEvidenceService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
+from app.v3.repositories.errors import (
+    RepositoryConflictError,
+    RepositoryNotFoundError,
+)
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
 
@@ -78,6 +86,40 @@ async def market_regime():
     if snapshot is None:
         raise HTTPException(status_code=404, detail="published market regime not found")
     return snapshot
+
+
+@router.get("/candidates/comparison-pack")
+async def candidate_comparison_pack(
+    candidate_set_id: UUID | None = None,
+    codes: str | None = Query(
+        default=None,
+        description="20-100 comma-separated CODE or MARKET:CODE candidates",
+    ),
+    feature_run_id: UUID | None = None,
+    recall_run_id: UUID | None = None,
+    field_profile_version: str = Query(
+        default="compact-fields.v1", min_length=1, max_length=64
+    ),
+    as_of: datetime | None = None,
+):
+    try:
+        query = CandidateComparisonQuery(
+            candidate_set_id=candidate_set_id,
+            codes=tuple(item.strip() for item in codes.split(",") if item.strip())
+            if codes
+            else (),
+            feature_run_id=feature_run_id,
+            recall_run_id=recall_run_id,
+            field_profile_version=field_profile_version,
+            as_of=as_of or datetime.now(timezone.utc),
+        )
+        return await BuildCandidateComparisonService(_uow).execute(query)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _enum_values(value: str | None, enum_type):

@@ -6,7 +6,7 @@
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01、P6-02 已完成；等待用户确认后再启动 P6-03
+> 当前状态：P6-01、P6-02、P6-03 已完成；按用户授权继续 P6-04
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -22,7 +22,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 |---|---|---|---|
 | P6-01 | 冻结 Context、Candidate Comparison、Task Domain/Repository 契约和 0006 设计 | DONE | `044da58`；状态提交 `1585be0` |
 | P6-02 | 完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化 | DONE | `e669cac` 检查点；PostgreSQL 17.11 完整回归 `212 passed, 5 skipped` |
-| P6-03 | Comparison Builder 与 N→TopK READ | TODO | 依赖 P6-02；本轮不启动 |
+| P6-03 | Comparison Builder 与 N→TopK READ | DONE | `GET /api/v3/candidates/comparison-pack`；本地全量回归 `195 passed, 25 skipped` |
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | TODO | 依赖 P6-01/P6-02 |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | TODO | 不实现 AI Import |
 | P6-06 | ChatGPT READ JSON 接线与契约测试 | TODO | 依赖 P6-03–P6-05 |
@@ -110,6 +110,16 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - PostgreSQL 容器未发布宿主端口、未挂载生产目录；验收结束后已删除临时容器、网络、镜像、上传包和 `/tmp` 目录；
 - 生产 `market-mcp` 全程保持 healthy，服务器本机 `127.0.0.1:8000/health` 与 Nginx `127.0.0.1/health` 均为 HTTP 200；未执行生产 Migration。
 
-## 7. 下一步
+## 7. P6-03 实现与验证
 
-P6-02 完成后停止，等待用户确认。下一 Task 为 P6-03 Comparison Builder 与 N→TopK READ；不得自动启动。
+- 新增 Comparison Builder，支持按 20–100 个 `CODE` / `MARKET:CODE` 候选一次构建紧凑横向对比包，并保留输入顺序；
+- 所有候选绑定同一 Published Feature Run、Universe Snapshot，以及同一时点可用的 Recall Run 和 Market Regime；
+- Feature、Recall Hit 与 Evidence 使用批量数据库读取；组装在事务外完成，最终使用短事务原子发布，Content Hash 重放返回既有 Pack；
+- Member 输出 Recall、趋势、位置、波动、量价、流动性、基本面、风险、Evidence 和质量摘要；缺失保持 `UNKNOWN`/Missing；
+- 明确裁剪分钟 K、深度 Evidence Payload 和统一 Final Score；服务端不计算 TopK，由 ChatGPT 完成 N→TopK；
+- `GET /api/v3/candidates/comparison-pack` 支持按候选代码构建，也支持按 `candidate_set_id` 读取已发布 Pack；返回 Pack Hash 和全部版本/时点引用；
+- 专项回归：`13 passed, 2 skipped, 2 warnings`；全量本地回归：`195 passed, 25 skipped, 2 warnings`。Skip 均为未配置本地 PostgreSQL/联网条件的既有可选测试，两项 Warning 为既有警告；本 Task 按用户要求不连接服务器。
+
+## 8. 下一步
+
+用户已授权 P6-03 独立提交后继续 P6-04。下一 Task 为 FAST/NORMAL/DEEP Context Pack 与 Evidence Selection；不得进入 P6-05。
