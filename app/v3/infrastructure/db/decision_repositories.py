@@ -16,6 +16,12 @@ from app.v3.domain.ai_import import (
     ImportStatus,
 )
 from app.v3.domain.hashing import canonical_hash
+from app.v3.domain.decision import (
+    DecisionCorrectionCommand,
+    WatchlistState,
+    WatchlistTransitionCommand,
+    validate_watchlist_transition,
+)
 from app.v3.domain.task import TaskGroupCounts, derive_task_run_status
 from app.v3.infrastructure.db.models import (
     AIResultAtomicGroupModel,
@@ -26,6 +32,7 @@ from app.v3.infrastructure.db.models import (
     AgentTaskModel,
     ContextPackModel,
     DecisionModel,
+    DecisionCorrectionModel,
     EntryPlanModel,
     EvidenceRecordModel,
     MarketReviewModel,
@@ -34,6 +41,8 @@ from app.v3.infrastructure.db.models import (
     ReviewModel,
     TaskRunModel,
     WatchlistProposalModel,
+    WatchlistEventModel,
+    WatchlistModel,
 )
 from app.v3.repositories.errors import RepositoryConflictError, RepositoryNotFoundError
 
@@ -224,11 +233,19 @@ class SQLAlchemyAIResultImportRepository:
             return [object_id]
         if envelope.result_type == "EntryPlanResult":
             object_id = UUID(str(payload.get("entry_plan_id", uuid4())))
+            decision_id = UUID(str(payload["decision_id"]))
+            version = int(payload.get("version", 1))
+            supersedes = UUID(str(payload["supersedes_entry_plan_id"])) if payload.get("supersedes_entry_plan_id") else None
+            creator_count = int(bool(payload.get("created_by_review_id"))) + int(bool(payload.get("created_by_position_review_id")))
+            if version == 1 and (supersedes is not None or creator_count):
+                raise RepositoryConflictError("entry plan version 1 cannot supersede or be review-created")
+            if version > 1:
+                previous = await self._session.get(EntryPlanModel, supersedes) if supersedes else None
+                if previous is None or previous.decision_id != decision_id or previous.version != version - 1 or creator_count != 1:
+                    raise RepositoryConflictError("entry plan version chain is invalid")
             self._session.add(EntryPlanModel(
-                entry_plan_id=object_id, decision_id=UUID(str(payload["decision_id"])),
-                version=int(payload.get("version", 1)),
-                supersedes_entry_plan_id=UUID(str(payload["supersedes_entry_plan_id"]))
-                if payload.get("supersedes_entry_plan_id") else None,
+                entry_plan_id=object_id, decision_id=decision_id,
+                version=version, supersedes_entry_plan_id=supersedes,
                 created_by_review_id=UUID(str(payload["created_by_review_id"]))
                 if payload.get("created_by_review_id") else None,
                 created_by_position_review_id=UUID(str(payload["created_by_position_review_id"]))
@@ -329,6 +346,91 @@ class SQLAlchemyAIResultImportRepository:
             ))
             return [object_id]
         return []
+
+    async def transition_watchlist(
+        self, security_id: UUID, command: WatchlistTransitionCommand,
+    ) -> dict[str, Any]:
+        row = await self._session.scalar(select(WatchlistModel).where(
+            WatchlistModel.security_id == security_id
+        ).with_for_update())
+        projection_quantity = await self._session.scalar(select(
+            func.coalesce(func.sum(PositionProjectionModel.quantity), 0)
+        ).where(PositionProjectionModel.security_id == security_id))
+        target = command.target_state
+        current = WatchlistState(row.state) if row is not None else None
+        if row is None:
+            if target is not WatchlistState.WATCHING:
+                raise RepositoryConflictError("new watchlist item must start at WATCHING")
+            now = datetime.now(timezone.utc)
+            row = WatchlistModel(
+                watchlist_id=uuid4(), security_id=security_id,
+                state=target.value, row_version=1, created_at=now, updated_at=now,
+            )
+            self._session.add(row)
+        else:
+            validate_watchlist_transition(
+                current, target,
+                confirmed_position_quantity=float(projection_quantity or 0),
+            )
+            row.state = target.value
+            row.updated_at = datetime.now(timezone.utc)
+            row.row_version += 1
+        event_id = uuid4()
+        event_payload = {
+            "watchlist_id": str(row.watchlist_id),
+            "from_state": current.value if current else None,
+            "to_state": target.value, "reason": command.reason,
+            "actor_id": command.actor_id,
+        }
+        self._session.add(WatchlistEventModel(
+            event_id=event_id, watchlist_id=row.watchlist_id,
+            from_state=current.value if current else None, to_state=target.value,
+            reason=command.reason, event_time=datetime.now(timezone.utc),
+            content_hash=canonical_hash(event_payload),
+        ))
+        row.latest_event_id = event_id
+        return {"watchlist_id": row.watchlist_id, "event_id": event_id,
+                "state": target.value, "row_version": row.row_version}
+
+    async def read_watchlist(self, state: str | None, limit: int):
+        statement = select(WatchlistModel)
+        if state:
+            statement = statement.where(WatchlistModel.state == state)
+        rows = (await self._session.scalars(
+            statement.order_by(WatchlistModel.updated_at.desc()).limit(limit)
+        )).all()
+        return tuple({column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows)
+
+    async def read_decision_state(self, security_id: UUID):
+        decisions = (await self._session.scalars(select(DecisionModel).where(
+            DecisionModel.security_id == security_id
+        ).order_by(DecisionModel.as_of.desc()))).all()
+        ids = [item.decision_id for item in decisions]
+        plans = (await self._session.scalars(select(EntryPlanModel).where(
+            EntryPlanModel.decision_id.in_(ids)
+        ).order_by(EntryPlanModel.effective_from))).all() if ids else []
+        reviews = (await self._session.scalars(select(ReviewModel).where(
+            ReviewModel.decision_id.in_(ids)
+        ).order_by(ReviewModel.as_of))).all() if ids else []
+        serialize = lambda row: {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        return {"decisions": tuple(serialize(item) for item in decisions),
+                "entry_plan_versions": tuple(serialize(item) for item in plans),
+                "reviews": tuple(serialize(item) for item in reviews)}
+
+    async def add_decision_correction(
+        self, decision_id: UUID, command: DecisionCorrectionCommand,
+    ) -> UUID:
+        if await self._session.get(DecisionModel, decision_id) is None:
+            raise RepositoryNotFoundError("decision not found")
+        object_id = uuid4()
+        payload = {"decision_id": decision_id, **command.model_dump(mode="json")}
+        self._session.add(DecisionCorrectionModel(
+            correction_id=object_id, decision_id=decision_id,
+            old_values=command.old_values, new_values=command.new_values,
+            reason=command.reason, corrected_by=command.corrected_by,
+            corrected_at=datetime.now(timezone.utc), content_hash=canonical_hash(payload),
+        ))
+        return object_id
 
     async def refresh_task_run(self, task_run_id: UUID) -> str:
         run = await self._session.get(TaskRunModel, task_run_id, with_for_update=True)

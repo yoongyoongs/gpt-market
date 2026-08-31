@@ -1,8 +1,8 @@
 # 极简 A 股实时行情 Remote MCP
 
-只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
+Python 3.12 服务，向 ChatGPT 或其他客户端提供 A 股行情、全市场研究和 V3 决策辅助能力。生产基线仍是只读 V1/V2，不包含下单能力；V3 开发分支增加人工确认的账户事实与不可变成交账本，但不连接券商、不自动交易且尚未启用。
 
-V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1–6 已完成技术验收；Phase 6 已闭合 Candidate Comparison、FAST/NORMAL/DEEP Context、Task Registry 和只读 JSON，并通过 PostgreSQL 17、5,551 只全市场、性能及公网门禁。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 5 实施记录](docs/Phase5多通道召回实施记录.md) 与 [Phase 6 实施记录](docs/Phase6上下文任务实施记录.md)。
+V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1–6 已完成技术验收；Phase 7–10 已完成代码开发，尚未执行测试和 Architecture Gate，不能视为稳定版本。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)及 Phase 7–10 实施记录。
 
 ## 接手开发必读
 

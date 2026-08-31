@@ -30,6 +30,10 @@
 - [V3 Phase 4 证据管道实施记录](Phase4证据管道实施记录.md)
 - [V3 Phase 5 多通道召回实施记录](Phase5多通道召回实施记录.md)
 - [V3 Phase 6 上下文与任务实施记录](Phase6上下文任务实施记录.md)
+- [V3 Phase 7 AI 导入与决策状态实施记录](Phase7AI导入与决策状态实施记录.md)
+- [V3 Phase 8 成交账本与组合实施记录](Phase8成交账本与组合实施记录.md)
+- [V3 Phase 9 行动入场与持仓复盘实施记录](Phase9行动入场与持仓复盘实施记录.md)
+- [V3 Phase 10 绩效回放与回归实施记录](Phase10绩效回放与回归实施记录.md)
 - [服务器部署记录](deployment.md)
 - [东方财富字段实测记录](eastmoney_fields.md)
 - `eastmoney_probe.json`：带时间戳的字段探针样例；

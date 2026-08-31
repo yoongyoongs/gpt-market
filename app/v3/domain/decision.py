@@ -151,3 +151,15 @@ class DecisionReadPage(V3Contract):
     items: tuple[dict[str, Any], ...]
     next_cursor: str | None = None
 
+
+class WatchlistTransitionCommand(V3Contract):
+    target_state: WatchlistState
+    reason: str = Field(min_length=1, max_length=1024)
+    actor_id: str = Field(min_length=1, max_length=128)
+
+
+class DecisionCorrectionCommand(V3Contract):
+    old_values: dict[str, Any]
+    new_values: dict[str, Any]
+    reason: str = Field(min_length=1, max_length=1024)
+    corrected_by: str = Field(min_length=1, max_length=128)

@@ -25,11 +25,27 @@ from app.v3.application.manage_portfolio import (
     PortfolioWriteService,
 )
 from app.v3.application.manage_actions import ActionWriteService
+from app.v3.application.manage_performance import (
+    PerformanceService,
+    PerformanceSummaryCommand,
+    RecallMissSnapshotCommand,
+)
+from app.v3.application.manage_decisions import DecisionStateService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.domain.ai_import import AIResultBundle, AIResultConfirmCommand
 from app.v3.domain.action import ActionCandidateCreate, EntryAssessmentCreate
+from app.v3.domain.performance import (
+    PerformanceAttributionCreate,
+    RegressionCaseCreate,
+    ReplayRunCreate,
+)
+from app.v3.domain.decision import (
+    DecisionCorrectionCommand,
+    WatchlistState,
+    WatchlistTransitionCommand,
+)
 from app.v3.domain.portfolio import (
     AccountCreate,
     OpeningPositionCreate,
@@ -514,3 +530,78 @@ async def portfolio_position_context(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/performance/attributions")
+async def create_performance_attribution(command: PerformanceAttributionCreate):
+    try:
+        return await PerformanceService(_uow).add_attribution(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/performance/summaries")
+async def create_performance_summary(command: PerformanceSummaryCommand):
+    try:
+        return await PerformanceService(_uow).summarize(command)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/replays")
+async def create_replay(command: ReplayRunCreate):
+    return await PerformanceService(_uow).replay(command)
+
+
+@router.post("/regression-cases")
+async def create_regression_case(command: RegressionCaseCreate):
+    try:
+        return await PerformanceService(_uow).add_regression_case(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/performance/recall-miss-runs")
+async def create_recall_miss_snapshot(command: RecallMissSnapshotCommand):
+    return await PerformanceService(_uow).snapshot_recall_misses(command)
+
+
+@router.get("/watchlist")
+async def read_watchlist(
+    state: WatchlistState | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return await DecisionStateService(_uow).read_watchlist(
+        state.value if state else None, limit
+    )
+
+
+@router.post("/watchlist/{security_id}/transitions")
+async def transition_watchlist(
+    security_id: UUID, command: WatchlistTransitionCommand,
+):
+    try:
+        return await DecisionStateService(_uow).transition_watchlist(
+            security_id, command
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/decisions/security/{security_id}")
+async def read_security_decisions(security_id: UUID):
+    return await DecisionStateService(_uow).read_decision_state(security_id)
+
+
+@router.post("/decisions/{decision_id}/corrections")
+async def create_decision_correction(
+    decision_id: UUID, command: DecisionCorrectionCommand,
+):
+    try:
+        return await DecisionStateService(_uow).add_correction(decision_id, command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

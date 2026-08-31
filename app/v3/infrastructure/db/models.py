@@ -1642,7 +1642,9 @@ class PositionSnapshotDraftModel(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     field_confidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    confirmed_opening_position_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    confirmed_opening_position_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.opening_positions.opening_position_id")
+    )
     confirmed_by: Mapped[str | None] = mapped_column(String(128))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -1874,4 +1876,103 @@ class PositionReviewModel(Base):
     recommended_action: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PerformanceAttributionModel(Base):
+    __tablename__ = "performance_attributions"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_performance_attributions_hash"),
+        Index("ix_performance_attributions_ability_regime", "ability", "regime_snapshot_id", "matures_at"),
+        {"schema": V3_SCHEMA},
+    )
+    attribution_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    ability: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"))
+    original_entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    evaluated_entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    trade_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.trade_ledger.trade_id"))
+    trade_bound_entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.market_regime_snapshots.regime_snapshot_id"))
+    horizon_sessions: Mapped[int] = mapped_column(Integer, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    matures_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    raw_return: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    excess_return: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    mfe: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    mae: Mapped[Decimal | None] = mapped_column(Numeric(18, 10))
+    target_hit: Mapped[bool | None] = mapped_column(Boolean)
+    stop_hit: Mapped[bool | None] = mapped_column(Boolean)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PerformanceSummaryModel(Base):
+    __tablename__ = "performance_summaries"
+    __table_args__ = (
+        UniqueConstraint("ability", "regime_key", "strategy_version", "window_end", name="uq_performance_summaries_group"),
+        {"schema": V3_SCHEMA},
+    )
+    performance_summary_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    ability: Mapped[str] = mapped_column(String(32), nullable=False)
+    regime_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_attribution_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+
+class ReplayRunModel(Base):
+    __tablename__ = "replay_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('COMPLETED','BLOCKED')", name="valid_status"),
+        UniqueConstraint("content_hash", name="uq_replay_runs_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    replay_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    replay_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revision_set: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    leakage_checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class RegressionCaseModel(Base):
+    __tablename__ = "regression_cases"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_regression_cases_hash"), {"schema": V3_SCHEMA})
+    regression_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    replay_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    input_requirements: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    expected_invariants: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_replay_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.replay_runs.replay_run_id"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class RecallMissRunModel(Base):
+    __tablename__ = "recall_miss_runs"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_recall_miss_runs_hash"), {"schema": V3_SCHEMA})
+    recall_miss_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    threshold_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    matured_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    unavailable_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    evaluation_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    miss_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    statistics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

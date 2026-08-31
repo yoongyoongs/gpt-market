@@ -69,6 +69,11 @@ def upgrade():
         sa.CheckConstraint("quantity >= 0 AND average_cost >= 0", name="nonnegative_opening"),
         sa.UniqueConstraint("account_id", "security_id", "baseline_time", name="uq_opening_positions_baseline"),
         sa.UniqueConstraint("content_hash", name="uq_opening_positions_hash"), schema=SCHEMA)
+    op.create_foreign_key(
+        "fk_position_snapshot_drafts_opening", "position_snapshot_drafts",
+        "opening_positions", ["confirmed_opening_position_id"],
+        ["opening_position_id"], source_schema=SCHEMA, referent_schema=SCHEMA,
+    )
     op.create_table("trade_ledger", u("trade_id", pk=True),
         sa.Column("ledger_sequence", sa.BigInteger(), sa.Identity(), nullable=False), u("draft_id", nullable=True),
         u("account_id"), u("security_id"), sa.Column("side", sa.String(8), nullable=False),
@@ -153,5 +158,6 @@ def upgrade():
 def downgrade():
     for table in reversed(IMMUTABLE):
         op.execute(f"DROP TRIGGER IF EXISTS trg_{table}_immutable ON {SCHEMA}.{table}")
+    op.drop_constraint("fk_position_snapshot_drafts_opening", "position_snapshot_drafts", schema=SCHEMA, type_="foreignkey")
     for table in ("portfolio_preferences", "portfolio_snapshots", "position_projections", "reconciliations", "portfolio_adjustments", "trade_corrections", "trade_ledger", "opening_positions", "position_snapshot_drafts", "trade_drafts", "image_imports", "accounts"):
         op.drop_table(table, schema=SCHEMA)
