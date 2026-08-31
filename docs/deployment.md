@@ -122,3 +122,26 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 ```
 
 2027 年前必须升级 `exchange-calendars` 并重新核对交易所休市安排；当前版本越过 2026-12-31 会明确失败，不会按普通工作日静默运行。
+
+## 2026-09-01 生产部署记录
+
+- Git 基线：`main@c25f6e4`；Phase 7–11 验收分支已快进合并并推送 `origin/main`。
+- API：`market-mcp`，镜像 `gpt-market:main-c25f6e4`，仅绑定 `127.0.0.1:8000`，Nginx 继续对外提供 80 端口。
+- 数据库：`gpt-market-postgres`，PostgreSQL 17，独立网络 `gpt-market-prod`，持久卷 `gpt-market-postgres-data`；迁移版本为 `0011_strategy_stabilization`。
+- Worker：`gpt-market-v3-worker`，执行 `scripts.v3_phase2_scheduler`；纯后台进程禁用 API HTTP Healthcheck，以进程状态、重启次数和任务日志监控。
+- V3：服务器设置 `V3_ENABLED=true`；V3 API 已可用，策略发布状态仍为 `mode=V2`，没有自动激活策略或自动交易。
+- 回滚备份：`/opt/gpt-market-backups/pre-v3-20260901-074515`；旧镜像标签 `gpt-market:rollback-pre-v3-20260901-074515`，旧 API 容器保留为停止态 `market-mcp-pre-v3-20260901-074515`。
+- 数据保护：原 `/opt/gpt-market/data` 未迁移、未删除；V3 数据库完成 Migration 后已生成独立 `pg_dump`。
+
+服务器的 `docker-compose` 为旧版 1.17.1，不支持当前 Profile。此次生产使用原生 Docker 命令部署，升级 Compose 前不要直接执行带 `profiles` 的 V3 命令。日常检查：
+
+```bash
+docker ps
+docker logs --tail=100 market-mcp
+docker logs --tail=100 gpt-market-v3-worker
+docker exec gpt-market-postgres pg_isready -U gpt_market -d gpt_market
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/api/v3/strategies
+```
+
+本次生产烟测已通过公网/本机 Health、Quote、日 K、`/scan/v2`、V3 Strategy List 和 Production Release State。数据库包含 `v3` schema 的 81 张表，65 张不可变表均有 Trigger；V2 扫描规则和权重未修改。

@@ -1,8 +1,8 @@
 # 极简 A 股实时行情 Remote MCP
 
-Python 3.12 服务，向 ChatGPT 或其他客户端提供 A 股行情、全市场研究和 V3 决策辅助能力。生产基线仍是只读 V1/V2，不包含下单能力；V3 开发分支增加人工确认的账户事实与不可变成交账本，但不连接券商、不自动交易且尚未启用。
+Python 3.12 服务，向 ChatGPT 或其他客户端提供 A 股行情、全市场研究和 V3 决策辅助能力。生产已部署 V1/V2 与 V3 API、PostgreSQL 17 和 Phase 2 Worker；V3 账户事实与不可变成交账本只接受人工确认，不连接券商、不自动交易。
 
-V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1–11 已完成技术验收；Phase 7–11 的隔离 PostgreSQL 17、迁移往返、并发和全项目回归证据见 [Phase 7–11 验收报告](docs/Phase7-11技术验收报告.md)。生产 V3 仍默认关闭，技术验收不等于生产启用；详见 [工作状态](docs/工作状态.md)。
+V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1–11 已完成技术验收；Phase 7–11 的隔离 PostgreSQL 17、迁移往返、并发和全项目回归证据见 [Phase 7–11 验收报告](docs/Phase7-11技术验收报告.md)。2026-09-01 已在生产启用 V3 API 和独立数据库，策略发布状态保持保护性的 `mode=V2`，尚未激活任何 V3 策略版本；详见 [工作状态](docs/工作状态.md)。
 
 ## 接手开发必读
 
@@ -47,7 +47,7 @@ V2 选股作为并行能力保留 V1，不覆盖旧工具：
 - MCP：`scan_mainboard_v2`、`scan_mainboard_ab`
 - REST/GPT：`GET /scan/v2`、`GET /gpt/{secret}/scan/v2`、`GET /gpt/{secret}/scan/v2/html`、`GET /gpt/{secret}/scan/ab`
 
-V3 默认关闭并与 Legacy 隔离。当前开发 READ 包括 `GET /api/v3/universe/features`、`market-regime`、`evidence/{subject_type}/{subject_id}`、`recalls`、`raw-opportunities` 和 `recalls/misses`；必须启用 `V3_ENABLED` 并将 PostgreSQL 迁移到对应 Phase，不能把这些开发接口表述为已在生产上线。
+V3 与 Legacy 隔离。生产已设置 `V3_ENABLED=true` 并迁移至 `0011_strategy_stabilization`；READ API 已上线，但新数据库的数据集需要由正式任务逐步生成。策略发布状态仍为 `mode=V2`，不得把“API 已部署”表述为“V3 策略已激活”。
 
 V1 仍按 `total_score` 排名；V2 按 `opportunity_score` 排名，并返回 `raw_top30`、`action_top30`、`top100`、`score_version=v2`、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 `coverage=false`、`score=null` 和 `missing_fields` 暴露。
 

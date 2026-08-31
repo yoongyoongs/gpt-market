@@ -57,6 +57,8 @@ services:
       postgres:
         condition: service_healthy
     command: ["sh", "-lc", "alembic upgrade head && python -m scripts.v3_phase2_scheduler"]
+    healthcheck:
+      disable: true
     security_opt:
       - no-new-privileges:true
     read_only: true
