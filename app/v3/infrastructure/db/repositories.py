@@ -50,6 +50,8 @@ from app.v3.domain.features import (
     FeatureRunStatus,
     FeatureSortField,
     MarketRegimeSnapshot,
+    PublishedMarketRegimeView,
+    PublishedSecurityFeatureView,
     SecurityFeature,
 )
 from app.v3.domain.hashing import canonical_hash, canonical_json
@@ -1422,7 +1424,7 @@ class SQLAlchemyFeatureRepository:
             quality_summary={"coverage": float(run.coverage), "successful_count": run.successful_count, "failed_count": run.failed_count, "errors": run.error_summary},
         )
 
-    async def latest_regime(self) -> MarketRegimeSnapshot | None:
+    async def latest_regime(self) -> PublishedMarketRegimeView | None:
         model = (
             await self._session.execute(
                 select(MarketRegimeSnapshotModel)
@@ -1437,7 +1439,7 @@ class SQLAlchemyFeatureRepository:
         ).scalar_one_or_none()
         if model is None:
             return None
-        return MarketRegimeSnapshot(
+        return PublishedMarketRegimeView(
             regime_snapshot_id=model.regime_snapshot_id, feature_run_id=model.feature_run_id,
             as_of=model.as_of, known_at=model.known_at, index_states=model.index_states,
             breadth=model.breadth, turnover=model.turnover, limit_structure=model.limit_structure,
@@ -2299,11 +2301,13 @@ class SQLAlchemyCandidateComparisonRepository:
         return market, code
 
     @staticmethod
-    def _comparison_feature(model: SecurityFeatureModel) -> SecurityFeature:
+    def _comparison_feature(
+        model: SecurityFeatureModel,
+    ) -> PublishedSecurityFeatureView:
         def number(value):
             return None if value is None else float(value)
 
-        return SecurityFeature(
+        return PublishedSecurityFeatureView(
             feature_run_id=model.feature_run_id,
             security_id=model.security_id,
             series_revision_id=model.series_revision_id,
@@ -2345,7 +2349,7 @@ class SQLAlchemyCandidateComparisonRepository:
             quality=model.quality,
             features=model.features,
             input_hash=model.input_hash,
-            content_hash=model.content_hash,
+            source_content_hash=model.content_hash,
         )
 
     async def _validate_references(self, pack: CandidateComparisonPack) -> None:
@@ -2742,8 +2746,8 @@ class SQLAlchemyContextPackRepository:
         )
 
     @staticmethod
-    def _regime(model: MarketRegimeSnapshotModel) -> MarketRegimeSnapshot:
-        return MarketRegimeSnapshot(
+    def _regime(model: MarketRegimeSnapshotModel) -> PublishedMarketRegimeView:
+        return PublishedMarketRegimeView(
             regime_snapshot_id=model.regime_snapshot_id,
             feature_run_id=model.feature_run_id,
             as_of=model.as_of,

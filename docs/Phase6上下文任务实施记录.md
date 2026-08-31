@@ -2,11 +2,11 @@
 
 > 最后更新：2026-08-31（Asia/Shanghai）
 >
-> 稳定基线：`main@9506983` / `v3-phase5-multi-recall-20260831`
+> 稳定基线：本文件所在 Phase 6 验收提交 / `v3-phase6-context-task-20260831`
 >
 > 工作分支：`codex/phase6-context-task`
 >
-> 当前状态：P6-01～P6-06 已完成；P6-07 本地预验收完成，等待晚间 PostgreSQL 17/真实数据/公网验收
+> 当前状态：P6-01～P6-07 全部完成，Phase 6 技术验收通过；生产 V3 仍关闭
 
 本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。
 
@@ -26,7 +26,7 @@ Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后�
 | P6-04 | FAST/NORMAL/DEEP Context Pack 与 Evidence Selection | DONE | 三级预算、Evidence Selection、不可变 Repository；本地全量 `198 passed, 25 skipped` |
 | P6-05 | Task Profile、Expected Run 与 Task Run Registry | DONE | Registry/UoW/确定性调度登记；本地全量 `200 passed, 25 skipped` |
 | P6-06 | ChatGPT READ JSON 接线与契约测试 | DONE | 全部新增接口只读 JSON；本地全量 `202 passed, 25 skipped` |
-| P6-07 | 全市场性能验收与 Architecture Gate | READY_FOR_EXTERNAL_VALIDATION | 本地 Gate `205 passed, 25 skipped`；隔离 PostgreSQL/5,551/P95/公网待晚间执行 |
+| P6-07 | 全市场性能验收与 Architecture Gate | DONE | PostgreSQL 17、5,551、P95、公网 JSON 和生产 V1/V2 Gate 全部通过 |
 
 ## 3. P6-01 已冻结契约
 
@@ -129,7 +129,7 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - Raw Payload 不进入 Context；Normalized Payload 位于明确 `UNTRUSTED_DATA` 边界并限制字符串/集合尺寸；
 - Portfolio 等 Phase 8 尚不可用事实明确标记 `UNKNOWN`，不伪造；真实持仓/交易/Stop/Cancel 的不可裁剪规则留待相应事实模块接入后执行；
 - `SQLAlchemyContextPackRepository` 支持原子发布、ID/Hash 读取、有序 Selection 重建、时点和引用一致性验证；Unit of Work 已接线；
-- 专项回归 `14 passed`；全量本地回归 `198 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收按用户安排留待晚间执行。
+- P6-04 开发时专项回归 `14 passed`、全量本地回归 `198 passed, 25 skipped, 2 warnings`；最终 PostgreSQL 17 验收结果见 P6-07。
 
 ## 9. P6-05 实现与验证
 
@@ -139,7 +139,7 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - `RegisterExpectedTaskService` 按已验证 Profile 和明确 `scheduled_for` 原子登记 Expected Run + PENDING Task Run；Expected/Task ID 由 Profile+Schedule 确定性生成，重放零新增；
 - Window 使用 Profile `grace_seconds`，组计数来自 `expected_group_count`；Expected Run 仍只表达计划事实，不包含或声称 AI 执行状态；
 - 本 Task 不解析 Cron、不替代交易日历 Scheduler，不实现 Phase 7 AI Result Import；
-- 专项回归 `10 passed`；全量本地回归 `200 passed, 25 skipped, 2 warnings`。未连接服务器，PostgreSQL 17 集成验收待晚间执行。
+- P6-05 开发时专项回归 `10 passed`、全量本地回归 `200 passed, 25 skipped, 2 warnings`；最终 PostgreSQL 17 验收结果见 P6-07。
 
 ## 10. P6-06 实现与验证
 
@@ -149,18 +149,23 @@ Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增�
 - Task Run 列表使用稳定 Cursor；Task Context 明确返回 Expected Run 只是计划中的 ChatGPT 任务，不表示服务器执行 AI；
 - 股票 Context 根据已发布 Task Profile 的 Context Level 构建，支持绑定 Feature/Recall/Comparison，错误映射为 404/409/422；
 - V3 Feature Flag 关闭时继续 503；机器接口均为 JSON；本 Task 未增加任何 POST/PATCH/PUT/DELETE，也未实现 Phase 7 Import；
-- 专项契约回归 `12 passed, 2 warnings`；全量本地回归 `202 passed, 25 skipped, 2 warnings`。未连接服务器，公网/真实 PostgreSQL 验收待晚间执行。
+- P6-06 开发时专项契约回归 `12 passed, 2 warnings`、全量本地回归 `202 passed, 25 skipped, 2 warnings`；最终公网和 PostgreSQL 17 验收结果见 P6-07。
 
-## 11. P6-07 本地预验收与外部 Gate
+## 11. P6-07 最终验收
 
 - 新增 `scripts/v3_phase6_acceptance.py`，要求显式提供隔离 `V3_TEST_DATABASE_URL`，不默认连接生产库；
 - 验收脚本从真实 Published Feature Run 读取 20–100 只候选，构建 Candidate Comparison 及 FAST/NORMAL/DEEP Context；
 - 脚本验证候选数量/连续顺序、无统一 Final Score、三级预算，并测量 Comparison、NORMAL Context 和已存 Context READ 的 Median/P95/Max；
 - 性能门禁：Comparison P95 < 500ms、Context P95 < 500ms、已存 Context READ P95 < 200ms；输出结构化 JSON，任一门禁失败返回非零退出码；
-- 本地 Architecture Gate 专项 `13 passed, 1 warning`；最终本地全量回归 `205 passed, 25 skipped, 2 warnings`；
-- 按用户要求本轮未连接服务器，因此 PostgreSQL 17 Migration/Repository、真实 5,551 数据、实际 P95、公网 JSON 和 V1/V2 生产健康检查均仍是外部 Gate，P6-07 不标记 DONE。
+- 验收脚本入口修复为可从任意工作目录直接运行，并按当前 `Settings` 显式初始化数据库连接池；新增直接命令回归测试；
+- 真实数据首次运行发现 Phase 6 对已持久化 Feature/Regime 数值重新计算历史 Hash 的兼容问题。修复后改用只读 Published Projection，保留源 Hash 作为引用但不把数据库规范化小数冒充原始浮点重新验 Hash；发布路径仍执行严格 Hash 校验；
+- 隔离 PostgreSQL 17.11 使用 Phase 5 已验收的 5,551 只证券、5,551 条 Feature、5,726 条 Recall Result，完成 `0005 → 0006 → 0005 → 0006`，数据数量保持不变；
+- 100 候选真实验收通过：Comparison P95 `127.741ms`、NORMAL Context P95 `40.981ms`、已存 Context READ P95 `2.527ms`，门禁分别为 500ms、500ms、200ms；三级 Context 均在预算内，无统一 Final Score；
+- 全新 PostgreSQL 17 数据库从 `base → 0006` 后完整回归 `226 passed, 5 skipped, 2 warnings`；本地完整回归 `206 passed, 25 skipped, 2 warnings`。两项 Warning 为既有 Starlette/httpx 弃用提示和既有未 await 警告；
+- 临时公网验收端口对 Health、Market Overview、Feature、Recall 和 Security Context 五个 JSON 路由均返回 HTTP 200，测试后立即关闭；
+- 生产 V1/V2 保持不变：公网 Health、Provider Health、Quote、日 K、Sector 和 Scan V2 均返回 HTTP 200，`market-mcp` 保持 healthy；生产未执行 `0006`，V3 未启用。
 
-## 12. 晚间验收命令与停止点
+## 12. 验收命令与阶段边界
 
 在隔离 PostgreSQL 17 且已具备 Published Feature/Recall/Evidence 数据的环境执行：
 
@@ -170,4 +175,4 @@ python scripts/v3_phase6_acceptance.py \
   --repetitions 20
 ```
 
-结果 `passed=true` 后，还需执行完整测试、V3 READ JSON HTTP/公网探测和 V1/V2 健康检查，再将 P6-07 改为 DONE。当前停止，不进入 Phase 7。
+最终结果为 `passed=true`。Phase 6 只完成 Context、Comparison、Task Registry 和只读 JSON；Phase 7 的 AI Result Import、Decision State 与写入接口仍未开始。生产 V3 继续关闭，正式 Migration 和启用留到后续阶段及最终部署验收。

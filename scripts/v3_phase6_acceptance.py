@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import asyncio
 import json
 import os
+import sys
 import statistics
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid5
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.config import Settings
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -48,7 +57,13 @@ async def measured(call, repetitions: int) -> dict[str, float]:
 
 
 async def run(database_url: str, repetitions: int) -> dict:
-    database = V3Database(database_url)
+    settings = Settings(_env_file=None, v3_database_url=database_url)
+    database = V3Database(
+        database_url,
+        echo=settings.v3_database_echo,
+        pool_size=settings.v3_database_pool_size,
+        max_overflow=settings.v3_database_max_overflow,
+    )
     uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)
     now = datetime.now(timezone.utc)
     async with uow_factory() as uow:

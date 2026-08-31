@@ -31,6 +31,7 @@ from app.v3.domain.features import (
     FeatureQuery,
     FeatureRun,
     MarketRegimeSnapshot,
+    PublishedMarketRegimeView,
     SecurityFeature,
 )
 from app.v3.domain.market_data import (
@@ -112,7 +113,7 @@ class FeatureRepository(Protocol):
 
     async def query(self, query: FeatureQuery) -> FeaturePage | None: ...
 
-    async def latest_regime(self) -> MarketRegimeSnapshot | None: ...
+    async def latest_regime(self) -> PublishedMarketRegimeView | None: ...
 
     async def get_run_by_content_hash(self, content_hash: str) -> FeatureRun | None: ...
 

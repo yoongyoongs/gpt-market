@@ -19,7 +19,12 @@ from app.v3.domain.evidence import (
     EvidenceSourceType,
     NormalizedEvidence,
 )
-from app.v3.domain.features import FeatureRun, FeatureRunStatus, MarketRegimeSnapshot
+from app.v3.domain.features import (
+    FeatureRun,
+    FeatureRunStatus,
+    MarketRegimeSnapshot,
+    PublishedMarketRegimeView,
+)
 
 
 NOW = datetime(2026, 8, 31, 6, tzinfo=timezone.utc)
@@ -45,7 +50,11 @@ def _source():
         turnover={"amount": 1_000_000.0}, risk_appetite_facts={"state": "NORMAL"},
         coverage=1.0, confidence=0.9, stale=False,
     )
-    return ContextBuildSource(feature_run=run, regime=regime, recall_run_id=uuid4())
+    return ContextBuildSource(
+        feature_run=run,
+        regime=PublishedMarketRegimeView(**regime.model_dump()),
+        recall_run_id=uuid4(),
+    )
 
 
 def _evidence(index: int, *, contrary=False):

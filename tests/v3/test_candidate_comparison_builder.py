@@ -15,7 +15,12 @@ from app.v3.domain.context import (
     CandidateComparisonSource,
     CandidateComparisonSourceMember,
 )
-from app.v3.domain.features import FeatureRun, FeatureRunStatus, SecurityFeature
+from app.v3.domain.features import (
+    FeatureRun,
+    FeatureRunStatus,
+    PublishedSecurityFeatureView,
+    SecurityFeature,
+)
 from app.v3.domain.hashing import canonical_hash
 
 
@@ -39,7 +44,9 @@ def _feature_run() -> FeatureRun:
     ).published(completed_at=NOW - timedelta(minutes=1))
 
 
-def _feature(run_id: UUID, security_id: UUID, index: int) -> SecurityFeature:
+def _feature(
+    run_id: UUID, security_id: UUID, index: int
+) -> PublishedSecurityFeatureView:
     values = dict(
         feature_run_id=run_id,
         security_id=security_id,
@@ -70,7 +77,11 @@ def _feature(run_id: UUID, security_id: UUID, index: int) -> SecurityFeature:
         },
         input_hash=canonical_hash({"index": index}),
     )
-    return SecurityFeature.build(**values)
+    feature = SecurityFeature.build(**values)
+    return PublishedSecurityFeatureView(
+        **feature.model_dump(exclude={"content_hash"}),
+        source_content_hash=feature.content_hash,
+    )
 
 
 class _ComparisonRepository:

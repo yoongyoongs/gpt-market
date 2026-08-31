@@ -166,6 +166,58 @@ class SecurityFeature(V3Contract):
         return self
 
 
+class PublishedSecurityFeatureView(V3Contract):
+    """Typed read projection that preserves, but does not recompute, the source hash."""
+
+    feature_run_id: UUID
+    security_id: UUID
+    series_revision_id: UUID
+    factor_revision_id: UUID | None = None
+    as_of: datetime
+    close: float = Field(gt=0)
+    return_3d: float | None = None
+    return_5d: float | None = None
+    return_10d: float | None = None
+    return_20d: float | None = None
+    return_60d: float | None = None
+    return_120d: float | None = None
+    return_250d: float | None = None
+    position_60d: float | None = Field(default=None, ge=0, le=1)
+    position_120d: float | None = Field(default=None, ge=0, le=1)
+    position_250d: float | None = Field(default=None, ge=0, le=1)
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
+    ma60: float | None = None
+    ma20_slope: float | None = None
+    ma60_slope: float | None = None
+    atr14: float | None = None
+    atr_pct: float | None = None
+    volatility20: float | None = None
+    distance_60d_high: float | None = None
+    distance_60d_low: float | None = None
+    breakout_20d: bool | None = None
+    pullback_20d: bool | None = None
+    amount: float | None = Field(default=None, ge=0)
+    volume_ratio_5d: float | None = Field(default=None, ge=0)
+    volume_expansion: bool | None = None
+    relative_index_strength: float | None = None
+    relative_industry_strength: float | None = None
+    coverage: float = Field(ge=0, le=1)
+    stale: bool
+    missing_fields: tuple[str, ...] = ()
+    source_errors: tuple[str, ...] = ()
+    quality: dict[str, Any] = Field(default_factory=dict)
+    features: dict[str, Any] = Field(default_factory=dict)
+    input_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: datetime) -> datetime:
+        return require_aware(value, "as_of")
+
+
 class MarketRegimeSnapshot(V3Contract):
     regime_snapshot_id: UUID
     feature_run_id: UUID
@@ -206,3 +258,31 @@ class MarketRegimeSnapshot(V3Contract):
         if canonical_hash(self.model_dump(exclude={"content_hash"})) != self.content_hash:
             raise ValueError("content_hash does not match market regime")
         return self
+
+
+class PublishedMarketRegimeView(V3Contract):
+    """Typed read projection that preserves the hash of the published snapshot."""
+
+    regime_snapshot_id: UUID
+    feature_run_id: UUID
+    as_of: datetime
+    known_at: datetime
+    index_states: dict[str, Any] = Field(default_factory=dict)
+    breadth: dict[str, Any]
+    turnover: dict[str, Any]
+    limit_structure: dict[str, Any] = Field(default_factory=dict)
+    size_style: dict[str, Any] = Field(default_factory=dict)
+    growth_value_style: dict[str, Any] = Field(default_factory=dict)
+    industry_rotation: dict[str, Any] = Field(default_factory=dict)
+    risk_appetite_facts: dict[str, Any]
+    domestic_risk_evidence_ids: tuple[UUID, ...] = ()
+    global_risk_evidence_ids: tuple[UUID, ...] = ()
+    coverage: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    stale: bool
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("as_of", "known_at")
+    @classmethod
+    def validate_times(cls, value: datetime, info) -> datetime:
+        return require_aware(value, info.field_name)

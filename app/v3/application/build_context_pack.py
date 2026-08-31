@@ -367,7 +367,11 @@ class BuildContextPackService:
             {"type": "FEATURE_RUN", "id": str(source.feature_run.feature_run_id), "hash": source.feature_run.content_hash},
         ]
         if source.feature is not None:
-            references.append({"type": "SECURITY_FEATURE", "id": str(source.feature.security_id), "hash": source.feature.content_hash})
+            references.append({
+                "type": "SECURITY_FEATURE",
+                "id": str(source.feature.security_id),
+                "hash": source.feature.source_content_hash,
+            })
         if source.recall_run_id is not None:
             references.append({"type": "RECALL_RUN", "id": str(source.recall_run_id)})
         if source.regime is not None:

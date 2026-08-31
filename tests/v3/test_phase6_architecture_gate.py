@@ -1,3 +1,7 @@
+import subprocess
+import sys
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.api.v3 import router
@@ -31,3 +35,17 @@ def test_phase6_acceptance_harness_keeps_external_gate_explicit():
     from scripts.v3_phase6_acceptance import percentile
 
     assert percentile([1, 2, 3, 4, 5], 0.95) == 5
+
+
+def test_phase6_acceptance_script_can_run_directly_from_another_directory(tmp_path):
+    script = Path(__file__).resolve().parents[2] / "scripts" / "v3_phase6_acceptance.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "V3 Phase 6 isolated acceptance" in result.stdout
