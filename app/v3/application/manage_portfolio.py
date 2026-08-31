@@ -128,3 +128,9 @@ class PortfolioWriteService:
     async def read_position(self, account_id: UUID, security_id: UUID):
         async with self._uow_factory() as uow:
             return await uow.portfolios.position(account_id, security_id)
+
+    async def read_position_context(
+        self, account_id: UUID, code: str, market: str | None,
+    ):
+        async with self._uow_factory() as uow:
+            return await uow.portfolios.position_context(account_id, code, market)

@@ -1795,3 +1795,83 @@ class PortfolioPreferenceModel(Base):
     preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+
+class ActionCandidateModel(Base):
+    __tablename__ = "action_candidates"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_action_candidates_hash"),
+        Index("ix_action_candidates_security_as_of", "security_id", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+    action_candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    raw_opportunity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.raw_opportunities.raw_opportunity_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    task_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False)
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), nullable=False)
+    context_pack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_horizon: Mapped[str] = mapped_column(String(16), nullable=False)
+    time_efficiency: Mapped[str] = mapped_column(String(16), nullable=False)
+    time_efficiency_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    contrary_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class EntryAssessmentModel(Base):
+    __tablename__ = "entry_assessments"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_entry_assessments_hash"),
+        Index("ix_entry_assessments_action_as_of", "action_candidate_id", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+    entry_assessment_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    action_candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.action_candidates.action_candidate_id"), nullable=False)
+    entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    readiness: Mapped[str] = mapped_column(String(16), nullable=False)
+    trigger_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    cancel_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    time_efficiency: Mapped[str] = mapped_column(String(16), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PositionReviewModel(Base):
+    __tablename__ = "position_reviews"
+    __table_args__ = (
+        UniqueConstraint("source_result_id", name="uq_position_reviews_source_result"),
+        UniqueConstraint("content_hash", name="uq_position_reviews_hash"),
+        Index("ix_position_reviews_position_as_of", "account_id", "security_id", "as_of"),
+        {"schema": V3_SCHEMA},
+    )
+    position_review_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    portfolio_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.portfolio_snapshots.portfolio_snapshot_id"))
+    position_projection_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"))
+    entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    previous_position_review_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.position_reviews.position_review_id"), unique=True)
+    task_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.task_runs.task_run_id"), nullable=False)
+    context_pack_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.context_packs.context_pack_id"), nullable=False)
+    context_pack_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_result_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"), nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    agent_identity: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    quantity_snapshot: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    average_cost_snapshot: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    thesis_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    supporting_evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    contrary_evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    changed_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    new_risks: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    time_efficiency: Mapped[str] = mapped_column(String(16), nullable=False)
+    recommended_action: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

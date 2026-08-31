@@ -22,6 +22,7 @@ from app.v3.infrastructure.db.decision_repositories import (
     SQLAlchemyAIResultImportRepository,
 )
 from app.v3.infrastructure.db.portfolio_repositories import SQLAlchemyPortfolioRepository
+from app.v3.infrastructure.db.action_repositories import SQLAlchemyActionRepository
 
 
 class SQLAlchemyUnitOfWork:
@@ -49,6 +50,7 @@ class SQLAlchemyUnitOfWork:
         self.task_registry = SQLAlchemyTaskRegistryRepository(self._session)
         self.ai_imports = SQLAlchemyAIResultImportRepository(self._session)
         self.portfolios = SQLAlchemyPortfolioRepository(self._session)
+        self.actions = SQLAlchemyActionRepository(self._session)
         return self
 
     async def __aexit__(

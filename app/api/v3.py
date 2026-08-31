@@ -24,10 +24,12 @@ from app.v3.application.manage_portfolio import (
     ImageDraftImport,
     PortfolioWriteService,
 )
+from app.v3.application.manage_actions import ActionWriteService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.domain.ai_import import AIResultBundle, AIResultConfirmCommand
+from app.v3.domain.action import ActionCandidateCreate, EntryAssessmentCreate
 from app.v3.domain.portfolio import (
     AccountCreate,
     OpeningPositionCreate,
@@ -462,3 +464,53 @@ async def portfolio_position(account_id: UUID, security_id: UUID):
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")
     return position
+
+
+@router.post("/actions")
+async def create_action_candidate(command: ActionCandidateCreate):
+    try:
+        return await ActionWriteService(_uow).add_action(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/entries")
+async def create_entry_assessment(command: EntryAssessmentCreate):
+    try:
+        return await ActionWriteService(_uow).add_entry(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/stocks/{security_id}/decision-pipeline")
+async def decision_pipeline(
+    security_id: UUID, limit: int = Query(default=50, ge=1, le=200),
+):
+    return await ActionWriteService(_uow).read_pipeline(security_id, limit)
+
+
+@router.get("/portfolio/accounts/{account_id}/positions/{security_id}/reviews")
+async def position_review_history(
+    account_id: UUID, security_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return await ActionWriteService(_uow).read_position_reviews(
+        account_id, security_id, limit
+    )
+
+
+@router.get("/portfolio/{code}/context")
+async def portfolio_position_context(
+    code: str, account_id: UUID,
+    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+):
+    try:
+        return await PortfolioWriteService(_uow).read_position_context(
+            account_id, code, market
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

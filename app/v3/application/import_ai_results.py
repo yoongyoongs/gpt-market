@@ -27,8 +27,6 @@ class PreviewAIResultImportService:
                 warnings: list[str] = []
                 for envelope in group.results:
                     errors.extend(await uow.ai_imports.validate_envelope(envelope))
-                    if envelope.result_type == "PositionReviewResult":
-                        warnings.append("position review persistence is enabled in Phase 9")
                 previews.append(ImportGroupPreview(
                     group_id=group.group_id,
                     task_run_id=group.task_run_id,

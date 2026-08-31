@@ -29,6 +29,8 @@ from app.v3.infrastructure.db.models import (
     EntryPlanModel,
     EvidenceRecordModel,
     MarketReviewModel,
+    PositionProjectionModel,
+    PositionReviewModel,
     ReviewModel,
     TaskRunModel,
     WatchlistProposalModel,
@@ -281,6 +283,49 @@ class SQLAlchemyAIResultImportRepository:
                 reason=str(payload.get("reason", "AI proposal")), payload=payload,
                 content_hash=canonical_hash({"source": envelope.content_hash, "payload": payload}),
                 created_at=envelope.produced_at,
+            ))
+            return [object_id]
+        if envelope.result_type == "PositionReviewResult":
+            account_id = UUID(str(payload["account_id"]))
+            security_id = UUID(str(payload["security_id"]))
+            projection = await self._session.get(
+                PositionProjectionModel, (account_id, security_id)
+            )
+            if projection is None or projection.quantity <= 0:
+                raise RepositoryConflictError("position review requires a confirmed holding")
+            expected_hash = payload.get("position_projection_hash")
+            if expected_hash and expected_hash != projection.input_hash:
+                raise RepositoryConflictError("position projection changed after AI context")
+            object_id = UUID(str(payload.get("position_review_id", uuid4())))
+            self._session.add(PositionReviewModel(
+                position_review_id=object_id, account_id=account_id,
+                security_id=security_id,
+                portfolio_snapshot_id=UUID(str(payload["portfolio_snapshot_id"]))
+                if payload.get("portfolio_snapshot_id") else None,
+                position_projection_hash=projection.input_hash,
+                decision_id=UUID(str(payload["decision_id"]))
+                if payload.get("decision_id") else None,
+                entry_plan_id=UUID(str(payload["entry_plan_id"]))
+                if payload.get("entry_plan_id") else None,
+                previous_position_review_id=UUID(str(payload["previous_position_review_id"]))
+                if payload.get("previous_position_review_id") else None,
+                task_run_id=envelope.task_run_id,
+                context_pack_id=envelope.context_pack_id,
+                context_pack_hash=envelope.context_pack_hash,
+                source_result_id=envelope.result_id, evidence_ids=evidence_ids,
+                agent_identity=agent, as_of=envelope.as_of,
+                quantity_snapshot=projection.quantity,
+                average_cost_snapshot=projection.average_cost,
+                thesis_status=str(payload.get("thesis_status", "MAINTAINED")),
+                supporting_evidence=payload.get("supporting_evidence", {}),
+                contrary_evidence=payload.get("contrary_evidence", {}),
+                changed_facts=payload.get("changed_facts", {}),
+                new_risks=payload.get("new_risks", []),
+                time_efficiency=str(payload.get("time_efficiency", "UNKNOWN")),
+                recommended_action=str(payload.get("recommended_action", "HOLD")),
+                reason=str(payload.get("reason", "No reason supplied")),
+                payload=payload,
+                content_hash=canonical_hash({"source": envelope.content_hash, "payload": payload, "projection": projection.input_hash}),
             ))
             return [object_id]
         return []

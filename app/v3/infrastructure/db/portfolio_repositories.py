@@ -23,11 +23,13 @@ from app.v3.domain.portfolio import (
 from app.v3.infrastructure.db.models import (
     AccountModel,
     EntryPlanModel,
+    DecisionModel,
     ImageImportModel,
     OpeningPositionModel,
     PortfolioAdjustmentModel,
     PositionProjectionModel,
     PositionSnapshotDraftModel,
+    PositionReviewModel,
     PortfolioPreferenceModel,
     ReconciliationModel,
     SecurityModel,
@@ -363,3 +365,51 @@ class SQLAlchemyPortfolioRepository:
         if row is None:
             return None
         return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+    async def position_context(
+        self, account_id: UUID, code: str, market: str | None = None,
+    ):
+        statement = select(SecurityModel).where(SecurityModel.code == code)
+        if market:
+            statement = statement.where(SecurityModel.market == market)
+        securities = (await self._session.scalars(statement)).all()
+        if not securities:
+            raise RepositoryNotFoundError("security not found")
+        if len(securities) > 1:
+            raise RepositoryConflictError("market is required for an ambiguous security code")
+        security = securities[0]
+        projection = await self.position(account_id, security.security_id)
+        if projection is None:
+            raise RepositoryNotFoundError("position not found")
+        trades = (await self._session.scalars(select(TradeLedgerModel).where(
+            TradeLedgerModel.account_id == account_id,
+            TradeLedgerModel.security_id == security.security_id,
+        ).order_by(TradeLedgerModel.ledger_sequence))).all()
+        reviews = (await self._session.scalars(select(PositionReviewModel).where(
+            PositionReviewModel.account_id == account_id,
+            PositionReviewModel.security_id == security.security_id,
+        ).order_by(PositionReviewModel.as_of.desc()).limit(20))).all()
+        decisions = (await self._session.scalars(select(DecisionModel).where(
+            DecisionModel.security_id == security.security_id
+        ).order_by(DecisionModel.as_of.desc()).limit(20))).all()
+        decision_ids = [item.decision_id for item in decisions]
+        plans = (await self._session.scalars(select(EntryPlanModel).where(
+            EntryPlanModel.decision_id.in_(decision_ids)
+        ).order_by(EntryPlanModel.effective_from.desc()))).all() if decision_ids else []
+        serialize = lambda row: {
+            column.name: getattr(row, column.name) for column in row.__table__.columns
+        }
+        return {
+            "security": {"security_id": security.security_id, "code": security.code,
+                         "market": security.market, "name": security.name},
+            "position": projection,
+            "trades": tuple(serialize(item) for item in trades),
+            "decisions": tuple(serialize(item) for item in decisions),
+            "entry_plans": tuple(serialize(item) for item in plans),
+            "latest_position_review": serialize(reviews[0]) if reviews else None,
+            "position_review_history": tuple(serialize(item) for item in reviews),
+            "write_capabilities": {
+                "review_can_create_trade": False,
+                "trade_requires_manual_confirmation": True,
+            },
+        }
