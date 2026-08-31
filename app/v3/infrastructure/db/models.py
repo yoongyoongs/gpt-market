@@ -1976,3 +1976,200 @@ class RecallMissRunModel(Base):
     miss_count: Mapped[int] = mapped_column(Integer, nullable=False)
     statistics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class StrategyVersionModel(Base):
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_code", "version", name="uq_strategy_versions_code_version"),
+        UniqueConstraint("supersedes_strategy_version_id", name="uq_strategy_versions_supersedes"),
+        UniqueConstraint("content_hash", name="uq_strategy_versions_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    strategy_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"), unique=True
+    )
+    configuration: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class StrategyProposalModel(Base):
+    __tablename__ = "strategy_proposals"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_strategy_proposals_hash"), {"schema": V3_SCHEMA})
+    proposal_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    proposed_strategy_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_result_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.ai_result_envelopes.result_id"))
+    hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_improvements: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    risks: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class GuardrailVersionModel(Base):
+    __tablename__ = "guardrail_versions"
+    __table_args__ = (
+        UniqueConstraint("guardrail_code", "version", name="uq_guardrail_versions_code_version"),
+        UniqueConstraint("supersedes_guardrail_version_id", name="uq_guardrail_versions_supersedes"),
+        UniqueConstraint("content_hash", name="uq_guardrail_versions_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    guardrail_version_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    guardrail_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_guardrail_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.guardrail_versions.guardrail_version_id"), unique=True
+    )
+    max_error_rate: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    max_p95_ms: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    min_shadow_sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_divergence_rate: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    max_capacity_utilization: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    rollback_on_provider_failure: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class StrategyExperimentModel(Base):
+    __tablename__ = "strategy_experiments"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_strategy_experiments_hash"), {"schema": V3_SCHEMA})
+    experiment_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    experiment_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    control_strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"))
+    treatment_strategy_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"), nullable=False)
+    guardrail_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.guardrail_versions.guardrail_version_id"), nullable=False)
+    allocation_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class StrategyExperimentEventModel(Base):
+    __tablename__ = "strategy_experiment_events"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "sequence", name="uq_strategy_experiment_events_sequence"),
+        UniqueConstraint("content_hash", name="uq_strategy_experiment_events_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_experiments.experiment_id"), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ShadowObservationModel(Base):
+    __tablename__ = "shadow_observations"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "subject_key", "observed_at", name="uq_shadow_observations_subject_time"),
+        UniqueConstraint("content_hash", name="uq_shadow_observations_hash"),
+        Index("ix_shadow_observations_experiment_time", "experiment_id", "observed_at"),
+        {"schema": V3_SCHEMA},
+    )
+    shadow_observation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_experiments.experiment_id"), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    control_output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    treatment_output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    control_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    treatment_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    materially_divergent: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    divergence_reason: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class CapacityEvaluationModel(Base):
+    __tablename__ = "capacity_evaluations"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_capacity_evaluations_hash"),
+        Index("ix_capacity_evaluations_strategy_time", "strategy_version_id", "evaluated_at"),
+        {"schema": V3_SCHEMA},
+    )
+    capacity_evaluation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"), nullable=False)
+    guardrail_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.guardrail_versions.guardrail_version_id"), nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_rate: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    p95_ms: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    divergence_rate: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    capacity_utilization: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
+    provider_failures: Mapped[int] = mapped_column(Integer, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    failures: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ReleaseStateModel(Base):
+    __tablename__ = "release_states"
+    __table_args__ = (UniqueConstraint("environment", name="uq_release_states_environment"), {"schema": V3_SCHEMA})
+    release_state_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    environment: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    active_strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"))
+    active_guardrail_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.guardrail_versions.guardrail_version_id"))
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ReleaseEventModel(Base):
+    __tablename__ = "release_events"
+    __table_args__ = (
+        UniqueConstraint("environment", "sequence", name="uq_release_events_environment_sequence"),
+        UniqueConstraint("content_hash", name="uq_release_events_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    release_event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    environment: Mapped[str] = mapped_column(String(32), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    from_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    to_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_proposals.proposal_id"))
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.strategy_versions.strategy_version_id"))
+    guardrail_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.guardrail_versions.guardrail_version_id"))
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    gate_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class OperationalHealthEventModel(Base):
+    __tablename__ = "operational_health_events"
+    __table_args__ = (
+        Index("ix_operational_health_events_component_time", "component", "observed_at"),
+        UniqueConstraint("content_hash", name="uq_operational_health_events_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    health_event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    environment: Mapped[str] = mapped_column(String(32), nullable=False)
+    component: Mapped[str] = mapped_column(String(128), nullable=False)
+    capability: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    latency_ms: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    circuit_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metadata_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -175,4 +175,4 @@ python scripts/v3_phase6_acceptance.py \
   --repetitions 20
 ```
 
-最终结果为 `passed=true`。在 Phase 6 验收时，本阶段只完成 Context、Comparison、Task Registry 和只读 JSON，当时尚未开始 Phase 7。当前 Phase 7–10 的开发状态以《工作状态》和对应实施记录为准；生产 V3 继续关闭，正式 Migration 和启用留到后续验收。
+最终结果为 `passed=true`。在 Phase 6 验收时，本阶段只完成 Context、Comparison、Task Registry 和只读 JSON，当时尚未开始 Phase 7。当前 Phase 7–11 的开发状态以《工作状态》和对应实施记录为准；生产 V3 继续关闭，正式 Migration 和启用留到后续验收。

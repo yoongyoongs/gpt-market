@@ -24,6 +24,7 @@ from app.v3.infrastructure.db.decision_repositories import (
 from app.v3.infrastructure.db.portfolio_repositories import SQLAlchemyPortfolioRepository
 from app.v3.infrastructure.db.action_repositories import SQLAlchemyActionRepository
 from app.v3.infrastructure.db.performance_repositories import SQLAlchemyPerformanceRepository
+from app.v3.infrastructure.db.strategy_repositories import SQLAlchemyStrategyRepository
 
 
 class SQLAlchemyUnitOfWork:
@@ -53,6 +54,7 @@ class SQLAlchemyUnitOfWork:
         self.portfolios = SQLAlchemyPortfolioRepository(self._session)
         self.actions = SQLAlchemyActionRepository(self._session)
         self.performance = SQLAlchemyPerformanceRepository(self._session)
+        self.strategies = SQLAlchemyStrategyRepository(self._session)
         return self
 
     async def __aexit__(

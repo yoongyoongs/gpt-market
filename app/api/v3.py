@@ -31,6 +31,7 @@ from app.v3.application.manage_performance import (
     RecallMissSnapshotCommand,
 )
 from app.v3.application.manage_decisions import DecisionStateService
+from app.v3.application.manage_strategy import StrategyStabilizationService
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
@@ -45,6 +46,18 @@ from app.v3.domain.decision import (
     DecisionCorrectionCommand,
     WatchlistState,
     WatchlistTransitionCommand,
+)
+from app.v3.domain.strategy import (
+    CapacityEvaluationCreate,
+    ExperimentEventCommand,
+    GuardrailVersionCreate,
+    OperationalHealthEventCreate,
+    ShadowObservationCreate,
+    StrategyActivationCommand,
+    StrategyExperimentCreate,
+    StrategyProposalCreate,
+    StrategyRollbackCommand,
+    StrategyVersionCreate,
 )
 from app.v3.domain.portfolio import (
     AccountCreate,
@@ -605,3 +618,132 @@ async def create_decision_correction(
         return await DecisionStateService(_uow).add_correction(decision_id, command)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/strategies/versions")
+async def create_strategy_version(command: StrategyVersionCreate):
+    try:
+        return await StrategyStabilizationService(_uow).add_strategy_version(command)
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/strategies")
+async def read_strategy_catalog(limit: int = Query(default=50, ge=1, le=200)):
+    return await StrategyStabilizationService(_uow).catalog(limit)
+
+
+@router.post("/strategies/proposals")
+async def create_strategy_proposal(command: StrategyProposalCreate):
+    try:
+        return await StrategyStabilizationService(_uow).add_proposal(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/strategies/guardrails")
+async def create_guardrail_version(command: GuardrailVersionCreate):
+    try:
+        return await StrategyStabilizationService(_uow).add_guardrail(command)
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/strategies/experiments")
+async def create_strategy_experiment(command: StrategyExperimentCreate):
+    try:
+        return await StrategyStabilizationService(_uow).add_experiment(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/strategies/experiments/{experiment_id}/events")
+async def strategy_experiment_event(
+    experiment_id: UUID, command: ExperimentEventCommand,
+):
+    try:
+        return await StrategyStabilizationService(_uow).experiment_event(
+            experiment_id, command
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/strategies/experiments/{experiment_id}")
+async def read_strategy_experiment(experiment_id: UUID):
+    try:
+        return await StrategyStabilizationService(_uow).experiment_detail(
+            experiment_id
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/strategies/experiments/{experiment_id}/assign")
+async def assign_strategy_experiment(experiment_id: UUID, subject_key: str):
+    try:
+        return await StrategyStabilizationService(_uow).assign(
+            experiment_id, subject_key
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/strategies/shadow-observations")
+async def create_shadow_observation(command: ShadowObservationCreate):
+    try:
+        return await StrategyStabilizationService(_uow).shadow_observation(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/strategies/capacity-evaluations")
+async def create_capacity_evaluation(command: CapacityEvaluationCreate):
+    try:
+        return await StrategyStabilizationService(_uow).evaluate_capacity(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/strategies/releases/{environment}/activate")
+async def activate_strategy(
+    environment: str, command: StrategyActivationCommand,
+):
+    try:
+        return await StrategyStabilizationService(_uow).activate(
+            environment, command
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/strategies/releases/{environment}/rollback")
+async def rollback_strategy(
+    environment: str, command: StrategyRollbackCommand,
+):
+    try:
+        return await StrategyStabilizationService(_uow).rollback(
+            environment, command
+        )
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/strategies/releases/{environment}")
+async def strategy_release_dashboard(environment: str):
+    return await StrategyStabilizationService(_uow).dashboard(environment)
+
+
+@router.post("/operations/health-events")
+async def create_operational_health_event(command: OperationalHealthEventCreate):
+    return await StrategyStabilizationService(_uow).add_health_event(command)
