@@ -37,16 +37,9 @@
 
 这些文档用于处理现有 V1/V2 服务、部署或排障，按任务需要读取，不属于 V3 架构接手的默认阅读集合。
 
-## 双格式规则
+## 文档格式规则
 
-根 README、CONTRIBUTING 和 `docs` 下每份 Markdown 都必须有同目录、同名 HTML：Markdown 供大模型和版本审查，HTML 供人阅读。执行：
-
-```bash
-python scripts/build_docs_html.py
-python scripts/build_docs_html.py --check
-```
-
-HTML 由 Markdown 自动生成，Markdown 是内容源；禁止只手工修改 HTML。
+根 README、CONTRIBUTING 和 `docs` 下的正式文档统一使用 Markdown。Markdown 是唯一内容源，不再生成或提交同名 HTML 副本。运行时页面模板不属于项目文档，按业务需要保留。
 
 ## 历史归档
 
