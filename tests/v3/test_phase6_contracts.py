@@ -228,7 +228,7 @@ def test_phase6_repository_protocol_is_frozen() -> None:
 
 
 def test_0006_design_is_incremental_and_not_implemented_in_p6_01() -> None:
-    design = (ROOT / "docs/phases/phase6/MIGRATION_0006.md").read_text(encoding="utf-8")
+    design = (ROOT / "docs/Phase6上下文任务实施记录.md").read_text(encoding="utf-8")
     assert "0005_multi_recall_foundation" in design
     assert "candidate_comparison_packs" in design
     assert "context_evidence_selections" in design

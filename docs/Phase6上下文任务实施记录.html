@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="767f975527a0995bda477716140c85a9d1f14580964a8120800670bb97e3c02e"><title>V3 Phase 6 上下文与任务实施记录</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 实施边界</a></li>
+<li><a href="#2-task">2. Task 状态</a></li>
+<li><a href="#3-p6-01">3. P6-01 已冻结契约</a><ul>
+<li><a href="#31-candidatecomparisonpack">3.1 CandidateComparisonPack</a></li>
+<li><a href="#32-contextpack">3.2 ContextPack</a></li>
+<li><a href="#33-task-profileexpected-run-task-run">3.3 Task Profile、Expected Run 与 Task Run</a></li>
+<li><a href="#34">3.4 统一不变量</a></li>
+</ul>
+</li>
+<li><a href="#4-0006_context_task_foundation">4. 0006_context_task_foundation 迁移设计与实现</a><ul>
+<li><a href="#41">4.1 新表</a></li>
+<li><a href="#42-task">4.2 现有 Task 表增量</a></li>
+<li><a href="#43">4.3 顺序与回滚</a></li>
+</ul>
+</li>
+<li><a href="#5-p6-02">5. P6-02 当前实现</a></li>
+<li><a href="#6">6. 验证记录</a></li>
+<li><a href="#7">7. 下一步</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/Phase6上下文任务实施记录.md · 内容哈希：767f975527a0</div><h1 id="v3-phase-6">V3 Phase 6 上下文与任务实施记录<a class="headerlink" href="#v3-phase-6" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>最后更新：2026-08-31（Asia/Shanghai）</p>
+<p>稳定基线：<code>main@9506983</code> / <code>v3-phase5-multi-recall-20260831</code></p>
+<p>工作分支：<code>codex/phase6-context-task</code></p>
+<p>当前状态：P6-01 已完成；P6-02 已完成本地实现，等待隔离 PostgreSQL 17 验收</p>
+</blockquote>
+<p>本文按 Phase 1–5 的实施记录方式集中保存 Phase 6 的契约、迁移、任务和验收状态，不建立 Phase Capsule、Context Policy 或多层 Task 治理。正式需求与设计仍以需求规格、架构设计、技术架构、数据库设计和详细设计为准。</p>
+<h2 id="1">1. 实施边界<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>Phase 6 建设 Candidate Comparison、FAST/NORMAL/DEEP Context Pack、Task Registry 和只读 JSON 接口。Phase 6 不实现 Phase 7 的 AI Result Import，不修改 Phase 3–5 已冻结的 Feature、Evidence、Recall 语义，也不修改 V1/V2、Provider、Scanner、评分或生产配置。</p>
+<p>Task 仅作为 Phase 内可验证的小步开发单位；每个 Task 完成后停止，不自动继续下一项。</p>
+<h2 id="2-task">2. Task 状态<a class="headerlink" href="#2-task" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>内容</th>
+<th>状态</th>
+<th>证据/后续</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P6-01</td>
+<td>冻结 Context、Candidate Comparison、Task Domain/Repository 契约和 0006 设计</td>
+<td>DONE</td>
+<td><code>044da58</code>；状态提交 <code>1585be0</code></td>
+</tr>
+<tr>
+<td>P6-02</td>
+<td>完整 0006 DDL 与 CandidateComparisonPack/Member 不可变持久化</td>
+<td>PARTIAL</td>
+<td>本地 PostgreSQL 16 完整回归通过；等待 PostgreSQL 17 验收后提交</td>
+</tr>
+<tr>
+<td>P6-03</td>
+<td>Comparison Builder 与 N→TopK READ</td>
+<td>TODO</td>
+<td>依赖 P6-02；本轮不启动</td>
+</tr>
+<tr>
+<td>P6-04</td>
+<td>FAST/NORMAL/DEEP Context Pack 与 Evidence Selection</td>
+<td>TODO</td>
+<td>依赖 P6-01/P6-02</td>
+</tr>
+<tr>
+<td>P6-05</td>
+<td>Task Profile、Expected Run 与 Task Run Registry</td>
+<td>TODO</td>
+<td>不实现 AI Import</td>
+</tr>
+<tr>
+<td>P6-06</td>
+<td>ChatGPT READ JSON 接线与契约测试</td>
+<td>TODO</td>
+<td>依赖 P6-03–P6-05</td>
+</tr>
+<tr>
+<td>P6-07</td>
+<td>全市场性能验收与 Architecture Gate</td>
+<td>TODO</td>
+<td>Phase 6 最终验收</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-p6-01">3. P6-01 已冻结契约<a class="headerlink" href="#3-p6-01" title="Permanent link">&para;</a></h2>
+<h3 id="31-candidatecomparisonpack">3.1 CandidateComparisonPack<a class="headerlink" href="#31-candidatecomparisonpack" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Schema Version：<code>candidate-comparison.v1</code>；</li>
+<li>每包包含 20–100 个候选，保存候选原顺序、Universe/Feature/Recall/Regime 引用、<code>as_of</code>、<code>known_at</code>、Coverage、缺失/裁剪摘要和 Content Hash；</li>
+<li>Member 只保存统一紧凑事实，不读取完整单股 Evidence/分钟 K，不产生统一 Final Score；</li>
+<li><code>candidate_order</code> 从 1 连续递增，同一 Pack 不得重复证券；</li>
+<li>Content Hash 包含规范输入、候选顺序、Payload 和版本，不包含数据库生成 ID 与发布时间；相同输入幂等，顺序变化产生新 Hash。</li>
+</ul>
+<h3 id="32-contextpack">3.2 ContextPack<a class="headerlink" href="#32-contextpack" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Schema Version：<code>context-pack.v1</code>；Level 为 <code>FAST | NORMAL | DEEP</code>；</li>
+<li>Token Budget 分别为 2k–4k、5k–8k、10k–14k，实际 Token 不得超过预算；</li>
+<li>保存 subject、Task Profile ID/Version、时点、Snapshot/Run/Revision、可选 Comparison Pack、版本、裁剪、Payload/Reference、Coverage、Missing Fields 和 Content Hash；</li>
+<li>Evidence Selection 保存 Evidence ID/known_at、选择原因、立场、检索分、相关度、来源优先级和连续最终顺序；</li>
+<li>所有 Evidence 必须满足 <code>evidence_known_at &lt;= context.as_of</code>，不可信文本只能进入有明确数据边界的 Payload。</li>
+</ul>
+<h3 id="33-task-profileexpected-run-task-run">3.3 Task Profile、Expected Run 与 Task Run<a class="headerlink" href="#33-task-profileexpected-run-task-run" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Profile 保存 schedule、timezone、交易日历来源/版本、Context Level、comparison-first 参数、输出 Schema、预期组数、宽限期和 Strategy Version；修改必须发布新版本；</li>
+<li>Expected Run 只表示理论任务时间，状态为 <code>EXPECTED | CANCELLED</code>，不表示服务器执行过 AI；</li>
+<li>Task Run 状态为 <code>PENDING_IMPORT | PARTIAL_COMPLETED | COMPLETED | MISSED | CANCELLED</code>，并保存逻辑组计数、Profile Version、可选 Context 引用和乐观锁版本；</li>
+<li><code>expected = successful + failed + pending</code>，状态必须与组计数一致；</li>
+<li>Phase 6 只建立和读取任务事实，不实现 Phase 7 的按 <code>atomic_group</code> 导入。</li>
+</ul>
+<h3 id="34">3.4 统一不变量<a class="headerlink" href="#34" title="Permanent link">&para;</a></h3>
+<ul>
+<li>只读取 <code>known_at &lt;= as_of</code> 的记录；只允许已发布的 Feature/Recall 及不可变输入构建 Pack；</li>
+<li>缺失保持 <code>null/UNKNOWN</code> 并携带 Coverage/Missing，不允许猜测；</li>
+<li>Repository 可选读取未命中返回 <code>None</code>；首次发布返回 <code>True</code>，同 Hash 幂等重放返回 <code>False</code>；</li>
+<li>不可变业务键异内容及乐观锁冲突使用 <code>RepositoryConflictError</code>；API 映射保持 404/409/422/503；</li>
+<li>Builder 在事务外组装，最终使用短事务原子发布；已发布 Pack append-only。</li>
+</ul>
+<h2 id="4-0006_context_task_foundation">4. <code>0006_context_task_foundation</code> 迁移设计与实现<a class="headerlink" href="#4-0006_context_task_foundation" title="Permanent link">&para;</a></h2>
+<p>Down Revision 为 <code>0005_multi_recall_foundation</code>。P6-02 一次实现完整 DDL，后续 Task 不回改已发布 Migration。</p>
+<h3 id="41">4.1 新表<a class="headerlink" href="#41" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>candidate_comparison_packs</code>：Pack 标识、版本、输入 Snapshot/Run、时点、候选数、Coverage、摘要和唯一 Content Hash；</li>
+<li><code>candidate_comparison_members</code>：Pack/Security 复合主键、唯一连续顺序、紧凑 Payload、Coverage、stale 和 Missing；</li>
+<li><code>context_packs</code>：Level、Subject、Task Profile、输入引用、Token Budget、Coverage、Payload/References 和唯一 Content Hash；</li>
+<li><code>context_evidence_selections</code>：Context/Evidence 复合主键、唯一顺序、Evidence 时点、立场与选择评分。</li>
+</ul>
+<p>四张新增事实表均安装 <code>prevent_mutation</code>，发布后禁止 UPDATE/DELETE。范围、外键、唯一性和 Level/Token 约束由 PostgreSQL 强制；跨表时点、成员数量与连续顺序由 Repository 在同一短事务发布前校验。</p>
+<h3 id="42-task">4.2 现有 Task 表增量<a class="headerlink" href="#42-task" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>task_profiles</code> 新增 <code>trading_calendar_source</code>、<code>trading_calendar_version</code>、<code>comparison_first</code>、<code>candidate_limit</code>、<code>topk_limit</code>、<code>topk_context_level</code> 和 <code>strategy_version</code>，并启用不可变触发器；</li>
+<li><code>expected_runs</code> 新增 Profile Version、known_at、Content Hash 和 row_version，作为可取消 Registry，不安装不可变触发器；</li>
+<li><code>task_runs</code> 新增 Profile Version、Context 外键和状态/组计数一致性约束，保留乐观锁，不安装不可变触发器；</li>
+<li>迁移使用应用层忽略的 <code>pre_phase6_content_hash</code> 保存既有 Profile Hash，Downgrade 恢复原值后删除兼容列，确保 Phase 1 历史 Hash 可逆。</li>
+</ul>
+<h3 id="43">4.3 顺序与回滚<a class="headerlink" href="#43" title="Permanent link">&para;</a></h3>
+<p>Upgrade 按 Comparison → Profile 增量 → Context → Expected/Task Run 增量 → Trigger 执行；Downgrade 逆序移除新增约束、列、Trigger 和表。不得触碰 Phase 1–5 事实表和数据，迁移不得导入 Provider、Builder、FastAPI 或 Legacy 业务模块。</p>
+<h2 id="5-p6-02">5. P6-02 当前实现<a class="headerlink" href="#5-p6-02" title="Permanent link">&para;</a></h2>
+<ul>
+<li>新增完整 <code>migrations/versions/0006_context_task_foundation.py</code>；</li>
+<li>ORM Metadata 与 0006 的四张新表、Task 表增量保持一致；</li>
+<li><code>SQLAlchemyCandidateComparisonRepository</code> 支持首次发布、Content Hash 幂等、按 ID/Hash 读取和有序重建；</li>
+<li>发布前校验 Feature/Universe/Recall/Regime 已发布且时点合法，所有成员属于绑定 Universe；</li>
+<li>网络行情采集和外部计算不在 Repository 事务内；Pack/Member 在短事务中原子发布；</li>
+<li>Unit of Work 已接入 Candidate Comparison Repository；</li>
+<li>修复 Coverage 输入为整数 <code>1</code> 时验证前后 Hash 不一致的问题，统一规范为 7 位小数；</li>
+<li>未实现 Builder、READ API、Context/Task Repository 行为，未进入 P6-03。</li>
+</ul>
+<h2 id="6">6. 验证记录<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<ul>
+<li>本地隔离 PostgreSQL 16.13 已完成 <code>0005 → 0006 → 0005 → 0006</code>；历史 Profile Hash、Expected Run 和 Task Run 均保留；</li>
+<li>全新 PostgreSQL 16 数据库完整回归：<code>217 passed, 5 skipped, 2 warnings</code>；</li>
+<li>两项 Warning 为既有 Starlette/httpx 弃用提示和既有未 await 警告；</li>
+<li>本机未安装 Ruff，未宣称 Ruff 通过；</li>
+<li>尚需在服务器隔离 PostgreSQL 17 执行同等迁移往返、Repository 集成和完整回归；不对生产数据库执行 Migration。</li>
+</ul>
+<h2 id="7">7. 下一步<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p>用户允许并切换服务器网络后，仅完成 P6-02 的隔离 PostgreSQL 17 验收。验收通过后更新本实施记录和工作状态，使用中文提交并推送，然后停止；不自动进入 P6-03。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

@@ -2,21 +2,23 @@
 
 只读的 Python 3.12 服务，向 ChatGPT 或其他 MCP 客户端提供 A 股、ETF、指数、K 线、板块排名与基础主板扫描。实时行情以东方财富为主、腾讯为备用；日 K 线使用两级本地缓存与自动降级。不包含账户、交易或任何下单能力。
 
-V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1 正式状态基础、Phase 2 全市场历史行情底座、Phase 3 全市场 Feature Run/Universe Query/事实型 Market Regime、Phase 4 Core Evidence Ingestion 和 Phase 5 Multi-Recall 已完成技术验收；下一阶段为 Phase 6 Context/Comparison/Task/READ JSON。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 4 实施记录](docs/Phase4证据管道实施记录.md) 与 [Phase 5 实施记录](docs/Phase5多通道召回实施记录.md)。
+V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。Phase 1–5 已完成技术验收；Phase 6 的领域契约已冻结，Candidate Comparison 持久化已完成本地实现并等待 PostgreSQL 17 验收。生产 V3 仍默认关闭；详见 [工作状态](docs/工作状态.md)、[Phase 5 实施记录](docs/Phase5多通道召回实施记录.md) 与 [Phase 6 实施记录](docs/Phase6上下文任务实施记录.md)。
 
 ## 接手开发必读
 
-换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。普通 Task 按最小必要上下文读取：
+换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。必须按顺序阅读：
 
-1. 根 [AGENTS.md](AGENTS.md) 及当前路径生效的局部 `AGENTS.md`；
-2. [Architecture Guardrails](docs/ARCHITECTURE_GUARDRAILS.md)；
-3. [Context Policy](docs/development/CONTEXT_POLICY.md)；
-4. [当前工作状态](docs/工作状态.md)指向的 Phase Capsule；
-5. 当前 Task、直接相关代码和测试。
+1. 本 README；
+2. [当前工作状态](docs/工作状态.md)；
+3. [V3 需求规格说明](docs/需求规格说明.md)、[需求追踪矩阵](docs/需求追踪矩阵.md)与[系统功能架构](docs/系统功能架构.md)；
+4. [技术架构](docs/技术架构设计.md)、[数据库设计](docs/数据库设计.md)和[详细设计](docs/详细设计.md)；
+5. [V3 架构设计实施稿](docs/架构设计实施稿.md)与[功能清单](docs/功能清单与开发状态.md)；
+6. [开发工作规范](docs/开发规范.md)；
+7. 当前任务相关代码和测试。
 
-然后检查 `git status --short --branch`、最近提交和远端同步状态。只有 Contract 不足、架构冲突或 Phase Gate 时才精确读取大型 Baseline 配套文档；默认不全文扫描仓库或读取历史归档。
+然后检查 `git status --short --branch`、最近提交和远端同步状态。默认无需阅读 V1/V2 历史过程文档；需要追溯时再通过 [文档索引](docs/README.md) 定向查看。
 
-开发必须遵循“小步可验证”：使用 [Task 模板](docs/development/TASK_TEMPLATE.md)明确范围，每完成一个独立 Task 就更新 Phase STATUS、运行测试、使用中文提交说明提交并立即推送 GitHub，然后停止，不自动进入下一 Task。
+开发必须遵循“小步可验证”：每完成一个独立步骤，就更新工作状态、运行测试、使用中文提交说明提交并立即推送 GitHub。若 Token、时间或外部条件即将中断，必须在任务分支创建可恢复检查点并写清下一步，禁止只把进度留在对话中。
 
 ## 文档导航
 
