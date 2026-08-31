@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Identity,
     Integer,
     Numeric,
     String,
@@ -1583,3 +1584,214 @@ class MarketReviewModel(Base):
     produced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class AccountModel(Base):
+    __tablename__ = "accounts"
+    __table_args__ = (UniqueConstraint("name", name="uq_accounts_name"), {"schema": V3_SCHEMA})
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    cost_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ImageImportModel(Base):
+    __tablename__ = "image_imports"
+    __table_args__ = (UniqueConstraint("image_hash", name="uq_image_imports_hash"), {"schema": V3_SCHEMA})
+    image_import_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    image_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    image_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    import_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    ocr_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    field_regions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TradeDraftModel(Base):
+    __tablename__ = "trade_drafts"
+    __table_args__ = (
+        CheckConstraint("status IN ('DRAFT','CONFIRMED','REJECTED')", name="valid_status"),
+        UniqueConstraint("idempotency_key", name="uq_trade_drafts_idempotency"),
+        {"schema": V3_SCHEMA},
+    )
+    draft_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    image_import_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.image_imports.image_import_id"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    field_confidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    confirmed_by: Mapped[str | None] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PositionSnapshotDraftModel(Base):
+    __tablename__ = "position_snapshot_drafts"
+    __table_args__ = (
+        CheckConstraint("status IN ('DRAFT','CONFIRMED','REJECTED')", name="valid_status"),
+        {"schema": V3_SCHEMA},
+    )
+    draft_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    image_import_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.image_imports.image_import_id"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    field_confidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    confirmed_opening_position_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    confirmed_by: Mapped[str | None] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class OpeningPositionModel(Base):
+    __tablename__ = "opening_positions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "security_id", "baseline_time", name="uq_opening_positions_baseline"),
+        UniqueConstraint("content_hash", name="uq_opening_positions_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    opening_position_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    baseline_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    average_cost: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TradeLedgerModel(Base):
+    __tablename__ = "trade_ledger"
+    __table_args__ = (
+        CheckConstraint("side IN ('BUY','SELL')", name="valid_side"),
+        UniqueConstraint("idempotency_key", name="uq_trade_ledger_idempotency"),
+        UniqueConstraint("content_hash", name="uq_trade_ledger_hash"),
+        Index("ix_trade_ledger_position", "account_id", "security_id", "ledger_sequence"),
+        {"schema": V3_SCHEMA},
+    )
+    trade_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    ledger_sequence: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False, unique=True)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.trade_drafts.draft_id"), unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    trade_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    fee: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(Text)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.decisions.decision_id"))
+    entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.entry_plans.entry_plan_id"))
+    entry_plan_version: Mapped[int | None] = mapped_column(Integer)
+    execution_deviation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TradeCorrectionModel(Base):
+    __tablename__ = "trade_corrections"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_trade_corrections_hash"), {"schema": V3_SCHEMA})
+    correction_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    trade_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.trade_ledger.trade_id"), nullable=False)
+    correction_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    replacement: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PortfolioAdjustmentModel(Base):
+    __tablename__ = "portfolio_adjustments"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_portfolio_adjustments_hash"),
+        Index("ix_portfolio_adjustments_position", "account_id", "security_id", "adjustment_sequence"),
+        {"schema": V3_SCHEMA},
+    )
+    portfolio_adjustment_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    adjustment_sequence: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    corporate_action_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.corporate_actions.corporate_action_id"))
+    adjustment_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    effective_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    quantity_delta: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    cash_delta: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    cost_basis_delta: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    confirmed_by: Mapped[str | None] = mapped_column(String(128))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supersedes_adjustment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(f"{V3_SCHEMA}.portfolio_adjustments.portfolio_adjustment_id"))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ReconciliationModel(Base):
+    __tablename__ = "reconciliations"
+    __table_args__ = ({"schema": V3_SCHEMA},)
+    reconciliation_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), nullable=False)
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    broker_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    projected_facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    difference: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    resolution: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    confirmed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+
+class PositionProjectionModel(Base):
+    __tablename__ = "position_projections"
+    __table_args__ = ({"schema": V3_SCHEMA},)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), primary_key=True)
+    security_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.securities.security_id"), primary_key=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    cost_basis: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    average_cost: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    cash_impact: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    realized_pnl: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    last_ledger_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    last_adjustment_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    projection_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    rebuilt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PortfolioSnapshotModel(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_portfolio_snapshots_hash"), {"schema": V3_SCHEMA})
+    portfolio_snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    totals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class PortfolioPreferenceModel(Base):
+    __tablename__ = "portfolio_preferences"
+    __table_args__ = (UniqueConstraint("account_id", "version", name="uq_portfolio_preferences_version"), {"schema": V3_SCHEMA})
+    preference_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.accounts.account_id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)

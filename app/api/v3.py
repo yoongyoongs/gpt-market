@@ -19,10 +19,25 @@ from app.v3.application.import_ai_results import (
     ConfirmAIResultImportService,
     PreviewAIResultImportService,
 )
+from app.v3.application.manage_portfolio import (
+    DraftConfirmation,
+    ImageDraftImport,
+    PortfolioWriteService,
+)
 from app.v3.contracts.evidence import EvidenceType
 from app.v3.domain.evidence import EvidenceReadQuery, EvidenceSourceType
 from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.domain.ai_import import AIResultBundle, AIResultConfirmCommand
+from app.v3.domain.portfolio import (
+    AccountCreate,
+    OpeningPositionCreate,
+    PortfolioAdjustmentCreate,
+    PortfolioPreferenceCreate,
+    ReconciliationCreate,
+    TradeConfirm,
+    TradeCorrectionCreate,
+    TradeDraftCreate,
+)
 from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
@@ -362,3 +377,88 @@ async def confirm_ai_result_import(import_id: UUID, command: AIResultConfirmComm
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/accounts")
+async def create_portfolio_account(command: AccountCreate):
+    return await PortfolioWriteService(_uow).create_account(command)
+
+
+@router.post("/portfolio/trade-drafts")
+async def create_trade_draft(command: TradeDraftCreate):
+    try:
+        return await PortfolioWriteService(_uow).create_trade_draft(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/image-imports")
+async def import_portfolio_image(command: ImageDraftImport):
+    try:
+        return await PortfolioWriteService(_uow).import_image_drafts(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/trade-drafts/{draft_id}/confirm")
+async def confirm_portfolio_trade(draft_id: UUID, command: TradeConfirm):
+    try:
+        return await PortfolioWriteService(_uow).confirm_trade(draft_id, command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/opening-positions")
+async def create_opening_position(command: OpeningPositionCreate):
+    return await PortfolioWriteService(_uow).add_opening(command)
+
+
+@router.post("/portfolio/position-drafts/{draft_id}/confirm")
+async def confirm_position_snapshot_draft(draft_id: UUID, command: DraftConfirmation):
+    try:
+        return await PortfolioWriteService(_uow).confirm_position_draft(draft_id, command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/adjustments")
+async def create_portfolio_adjustment(command: PortfolioAdjustmentCreate):
+    return await PortfolioWriteService(_uow).add_adjustment(command)
+
+
+@router.post("/portfolio/trade-corrections")
+async def create_trade_correction(command: TradeCorrectionCreate):
+    try:
+        return await PortfolioWriteService(_uow).add_trade_correction(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/reconciliations")
+async def create_reconciliation(command: ReconciliationCreate):
+    return await PortfolioWriteService(_uow).add_reconciliation(command)
+
+
+@router.post("/portfolio/preferences")
+async def create_portfolio_preference(command: PortfolioPreferenceCreate):
+    return await PortfolioWriteService(_uow).add_preference(command)
+
+
+@router.post("/portfolio/accounts/{account_id}/positions/{security_id}/rebuild")
+async def rebuild_portfolio_position(account_id: UUID, security_id: UUID):
+    try:
+        return await PortfolioWriteService(_uow).rebuild_position(account_id, security_id)
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/portfolio/accounts/{account_id}/positions/{security_id}")
+async def portfolio_position(account_id: UUID, security_id: UUID):
+    position = await PortfolioWriteService(_uow).read_position(account_id, security_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    return position
