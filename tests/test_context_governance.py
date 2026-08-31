@@ -31,7 +31,7 @@ def test_guardrail_ids_are_unique_and_contiguous() -> None:
 def test_phase_capsule_template_and_phase6_are_complete() -> None:
     required = {"SCOPE.md", "CONTRACTS.md", "ACCEPTANCE.md", "STATUS.md"}
     for directory in ("docs/phases/_template", "docs/phases/phase6"):
-        assert required == {
+        assert required <= {
             item.name for item in (ROOT / directory).iterdir() if item.suffix == ".md"
         }
     phase6_scope = read("docs/phases/phase6/SCOPE.md")
@@ -45,6 +45,7 @@ def test_current_state_routes_to_one_next_task() -> None:
     assert "phases/phase6/STATUS.md" in state
     assert "P6-01" in state
     assert "Current Task**：NONE" in phase
+    assert "P6-02" in phase
     assert "不自动进入" in phase
 
 

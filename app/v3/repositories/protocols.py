@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
 from app.v3.domain.audit import AuditEvent
+from app.v3.domain.context import CandidateComparisonPack, ContextPack
 from app.v3.domain.evidence import (
     EntityLink,
     EvidenceConflict,
@@ -49,6 +50,7 @@ from app.v3.domain.recall import (
     RecallResult,
     RecallRun,
 )
+from app.v3.domain.task import ExpectedRun, TaskProfile, TaskRun
 
 
 class AgentTaskRepository(Protocol):
@@ -215,6 +217,44 @@ class EvidenceRepository(Protocol):
     ) -> tuple[SecurityEvidenceView, ...]: ...
 
 
+class CandidateComparisonRepository(Protocol):
+    async def publish(self, pack: CandidateComparisonPack) -> bool: ...
+
+    async def get(self, comparison_pack_id: UUID) -> CandidateComparisonPack | None: ...
+
+    async def get_by_content_hash(self, content_hash: str) -> CandidateComparisonPack | None: ...
+
+
+class ContextPackRepository(Protocol):
+    async def publish(self, pack: ContextPack) -> bool: ...
+
+    async def get(self, context_pack_id: UUID) -> ContextPack | None: ...
+
+    async def get_by_content_hash(self, content_hash: str) -> ContextPack | None: ...
+
+
+class TaskRegistryRepository(Protocol):
+    async def publish_profile(self, profile: TaskProfile) -> bool: ...
+
+    async def get_profile(self, task_profile_id: UUID) -> TaskProfile | None: ...
+
+    async def get_profile_version(self, *, profile_code: str, version: int) -> TaskProfile | None: ...
+
+    async def publish_expected_run(self, expected_run: ExpectedRun) -> bool: ...
+
+    async def get_expected_run(self, expected_run_id: UUID) -> ExpectedRun | None: ...
+
+    async def save_expected_run(
+        self, expected_run: ExpectedRun, *, expected_version: int
+    ) -> bool: ...
+
+    async def create_task_run(self, task_run: TaskRun) -> bool: ...
+
+    async def get_task_run(self, task_run_id: UUID) -> TaskRun | None: ...
+
+    async def save_task_run(self, task_run: TaskRun, *, expected_version: int) -> bool: ...
+
+
 class CorporateActionRepository(Protocol):
     async def latest_by_source_references(
         self, source: str, references: tuple[str, ...]
@@ -241,6 +281,9 @@ class UnitOfWork(Protocol):
     features: FeatureRepository
     evidence: EvidenceRepository
     recalls: RecallRepository
+    candidate_comparisons: CandidateComparisonRepository
+    context_packs: ContextPackRepository
+    task_registry: TaskRegistryRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 
