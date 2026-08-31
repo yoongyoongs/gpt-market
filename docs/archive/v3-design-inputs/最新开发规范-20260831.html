@@ -1,0 +1,1123 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="613e1c38e69678a896b723bd6085687ef82605b37b8dc41f772d4ebcdbaeca64"><title>一、最高原则：V3 Baseline 仍然是最终 Source of Truth</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#_2">基础边界</a></li>
+<li><a href="#_3">数据事实</a></li>
+<li><a href="#discovery">Discovery</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#trade-portfolio">Trade / Portfolio</a></li>
+<li><a href="#evidence">Evidence</a></li>
+<li><a href="#strategy">Strategy</a></li>
+<li><a href="#_4">工程治理</a></li>
+<li><a href="#level-0">Level 0：默认上下文</a></li>
+<li><a href="#level-1">Level 1：直接接口依赖</a></li>
+<li><a href="#level-2">Level 2：直接依赖实现</a></li>
+<li><a href="#level-3">Level 3：总体设计</a></li>
+<li><a href="#step-1">Step 1</a></li>
+<li><a href="#step-2">Step 2</a></li>
+<li><a href="#step-3">Step 3</a></li>
+<li><a href="#step-4">Step 4</a></li>
+<li><a href="#step-5">Step 5</a></li>
+<li><a href="#step-6">Step 6</a></li>
+<li><a href="#step-7">Step 7</a></li>
+<li><a href="#step-8">Step 8</a></li>
+<li><a href="#step-9">Step 9</a></li>
+<li><a href="#step-10">Step 10</a></li>
+<li><a href="#step-11">Step 11</a></li>
+<li><a href="#1">1. 新增文件</a></li>
+<li><a href="#2">2. 修改文件</a></li>
+<li><a href="#3-architecture-guardrails">3. Architecture Guardrails</a></li>
+<li><a href="#4-context-policy">4. Context Policy</a></li>
+<li><a href="#5-agents">5. AGENTS 分层</a></li>
+<li><a href="#6-phase-capsule">6. Phase Capsule</a></li>
+<li><a href="#7-task-template">7. Task Template</a></li>
+<li><a href="#8">8. 业务代码</a></li>
+<li><a href="#9">9. 测试结果</a></li>
+<li><a href="#10-git-commit">10. Git Commit</a></li>
+<li><a href="#11-design-conflict">11. Design Conflict</a></li>
+<li><a href="#12-cross-machine-check">12. Cross-machine Check</a></li>
+<li><a href="#13">13. 下一步</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/archive/v3-design-inputs/最新开发规范-20260831.md · 内容哈希：613e1c38e696</div><p>从现在开始，对 gpt-market 后续开发采用“最小必要上下文 + 分层架构约束 + Phase/Task 隔离 + 仓库级持久化”的开发模式。</p>
+<p>目标：</p>
+<ol>
+<li>显著降低无效 Token / Context 消耗；</li>
+<li>避免 Codex 每次重复扫描整个仓库和全部设计文档；</li>
+<li>让 Codex 专注于当前模块和当前 Task；</li>
+<li>同时防止局部开发逐渐偏离 V3 原始总体设计；</li>
+<li>让开发规范、项目状态和架构约束存在于 Git 仓库中，而不是依赖某一次 Codex 会话或某一台电脑；</li>
+<li>换电脑、重新 clone 仓库、重新开启 Codex 会话后，仍然能够恢复相同开发规则和项目状态；</li>
+<li>尽量让未来 Claude Code、Cursor 或其他 Agent 也能够根据仓库自身信息继续开发。</li>
+</ol>
+<p>当前不要重构业务逻辑，不要改变现有已经验收的功能。</p>
+<p>本次先完成一次“开发上下文治理”。</p>
+<hr>
+<h1 id="v3-baseline-source-of-truth">一、最高原则：V3 Baseline 仍然是最终 Source of Truth<a class="headerlink" href="#v3-baseline-source-of-truth" title="Permanent link">&para;</a></h1>
+<p>现有 V3 Architecture Baseline 及其正式配套设计仍然是项目最高级设计依据。</p>
+<p>本次治理不是重新设计项目。</p>
+<p>不得因为减少上下文而：</p>
+<ul>
+<li>改变产品目标；</li>
+<li>改变 Phase 原始职责；</li>
+<li>改变核心业务语义；</li>
+<li>绕开已有架构约束；</li>
+<li>自行简化重要设计；</li>
+<li>为当前实现方便而修改未来架构。</li>
+</ul>
+<p>以后普通 Task 不再默认全文读取所有大型文档，但这些文档仍然是最终设计依据。</p>
+<p>推荐关系：</p>
+<pre><code class="language-text">V3 Architecture Baseline
+        ↓
+Architecture Guardrails
+        ↓
+Phase Capsule
+        ↓
+当前 Task
+        ↓
+代码实现
+</code></pre>
+<p>如果下层文档与 V3 Baseline 冲突：</p>
+<p>V3 Baseline 优先。</p>
+<p>不得静默选择其中一个。</p>
+<p>必须报告：</p>
+<pre><code class="language-text">DESIGN_CONFLICT
+</code></pre>
+<p>或：</p>
+<pre><code class="language-text">DESIGN_CHANGE_REQUIRED
+</code></pre>
+<hr>
+<h1 id="codex">二、所有项目级规则必须“仓库化”，不能只存在当前 Codex 会话<a class="headerlink" href="#codex" title="Permanent link">&para;</a></h1>
+<p>本次建立的开发上下文治理规则，不得只存在：</p>
+<ul>
+<li>当前聊天上下文；</li>
+<li>当前电脑 Codex 配置；</li>
+<li>Codex 临时记忆；</li>
+<li>本机未提交文件。</li>
+</ul>
+<p>凡属于：</p>
+<ul>
+<li>项目级；</li>
+<li>跨机器；</li>
+<li>跨开发者；</li>
+<li>跨 Codex Session；</li>
+<li>跨 Agent；</li>
+</ul>
+<p>都应该持续有效的规则，必须写入项目 Git 仓库中的版本化文件。</p>
+<p>目标：</p>
+<p>在一台全新的电脑上：</p>
+<pre><code class="language-text">git clone
+</code></pre>
+<p>项目后，新 Codex 即使没有任何历史对话，也应该能够通过仓库本身知道：</p>
+<ul>
+<li>项目总体目标；</li>
+<li>当前架构原则；</li>
+<li>当前开发到哪个 Phase；</li>
+<li>当前 Phase 做到哪里；</li>
+<li>下一步做什么；</li>
+<li>哪些文件可以改；</li>
+<li>哪些东西不能改；</li>
+<li>当前模块依赖什么；</li>
+<li>如何验收；</li>
+<li>如何避免架构漂移。</li>
+</ul>
+<p>也就是说：</p>
+<pre><code class="language-text">项目知识属于 Repository
+而不是某一次 AI Conversation
+</code></pre>
+<hr>
+<h1 id="_1">三、禁止提交机器特定敏感信息<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<p>仓库化不意味着把所有东西都提交 Git。</p>
+<p>以下内容不得因为本次治理进入 Git：</p>
+<ul>
+<li>API Key；</li>
+<li>Secret；</li>
+<li>Token；</li>
+<li>数据库密码；</li>
+<li>用户账号；</li>
+<li>Codex 登录状态；</li>
+<li>私钥；</li>
+<li>真实交易敏感截图；</li>
+<li><code>.env</code> 中真实敏感配置；</li>
+<li>当前机器特定 Credential。</li>
+</ul>
+<p>必要时只提交：</p>
+<pre><code class="language-text">.env.example
+</code></pre>
+<p>或配置模板。</p>
+<hr>
+<h1 id="architecture_guardrailsmd">四、建立 ARCHITECTURE_GUARDRAILS.md<a class="headerlink" href="#architecture_guardrailsmd" title="Permanent link">&para;</a></h1>
+<p>创建：</p>
+<pre><code class="language-text">docs/ARCHITECTURE_GUARDRAILS.md
+</code></pre>
+<p>从现有：</p>
+<ul>
+<li>V3 Architecture Baseline；</li>
+<li>需求规格说明；</li>
+<li>系统功能架构；</li>
+<li>技术架构；</li>
+<li>数据库设计；</li>
+<li>详细设计；</li>
+</ul>
+<p>中提炼真正跨 Phase、长期有效、每个开发任务都必须遵守的核心规则。</p>
+<p>要求：</p>
+<ol>
+<li>不复制完整设计文档；</li>
+<li>保持较短；</li>
+<li>建议约 30～50 条核心规则；</li>
+<li>每条使用稳定编号：</li>
+</ol>
+<pre><code class="language-text">G-001
+G-002
+G-003
+...
+</code></pre>
+<ol start="5">
+<li>只记录真正长期稳定的架构原则；</li>
+<li>后续 Task 可以引用 Guardrail ID。</li>
+</ol>
+<p>必须至少覆盖：</p>
+<h3 id="_2">基础边界<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>V1/V2 必须保持兼容；</li>
+<li>V3 新功能使用明确独立边界；</li>
+<li>不允许为了 V3 随意侵入 Legacy；</li>
+<li>业务核心不能强绑定具体模型 SDK。</li>
+</ul>
+<h3 id="_3">数据事实<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>系统负责可验证事实；</li>
+<li>AI 负责综合分析和判断；</li>
+<li>用户确认真实资金行为；</li>
+<li>UNKNOWN 不允许推测填充；</li>
+<li>stale / conflict / coverage / confidence 必须显式；</li>
+<li><code>known_at</code> / <code>as_of</code> 必须防止前视。</li>
+</ul>
+<h3 id="discovery">Discovery<a class="headerlink" href="#discovery" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Recall 是发现加速器，不是全市场访问权限墙；</li>
+<li>未命中 Recall 的股票仍可以完整查询；</li>
+<li>不允许使用固定 <code>final_total_score</code> 或等价总分替代 AI 综合判断；</li>
+<li>Raw Opportunity ≠ Action Candidate；</li>
+<li>Recall Result 必须可解释；</li>
+<li>Recall Miss 只能在对应 Horizon 成熟以后生成。</li>
+</ul>
+<h3 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Immutable Decision；</li>
+<li>Review Append-only；</li>
+<li>Correction 只能追加，不能覆写历史。</li>
+</ul>
+<h3 id="trade-portfolio">Trade / Portfolio<a class="headerlink" href="#trade-portfolio" title="Permanent link">&para;</a></h3>
+<ul>
+<li>AI/OCR 不能直接生成真实交易；</li>
+<li>Screenshot/OCR 只能先生成 Draft；</li>
+<li>用户确认后才能成为真实 Trade；</li>
+<li>Trade Ledger immutable；</li>
+<li>Opening Position 不允许伪造成历史 BUY；</li>
+<li>Position 应可以由 Ledger 重建；</li>
+<li>Portfolio 信息是事实和软偏好，不能成为全市场硬删除机会的规则。</li>
+</ul>
+<h3 id="evidence">Evidence<a class="headerlink" href="#evidence" title="Permanent link">&para;</a></h3>
+<ul>
+<li>外部文本属于 Untrusted Data；</li>
+<li>外部文本不能控制 Agent Prompt；</li>
+<li>Opinion 不得自动提升为 Fact；</li>
+<li>冲突事实不能偷偷删除。</li>
+</ul>
+<h3 id="strategy">Strategy<a class="headerlink" href="#strategy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>AI 不得自动激活正式 Strategy；</li>
+<li>Strategy 变化必须经过 Replay / Shadow / A-B / Guardrail / 用户审批等既定流程。</li>
+</ul>
+<h3 id="_4">工程治理<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Schema 版本化；</li>
+<li>Migration 版本化；</li>
+<li>Feature 版本化；</li>
+<li>Prompt / Strategy / Guardrail 等按设计版本化；</li>
+<li>不允许因为当前 Task 方便而修改跨模块 Contract。</li>
+</ul>
+<p>如果现有正式文档本身存在冲突：</p>
+<p>不要自行解决。</p>
+<p>记录并汇报。</p>
+<hr>
+<h1 id="context_policymd">五、建立开发上下文规范 CONTEXT_POLICY.md<a class="headerlink" href="#context_policymd" title="Permanent link">&para;</a></h1>
+<p>创建：</p>
+<pre><code class="language-text">docs/development/CONTEXT_POLICY.md
+</code></pre>
+<p>这份文档专门规定 Codex 后续如何读取上下文。</p>
+<p>核心原则：</p>
+<pre><code class="language-text">最小必要上下文
+Minimal Necessary Context
+</code></pre>
+<p>不是：</p>
+<pre><code class="language-text">看得越少越好
+</code></pre>
+<p>而是：</p>
+<pre><code class="language-text">只读取完成当前任务真正需要的信息。
+</code></pre>
+<hr>
+<h1 id="_5">六、以后禁止默认扫描整个仓库<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h1>
+<p>普通 Task 启动时不得默认：</p>
+<ul>
+<li>全仓库搜索；</li>
+<li>全文读取所有 Markdown；</li>
+<li>全文读取需求规格；</li>
+<li>全文读取架构设计；</li>
+<li>全文读取数据库设计；</li>
+<li>全文读取详细设计；</li>
+<li>全文读取所有历史 STATUS；</li>
+<li>为了“充分理解整个系统”递归探索所有模块。</li>
+</ul>
+<p>只有真正需要的信息才读取。</p>
+<hr>
+<h1 id="_6">七、上下文分层读取<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h1>
+<p>以后普通 Task 使用以下读取层级。</p>
+<h2 id="level-0">Level 0：默认上下文<a class="headerlink" href="#level-0" title="Permanent link">&para;</a></h2>
+<p>必须优先读取：</p>
+<ol>
+<li>根目录 <code>AGENTS.md</code></li>
+<li>当前目录路径生效的 <code>AGENTS.md</code></li>
+<li><code>docs/ARCHITECTURE_GUARDRAILS.md</code></li>
+<li>当前 Phase：</li>
+</ol>
+<pre><code class="language-text">SCOPE.md
+CONTRACTS.md
+ACCEPTANCE.md
+STATUS.md
+</code></pre>
+<ol start="5">
+<li>当前 Task 描述</li>
+<li>当前 Task 直接相关的源代码</li>
+<li>当前 Task 直接相关测试</li>
+</ol>
+<p>绝大部分普通任务应该尽量在 Level 0 完成。</p>
+<hr>
+<h2 id="level-1">Level 1：直接接口依赖<a class="headerlink" href="#level-1" title="Permanent link">&para;</a></h2>
+<p>如果 Level 0 不足：</p>
+<p>允许读取当前模块直接使用的：</p>
+<ul>
+<li>DTO；</li>
+<li>Domain Object；</li>
+<li>Protocol；</li>
+<li>Interface；</li>
+<li>Repository Interface；</li>
+<li>Service Contract；</li>
+<li>API Schema；</li>
+<li>Migration 定义；</li>
+<li>配置 Schema。</li>
+</ul>
+<p>原则：</p>
+<pre><code class="language-text">优先理解 Contract，
+而不是重新理解整个依赖模块。
+</code></pre>
+<hr>
+<h2 id="level-2">Level 2：直接依赖实现<a class="headerlink" href="#level-2" title="Permanent link">&para;</a></h2>
+<p>只有当：</p>
+<ul>
+<li>Contract 不足以解释行为；</li>
+<li>测试失败原因无法从接口判断；</li>
+<li>存在兼容性问题；</li>
+<li>实际行为和 Contract 不一致；</li>
+</ul>
+<p>时，才允许精确读取直接依赖的具体实现。</p>
+<p>不要继续递归探索不相关模块。</p>
+<hr>
+<h2 id="level-3">Level 3：总体设计<a class="headerlink" href="#level-3" title="Permanent link">&para;</a></h2>
+<p>只有出现：</p>
+<ul>
+<li>架构冲突；</li>
+<li>跨 Phase 语义不清；</li>
+<li>Contract 需要改变；</li>
+<li>当前文档无法决定；</li>
+<li>Baseline 一致性需要确认；</li>
+</ul>
+<p>时，才读取大型设计文档中的对应章节。</p>
+<p>优先精确读取相关章节。</p>
+<p>不要默认重新全文阅读所有设计文档。</p>
+<hr>
+<h1 id="token">八、禁止为了节省 Token 猜测接口<a class="headerlink" href="#token" title="Permanent link">&para;</a></h1>
+<p>最小上下文不意味着允许猜。</p>
+<p>如果缺少关键事实：</p>
+<p>必须精确扩大读取范围。</p>
+<p>禁止：</p>
+<ul>
+<li>猜字段；</li>
+<li>猜接口；</li>
+<li>猜数据库结构；</li>
+<li>猜其他模块行为；</li>
+<li>猜历史设计；</li>
+<li>用“应该是”代替事实。</li>
+</ul>
+<p>正确方式：</p>
+<pre><code class="language-text">Level 0
+↓
+不足
+↓
+Level 1
+↓
+不足
+↓
+Level 2
+↓
+仍存在架构问题
+↓
+Level 3
+</code></pre>
+<p>而不是：</p>
+<pre><code class="language-text">不知道
+↓
+自己假设
+</code></pre>
+<hr>
+<h1 id="phase-capsule">九、建立 Phase Capsule<a class="headerlink" href="#phase-capsule" title="Permanent link">&para;</a></h1>
+<p>后续每个 Phase 建立独立目录。</p>
+<p>例如：</p>
+<pre><code class="language-text">docs/phases/phase6/
+</code></pre>
+<p>至少包含：</p>
+<pre><code class="language-text">SCOPE.md
+CONTRACTS.md
+ACCEPTANCE.md
+STATUS.md
+</code></pre>
+<p>必要时可以增加：</p>
+<pre><code class="language-text">TASKS.md
+DECISIONS.md
+</code></pre>
+<p>但不要无控制增加大量重复文档。</p>
+<hr>
+<h1 id="scopemd">十、SCOPE.md<a class="headerlink" href="#scopemd" title="Permanent link">&para;</a></h1>
+<p>描述当前 Phase：</p>
+<ul>
+<li>为什么存在；</li>
+<li>负责什么；</li>
+<li>不负责什么；</li>
+<li>输入；</li>
+<li>输出；</li>
+<li>前置依赖；</li>
+<li>后续消费者；</li>
+<li>当前 Phase 边界。</li>
+</ul>
+<p>顶部必须明确：</p>
+<pre><code class="language-text">This document is derived from V3 Architecture Baseline.
+
+This document MUST NOT override the V3 Architecture Baseline.
+
+If conflict exists, V3 Architecture Baseline wins and the conflict must be reported.
+</code></pre>
+<hr>
+<h1 id="contractsmd">十一、CONTRACTS.md<a class="headerlink" href="#contractsmd" title="Permanent link">&para;</a></h1>
+<p>用于替代普通 Task 每次阅读其他模块大量源码。</p>
+<p>只记录当前 Phase 真正需要的跨模块契约，例如：</p>
+<ul>
+<li>Domain Object；</li>
+<li>DTO；</li>
+<li>Repository Protocol；</li>
+<li>Service Interface；</li>
+<li>API Contract；</li>
+<li>输入字段；</li>
+<li>输出字段；</li>
+<li>Invariant；</li>
+<li>Error Semantic；</li>
+<li>Version Requirement。</li>
+</ul>
+<p>例如：</p>
+<pre><code class="language-text">FeatureRun
+↓
+RecallService
+↓
+RecallRun / RecallResult
+</code></pre>
+<p>只要 Contract 足够完成当前 Task：</p>
+<p>不要继续阅读 Feature 内部几十个实现文件。</p>
+<hr>
+<h1 id="acceptancemd">十二、ACCEPTANCE.md<a class="headerlink" href="#acceptancemd" title="Permanent link">&para;</a></h1>
+<p>从正式 V3 设计和验收标准中提炼当前 Phase 的验收门槛。</p>
+<p>每项必须：</p>
+<ul>
+<li>可验证；</li>
+<li>可测试；</li>
+<li>可以给出 PASS / FAIL；</li>
+<li>尽量绑定测试或实际证据。</li>
+</ul>
+<p>不能写成：</p>
+<pre><code class="language-text">代码质量不错
+功能基本正常
+</code></pre>
+<p>应该类似：</p>
+<pre><code class="language-text">AC-P5-001：
+Recall Result 必须返回 channel、reason、rank、version、coverage。
+
+Verification：
+自动化测试 + API 示例。
+</code></pre>
+<hr>
+<h1 id="statusmd">十三、STATUS.md<a class="headerlink" href="#statusmd" title="Permanent link">&para;</a></h1>
+<p>STATUS 是当前 Phase 普通开发过程中的主要进度文档。</p>
+<p>建议记录：</p>
+<pre><code class="language-text">Task ID
+Task Name
+Status
+Commit
+Tests
+Modified Files
+Interface Change
+Migration Change
+Known Issues
+Follow-up
+</code></pre>
+<p>状态统一：</p>
+<pre><code class="language-text">TODO
+IN_PROGRESS
+DONE
+PARTIAL
+BLOCKED
+</code></pre>
+<p>STATUS 必须简洁。</p>
+<p>不要不断复制完整设计内容进去。</p>
+<hr>
+<h1 id="task">十四、建立 Task 模板<a class="headerlink" href="#task" title="Permanent link">&para;</a></h1>
+<p>创建：</p>
+<pre><code class="language-text">docs/development/TASK_TEMPLATE.md
+</code></pre>
+<p>以后禁止使用：</p>
+<pre><code class="language-text">继续 Phase 6
+把 Phase 6 做完
+继续项目开发
+把剩下的全部开发完
+</code></pre>
+<p>这类无限范围任务。</p>
+<p>必须拆成明确 Task：</p>
+<pre><code class="language-text">P6-01
+P6-02
+P6-03
+...
+</code></pre>
+<p>一个 Task 尽量只负责一个清晰的软件工程目标。</p>
+<p>Task 必须包含：</p>
+<pre><code class="language-text">Task ID
+Task Name
+Goal
+Implements
+READ SCOPE
+WRITE SCOPE
+Dependencies
+Acceptance
+Tests
+Forbidden Changes
+</code></pre>
+<hr>
+<h1 id="task-requirement-traceability">十五、每个 Task 建立 Requirement Traceability<a class="headerlink" href="#task-requirement-traceability" title="Permanent link">&para;</a></h1>
+<p>尽量让 Task 能追溯到正式设计。</p>
+<p>例如：</p>
+<pre><code class="language-text">Task:
+P6-04 CandidateComparisonPack
+
+Implements:
+FR-DI-006
+
+Architecture:
+ARCH-x.x
+
+Detailed Design:
+DD-x.x
+
+Acceptance:
+AC-P6-04-001
+AC-P6-04-002
+</code></pre>
+<p>目的：</p>
+<p>任何实现都能回答：</p>
+<pre><code class="language-text">为什么写这个？
+</code></pre>
+<p>答案应该是：</p>
+<pre><code class="language-text">为了实现正式需求/架构/验收项。
+</code></pre>
+<p>而不是：</p>
+<pre><code class="language-text">因为 Codex 觉得这样比较好。
+</code></pre>
+<hr>
+<h1 id="read-scope-write-scope">十六、READ SCOPE / WRITE SCOPE 必须明确<a class="headerlink" href="#read-scope-write-scope" title="Permanent link">&para;</a></h1>
+<p>每个 Task 开发前必须明确：</p>
+<pre><code class="language-text">READ SCOPE
+WRITE SCOPE
+</code></pre>
+<p>例如：</p>
+<pre><code class="language-text">WRITE SCOPE
+
+app/v3/discovery/**
+tests/v3/discovery/**
+docs/phases/phase5/STATUS.md
+</code></pre>
+<p>必要时允许读取：</p>
+<pre><code class="language-text">Feature DTO
+Feature Repository Protocol
+Universe Domain Model
+</code></pre>
+<p>但禁止修改：</p>
+<pre><code class="language-text">V1/V2
+Evidence
+Context
+Trade
+Portfolio
+Performance
+其他无关 Migration
+总体架构设计
+</code></pre>
+<hr>
+<h1 id="_7">十七、不要顺手修改其他模块<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h1>
+<p>如果发现其他模块存在问题，但：</p>
+<pre><code class="language-text">不阻塞当前 Task
+</code></pre>
+<p>则：</p>
+<p>不要修改。</p>
+<p>记录：</p>
+<pre><code class="language-text">FOLLOW_UP
+</code></pre>
+<p>到 STATUS。</p>
+<p>以后单独建立 Task。</p>
+<p>避免：</p>
+<pre><code class="language-text">做 Recall
+↓
+顺手重构 Feature
+↓
+顺手改 Repository
+↓
+顺手改 Context
+↓
+最终一个 Task 改几十个文件
+</code></pre>
+<hr>
+<h1 id="contract">十八、跨模块 Contract 默认冻结<a class="headerlink" href="#contract" title="Permanent link">&para;</a></h1>
+<p>当前 Phase <code>CONTRACTS.md</code> 中已经确认的跨模块接口：</p>
+<p>默认视为冻结 Contract。</p>
+<p>当前 Task 应：</p>
+<pre><code class="language-text">优先适配 Contract
+</code></pre>
+<p>而不是：</p>
+<pre><code class="language-text">优先修改其他模块。
+</code></pre>
+<p>如果当前 Contract 确实无法满足正式需求：</p>
+<p>不得偷偷修改。</p>
+<p>必须先输出：</p>
+<pre><code class="language-text">DESIGN_CHANGE_REQUIRED
+</code></pre>
+<p>包括：</p>
+<pre><code class="language-text">当前设计：
+...
+
+问题：
+...
+
+为什么无法实现：
+...
+
+建议修改：
+...
+
+影响模块：
+...
+
+影响 Phase：
+...
+
+API 影响：
+...
+
+Database 影响：
+...
+
+Migration 影响：
+...
+
+V1/V2 Compatibility：
+...
+
+是否需要修改 V3 Baseline：
+YES / NO
+</code></pre>
+<p>在设计变更正式确认以前：</p>
+<p>不要自行扩大修改范围。</p>
+<hr>
+<h1 id="agentsmd">十九、AGENTS.md 采用分层结构<a class="headerlink" href="#agentsmd" title="Permanent link">&para;</a></h1>
+<p>检查当前仓库 AGENTS 结构。</p>
+<p>根：</p>
+<pre><code class="language-text">AGENTS.md
+</code></pre>
+<p>只保留真正全局的项目规则。</p>
+<p>不要把完整架构文档复制进去。</p>
+<p>根 AGENTS.md 应该非常聚焦，例如：</p>
+<pre><code class="language-text">本项目开发必须遵守：
+
+docs/ARCHITECTURE_GUARDRAILS.md
+docs/development/CONTEXT_POLICY.md
+
+普通任务采用最小必要上下文。
+
+不得无目的全仓库扫描。
+
+V3 Baseline 为最终设计 Source of Truth。
+
+任何跨模块 Contract 修改必须显式报告。
+
+每个 Task 必须运行对应测试并更新 Phase STATUS。
+</code></pre>
+<p>然后根据目录建立局部 AGENTS，例如：</p>
+<pre><code class="language-text">app/v3/AGENTS.md
+app/v3/discovery/AGENTS.md
+app/v3/context/AGENTS.md
+app/v3/portfolio/AGENTS.md
+</code></pre>
+<p>具体按项目现状决定，不要为了形式机械创建大量 AGENTS。</p>
+<p>原则：</p>
+<pre><code class="language-text">越靠近具体模块，
+规则越聚焦。
+</code></pre>
+<p>不要在每层重复相同的大段文本。</p>
+<hr>
+<h1 id="task_1">二十、普通开发 Task 的标准执行流程<a class="headerlink" href="#task_1" title="Permanent link">&para;</a></h1>
+<p>以后每个 Task：</p>
+<pre><code class="language-text">1. 读取最小上下文
+2. 确认 READ / WRITE Scope
+3. 查看当前 Task 相关代码
+4. 给出简短实现计划
+5. 只完成当前 Task
+6. 写/修改对应测试
+7. 运行当前模块测试
+8. 必要时运行最小回归测试
+9. 修复失败
+10. 更新 STATUS
+11. Git commit
+12. 停止
+</code></pre>
+<p>不要自动进入下一 Task。</p>
+<hr>
+<h1 id="task_2">二十一、一个 Task 完成以后不要长期背着旧上下文<a class="headerlink" href="#task_2" title="Permanent link">&para;</a></h1>
+<p>Task 完成以后：</p>
+<p>把真正需要保留的信息写进仓库：</p>
+<pre><code class="language-text">代码
+测试
+STATUS
+Contract
+必要文档
+Commit
+</code></pre>
+<p>后续新 Task 应重新从仓库恢复状态。</p>
+<p>不要依赖：</p>
+<pre><code class="language-text">上一次 Codex 对话还记得。
+</code></pre>
+<hr>
+<h1 id="contract-check">二十二、建立轻量 Contract Check<a class="headerlink" href="#contract-check" title="Permanent link">&para;</a></h1>
+<p>每完成若干互相关联的 Task，例如 3～5 个关键 Task：</p>
+<p>执行一次：</p>
+<pre><code class="language-text">Contract Check
+</code></pre>
+<p>只检查：</p>
+<ul>
+<li>接口是否漂移；</li>
+<li>Input/Output 是否一致；</li>
+<li>是否出现重复模型；</li>
+<li>是否修改冻结 Contract；</li>
+<li>是否突破 Phase 边界；</li>
+<li>当前实现是否仍满足 Guardrails。</li>
+</ul>
+<p>Contract Check 不需要每次全文读取整个项目。</p>
+<hr>
+<h1 id="phase-phase-gate">二十三、每个 Phase 必须执行 Phase Gate<a class="headerlink" href="#phase-phase-gate" title="Permanent link">&para;</a></h1>
+<p>普通 Task 使用局部上下文。</p>
+<p>但是当一个 Phase 宣称完成时：</p>
+<p>必须单独执行：</p>
+<pre><code class="language-text">Phase Architecture Conformance Review
+</code></pre>
+<p>Phase Gate 允许扩大上下文。</p>
+<p>至少重新对照：</p>
+<ul>
+<li>V3 Architecture Baseline；</li>
+<li>Architecture Guardrails；</li>
+<li>当前 Phase SCOPE；</li>
+<li>CONTRACTS；</li>
+<li>ACCEPTANCE；</li>
+<li>STATUS；</li>
+<li>当前 Phase 实际代码；</li>
+<li>Migration；</li>
+<li>API；</li>
+<li>Tests；</li>
+<li>与前后 Phase 的接口。</li>
+</ul>
+<p>必须检查：</p>
+<ol>
+<li>是否漏需求；</li>
+<li>是否偏离原始设计；</li>
+<li>是否改变业务语义；</li>
+<li>是否突破当前 Phase 边界；</li>
+<li>是否提前侵入未来 Phase；</li>
+<li>是否存在重复实现；</li>
+<li>是否产生不必要跨模块耦合；</li>
+<li>是否违反 <code>known_at</code>；</li>
+<li>是否伪造 UNKNOWN；</li>
+<li>是否修改冻结 Contract；</li>
+<li>是否与数据库设计冲突；</li>
+<li>是否破坏 V1/V2；</li>
+<li>是否违反 Architecture Guardrails；</li>
+<li>是否全部满足 ACCEPTANCE；</li>
+<li>是否有真实测试证据；</li>
+<li>是否有遗留 BLOCKER。</li>
+</ol>
+<p>只有 Phase Gate 正式通过：</p>
+<p>才允许把该 Phase 标记为：</p>
+<pre><code class="language-text">DONE / ACCEPTED
+</code></pre>
+<hr>
+<h1 id="_8">二十四、把重要架构原则逐渐变成自动测试<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h1>
+<p>不要完全依赖 Codex 每次记住文档。</p>
+<p>适合自动验证的架构规则应该逐渐变成测试。</p>
+<p>例如：</p>
+<pre><code class="language-text">known_at &lt;= as_of
+
+UNKNOWN 不得自动补值
+
+Recall 不限制 Full Universe Query
+
+禁止 final_total_score
+
+Raw Opportunity != Action Candidate
+
+Decision immutable
+
+Review append-only
+
+Trade Ledger immutable
+
+Trade 必须用户确认
+
+OCR 只能生成 Draft
+
+Opening Position 不伪造历史 BUY
+
+Portfolio 不允许硬删除全市场机会
+
+AI 不得自动激活 Strategy
+</code></pre>
+<p>注意：</p>
+<p>本次上下文治理不要为了“做完整”而一次性实现所有未来 Phase 的测试。</p>
+<p>只建立机制。</p>
+<p>相关业务进入对应 Phase 时再补齐。</p>
+<hr>
+<h1 id="_9">二十五、大型文档更新策略<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h1>
+<p>普通 Task 不再每次修改所有大型设计文档。</p>
+<p>如果 Task 没有产生真实架构或 Contract 变化：</p>
+<p>主要更新：</p>
+<ul>
+<li>当前代码；</li>
+<li>当前测试；</li>
+<li>STATUS；</li>
+<li>必要局部文档。</li>
+</ul>
+<p>不要每完成一个小功能就全文修改：</p>
+<ul>
+<li>Requirements；</li>
+<li>Architecture；</li>
+<li>Technical Architecture；</li>
+<li>Database Design；</li>
+<li>Detailed Design；</li>
+<li>所有状态文档。</li>
+</ul>
+<p>否则文档本身会继续成为 Token 黑洞。</p>
+<hr>
+<h1 id="source-of-truth">二十六、发生正式设计变化时必须同步 Source of Truth<a class="headerlink" href="#source-of-truth" title="Permanent link">&para;</a></h1>
+<p>减少文档更新不意味着允许文档过期。</p>
+<p>如果发生真实：</p>
+<ul>
+<li>Requirement Change；</li>
+<li>Architecture Change；</li>
+<li>Contract Change；</li>
+<li>Schema Change；</li>
+<li>Phase Boundary Change；</li>
+</ul>
+<p>必须同步正式 Source of Truth。</p>
+<p>不能只写：</p>
+<pre><code class="language-text">STATUS.md
+</code></pre>
+<p>然后让总设计永久过期。</p>
+<hr>
+<h1 id="phase">二十七、Phase 完成后统一文档同步<a class="headerlink" href="#phase" title="Permanent link">&para;</a></h1>
+<p>Phase Gate 时统一检查：</p>
+<ul>
+<li>Requirement；</li>
+<li>Architecture；</li>
+<li>Functional Architecture；</li>
+<li>Technical Architecture；</li>
+<li>Database Design；</li>
+<li>Detailed Design；</li>
+<li>Feature Status；</li>
+<li>Work Status；</li>
+</ul>
+<p>哪些因为本 Phase 的真实实现需要同步。</p>
+<p>这样把“大文档全局同步”从：</p>
+<pre><code class="language-text">每一个 Task
+</code></pre>
+<p>降低成：</p>
+<pre><code class="language-text">每一个 Phase 少数几次
+</code></pre>
+<hr>
+<h1 id="git">二十八、Git 必须成为跨机器项目状态载体<a class="headerlink" href="#git" title="Permanent link">&para;</a></h1>
+<p>以下内容只要属于项目本身，都必须正常提交 Git：</p>
+<pre><code class="language-text">AGENTS.md
+Architecture Guardrails
+Context Policy
+Phase Capsule
+Task Template
+STATUS
+代码
+测试
+Migration
+必要设计变更
+</code></pre>
+<p>每个完成 Task 应有清晰 Commit。</p>
+<p>Commit Message 应能表达：</p>
+<pre><code class="language-text">Phase
+Task ID
+主要变化
+</code></pre>
+<p>例如：</p>
+<pre><code class="language-text">Phase 6 P6-04：实现 CandidateComparisonPack 构建与测试
+</code></pre>
+<hr>
+<h1 id="_10">二十九、换电脑后的恢复标准<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h1>
+<p>本次治理完成以后，以以下场景作为验收标准：</p>
+<p>假设：</p>
+<ol>
+<li>当前电脑完全不可用；</li>
+<li>新电脑安装 Git 和 Codex；</li>
+<li>clone 当前 Repository；</li>
+<li>不提供旧 Codex Conversation；</li>
+<li>不人工重新解释整个项目。</li>
+</ol>
+<p>新的 Codex 应该能够：</p>
+<ol>
+<li>读取根 AGENTS；</li>
+<li>找到 Architecture Guardrails；</li>
+<li>找到 Context Policy；</li>
+<li>找到当前 Phase；</li>
+<li>找到 STATUS；</li>
+<li>知道当前完成了什么；</li>
+<li>知道下一 Task 是什么；</li>
+<li>知道哪些接口被冻结；</li>
+<li>知道哪些文件可以修改；</li>
+<li>知道如何验收；</li>
+<li>知道不能违反哪些全局设计原则。</li>
+</ol>
+<p>如果做不到：</p>
+<p>说明项目仍然过度依赖旧 Session，需要继续治理。</p>
+<hr>
+<h1 id="agent">三十、跨 Agent 可恢复性<a class="headerlink" href="#agent" title="Permanent link">&para;</a></h1>
+<p>本机制不应该只对 Codex 有效。</p>
+<p>除 Codex 特有的 <code>AGENTS.md</code> 行为外：</p>
+<p>核心架构知识应该存在于通用 Markdown 文档中。</p>
+<p>目标是未来：</p>
+<pre><code class="language-text">Codex
+Claude Code
+Cursor
+其他 coding agent
+</code></pre>
+<p>至少都能够从 Repository 中恢复：</p>
+<ul>
+<li>Architecture；</li>
+<li>Guardrails；</li>
+<li>Phase Scope；</li>
+<li>Contracts；</li>
+<li>Acceptance；</li>
+<li>Status；</li>
+<li>Task。</li>
+</ul>
+<p>不要把关键设计只写进某个厂商私有配置。</p>
+<hr>
+<h1 id="_11">三十一、本次治理不得做的事情<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h1>
+<p>本次任务禁止：</p>
+<ul>
+<li>继续开发新的业务 Phase；</li>
+<li>改变现有业务行为；</li>
+<li>大规模重构现有代码；</li>
+<li>为了“模块化”移动大量稳定代码；</li>
+<li>删除现有正式设计文档；</li>
+<li>重写整个项目架构；</li>
+<li>顺便修复无关业务 Bug；</li>
+<li>修改 V1/V2 行为；</li>
+<li>提交 Secret；</li>
+<li>把整个 V3 Baseline 复制进 AGENTS；</li>
+<li>为每个目录机械创建 AGENTS；</li>
+<li>为每个 Task 创建大量重复文档。</li>
+</ul>
+<p>目标是：</p>
+<pre><code class="language-text">治理开发上下文
+</code></pre>
+<p>不是：</p>
+<pre><code class="language-text">重构业务系统
+</code></pre>
+<hr>
+<h1 id="_12">三十二、本次具体任务<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h1>
+<p>现在执行以下工作：</p>
+<h2 id="step-1">Step 1<a class="headerlink" href="#step-1" title="Permanent link">&para;</a></h2>
+<p>审查当前 Repository 中：</p>
+<ul>
+<li>AGENTS；</li>
+<li>V3 Baseline；</li>
+<li>Requirements；</li>
+<li>Architecture；</li>
+<li>Functional Architecture；</li>
+<li>Technical Architecture；</li>
+<li>Database Design；</li>
+<li>Detailed Design；</li>
+<li>Feature Status；</li>
+<li>Work Status；</li>
+</ul>
+<p>确认当前 Source of Truth 和重复信息情况。</p>
+<p>这里允许为了本次治理读取必要总体文档。</p>
+<p>这是一次治理任务，不属于普通小 Task。</p>
+<hr>
+<h2 id="step-2">Step 2<a class="headerlink" href="#step-2" title="Permanent link">&para;</a></h2>
+<p>创建：</p>
+<pre><code class="language-text">docs/ARCHITECTURE_GUARDRAILS.md
+</code></pre>
+<p>从正式设计中提炼约 30～50 条长期稳定核心规则。</p>
+<hr>
+<h2 id="step-3">Step 3<a class="headerlink" href="#step-3" title="Permanent link">&para;</a></h2>
+<p>创建：</p>
+<pre><code class="language-text">docs/development/CONTEXT_POLICY.md
+</code></pre>
+<p>把本指令中的最小上下文策略正式仓库化。</p>
+<hr>
+<h2 id="step-4">Step 4<a class="headerlink" href="#step-4" title="Permanent link">&para;</a></h2>
+<p>创建：</p>
+<pre><code class="language-text">docs/development/TASK_TEMPLATE.md
+</code></pre>
+<p>供后续 Task 使用。</p>
+<hr>
+<h2 id="step-5">Step 5<a class="headerlink" href="#step-5" title="Permanent link">&para;</a></h2>
+<p>创建 Phase Capsule 模板。</p>
+<p>例如：</p>
+<pre><code class="language-text">docs/phases/_template/
+├── SCOPE.md
+├── CONTRACTS.md
+├── ACCEPTANCE.md
+└── STATUS.md
+</code></pre>
+<p>如果仓库现有目录命名有更合理的正式规范：</p>
+<p>可以沿用现有规范，不要为了本 Prompt 强行改变。</p>
+<hr>
+<h2 id="step-6">Step 6<a class="headerlink" href="#step-6" title="Permanent link">&para;</a></h2>
+<p>检查并优化根：</p>
+<pre><code class="language-text">AGENTS.md
+</code></pre>
+<p>保持简短。</p>
+<p>让它主要成为：</p>
+<pre><code class="language-text">项目开发导航 + 最高级日常规则
+</code></pre>
+<p>并明确引用：</p>
+<pre><code class="language-text">docs/ARCHITECTURE_GUARDRAILS.md
+docs/development/CONTEXT_POLICY.md
+</code></pre>
+<hr>
+<h2 id="step-7">Step 7<a class="headerlink" href="#step-7" title="Permanent link">&para;</a></h2>
+<p>根据当前项目真实模块结构，判断是否确实需要：</p>
+<pre><code class="language-text">app/v3/AGENTS.md
+app/v3/discovery/AGENTS.md
+...
+</code></pre>
+<p>只有实际有价值才创建。</p>
+<p>禁止为了形式机械分层。</p>
+<hr>
+<h2 id="step-8">Step 8<a class="headerlink" href="#step-8" title="Permanent link">&para;</a></h2>
+<p>如果当前 Phase 5 尚未最终验收：</p>
+<p>不要中断或重构 Phase 5 业务实现。</p>
+<p>优先保持其现有状态。</p>
+<p>新机制可以准备完成，但正式从下一个合适 Task / Phase 使用。</p>
+<p>如果 Phase 5 已经通过验收：</p>
+<p>从 Phase 6 正式切换至新机制。</p>
+<hr>
+<h2 id="step-9">Step 9<a class="headerlink" href="#step-9" title="Permanent link">&para;</a></h2>
+<p>检查所有新建治理文件：</p>
+<p>确保：</p>
+<ul>
+<li>不依赖当前机器；</li>
+<li>不依赖当前 Codex Session；</li>
+<li>没有 Secret；</li>
+<li>可以 Git 版本控制；</li>
+<li>新电脑 clone 后可恢复规则。</li>
+</ul>
+<hr>
+<h2 id="step-10">Step 10<a class="headerlink" href="#step-10" title="Permanent link">&para;</a></h2>
+<p>运行必要测试，确认本次治理：</p>
+<pre><code class="language-text">没有改变现有业务行为。
+</code></pre>
+<p>如果只改 Markdown / AGENTS 且不需要完整业务测试：</p>
+<p>至少执行合理的最小验证。</p>
+<hr>
+<h2 id="step-11">Step 11<a class="headerlink" href="#step-11" title="Permanent link">&para;</a></h2>
+<p>提交 Git。</p>
+<p>使用清晰中文 Commit，例如：</p>
+<pre><code class="language-text">工程治理：建立最小上下文与 Phase Task 开发规范
+</code></pre>
+<hr>
+<h1 id="_13">三十三、本次完成后停止<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h1>
+<p>不要自动：</p>
+<ul>
+<li>开始 Phase 6；</li>
+<li>开始下一个业务 Task；</li>
+<li>重构 Discovery；</li>
+<li>修改 Context；</li>
+<li>修改 Portfolio；</li>
+<li>修改 Trade；</li>
+<li>修改其他未来模块。</li>
+</ul>
+<p>完成治理后停止并汇报。</p>
+<hr>
+<h1 id="_14">三十四、最终汇报格式<a class="headerlink" href="#_14" title="Permanent link">&para;</a></h1>
+<p>最终只向我汇报：</p>
+<h2 id="1">1. 新增文件<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>列出。</p>
+<h2 id="2">2. 修改文件<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<p>列出。</p>
+<h2 id="3-architecture-guardrails">3. Architecture Guardrails<a class="headerlink" href="#3-architecture-guardrails" title="Permanent link">&para;</a></h2>
+<ul>
+<li>总条数；</li>
+<li>主要类别；</li>
+<li>是否发现正式文档冲突。</li>
+</ul>
+<h2 id="4-context-policy">4. Context Policy<a class="headerlink" href="#4-context-policy" title="Permanent link">&para;</a></h2>
+<p>说明以后普通 Task 默认读哪些内容。</p>
+<h2 id="5-agents">5. AGENTS 分层<a class="headerlink" href="#5-agents" title="Permanent link">&para;</a></h2>
+<p>给出最终结构。</p>
+<h2 id="6-phase-capsule">6. Phase Capsule<a class="headerlink" href="#6-phase-capsule" title="Permanent link">&para;</a></h2>
+<p>给出模板结构。</p>
+<h2 id="7-task-template">7. Task Template<a class="headerlink" href="#7-task-template" title="Permanent link">&para;</a></h2>
+<p>说明 Task 包含哪些字段。</p>
+<h2 id="8">8. 业务代码<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>明确：</p>
+<pre><code class="language-text">是否修改业务代码：YES / NO
+</code></pre>
+<p>如果 YES：</p>
+<p>必须解释原因。</p>
+<h2 id="9">9. 测试结果<a class="headerlink" href="#9" title="Permanent link">&para;</a></h2>
+<p>列出实际结果。</p>
+<h2 id="10-git-commit">10. Git Commit<a class="headerlink" href="#10-git-commit" title="Permanent link">&para;</a></h2>
+<p>返回 Commit Hash 和 Commit Message。</p>
+<h2 id="11-design-conflict">11. Design Conflict<a class="headerlink" href="#11-design-conflict" title="Permanent link">&para;</a></h2>
+<p>列出：</p>
+<pre><code class="language-text">NONE
+</code></pre>
+<p>或者具体冲突。</p>
+<h2 id="12-cross-machine-check">12. Cross-machine Check<a class="headerlink" href="#12-cross-machine-check" title="Permanent link">&para;</a></h2>
+<p>明确说明：</p>
+<p>在新电脑 clone Repository、没有旧 Codex Conversation 的情况下，新的 Codex 是否已经可以从仓库恢复开发规则和当前项目状态。</p>
+<h2 id="13">13. 下一步<a class="headerlink" href="#13" title="Permanent link">&para;</a></h2>
+<p>只说明：</p>
+<p>下一 Phase / Task 应该如何使用新机制。</p>
+<p>不要直接执行下一步。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

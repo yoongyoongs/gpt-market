@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="1d960c49f97a99d705775644573f01be297e1be849851e663e4ecc1b586912da"><title>最小必要上下文规范</title><style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
+@media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
+</style></head>
+<body><div class="layout"><aside class="toc" aria-label="文档目录"><h2>目录</h2><div class="toc">
+<ul>
+<li><a href="#1">1. 默认读取顺序</a></li>
+<li><a href="#2">2. 分层扩大上下文</a></li>
+<li><a href="#3-task">3. Task 启动门禁</a></li>
+<li><a href="#4-task">4. Task 执行与停止</a></li>
+<li><a href="#5-contract">5. Contract 与设计冲突</a></li>
+<li><a href="#6-contract-check-phase-gate">6. Contract Check 与 Phase Gate</a></li>
+<li><a href="#7">7. 文档更新范围</a></li>
+<li><a href="#8">8. 跨机器恢复标准</a></li>
+</ul>
+</div>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/development/CONTEXT_POLICY.md · 内容哈希：1d960c49f97a</div><h1 id="_1">最小必要上下文规范<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>适用于 Codex、Claude Code、Cursor、人工开发者及其他 Agent。</p>
+<p>目标是减少重复读取，同时保证实现不偏离 V3 Architecture Baseline。</p>
+</blockquote>
+<h2 id="1">1. 默认读取顺序<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>普通 Task 只先读取 Level 0：</p>
+<ol>
+<li>根 <code>AGENTS.md</code>；</li>
+<li>当前路径向上生效的局部 <code>AGENTS.md</code>；</li>
+<li><code>docs/ARCHITECTURE_GUARDRAILS.md</code>；</li>
+<li><code>docs/工作状态.md</code> 指向的当前 Phase Capsule：<code>SCOPE.md</code>、<code>CONTRACTS.md</code>、<code>ACCEPTANCE.md</code>、<code>STATUS.md</code>；</li>
+<li>当前 Task；</li>
+<li>Task 直接相关源代码和测试。</li>
+</ol>
+<p>不得默认全文读取 Baseline、需求、功能架构、技术架构、数据库设计、详细设计、全部历史 STATUS 或 <code>docs/archive/</code>。</p>
+<h2 id="2">2. 分层扩大上下文<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>允许读取</th>
+<th>触发条件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>导航、Guardrails、Phase Capsule、Task、直接代码/测试</td>
+<td>所有普通 Task</td>
+</tr>
+<tr>
+<td>1</td>
+<td>当前模块直接使用的 DTO、Domain Object、Protocol、Repository/API/Migration/配置契约</td>
+<td>Level 0 缺少接口事实</td>
+</tr>
+<tr>
+<td>2</td>
+<td>直接依赖的具体实现</td>
+<td>Contract 不能解释实际行为、测试失败或兼容问题</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Baseline 及大型正式设计的精确相关章节</td>
+<td>架构冲突、跨 Phase 语义、Contract/Schema 变更或 Phase Gate</td>
+</tr>
+</tbody>
+</table>
+<p>每次扩大范围都应有明确问题。不得递归探索无关模块，也不得为了节省 Token 猜字段、接口、数据库结构或历史语义。</p>
+<h2 id="3-task">3. Task 启动门禁<a class="headerlink" href="#3-task" title="Permanent link">&para;</a></h2>
+<p>开始前必须：</p>
+<ol>
+<li>检查 <code>git status --short --branch</code>、最近提交和远端；</li>
+<li>从 Phase <code>STATUS.md</code> 选择一个 TODO Task；</li>
+<li>使用 <code>TASK_TEMPLATE.md</code> 明确 Goal、Implements、READ/WRITE Scope、Dependencies、Acceptance、Tests 和 Forbidden Changes；</li>
+<li>核对 Guardrail ID、冻结 Contract 和回滚点；</li>
+<li>将 Task 标记为 <code>IN_PROGRESS</code> 后再修改代码。</li>
+</ol>
+<p>模糊请求如“继续 Phase 6”必须先收敛为一个有 Task ID 的目标，不能一次包办整个 Phase。</p>
+<h2 id="4-task">4. Task 执行与停止<a class="headerlink" href="#4-task" title="Permanent link">&para;</a></h2>
+<p>标准顺序：读取最小上下文 → 简短计划 → 实现当前 Task → 相关测试 → 最小回归 → 更新 Phase STATUS → 检查 Secret/无关改动 → 中文提交 → 推送 → 核对远端 → 停止。</p>
+<p>不阻塞当前 Task 的其他问题只记为 <code>FOLLOW_UP</code>。不得顺手修改其他模块，不得自动进入下一 Task。</p>
+<p>若 Token、时间或外部条件即将中断，停止扩大范围；在任务分支提交可恢复 WIP，并在 STATUS 写明失败、命令、关键文件和下一条动作。WIP 不得合并 <code>main</code> 或部署。</p>
+<h2 id="5-contract">5. Contract 与设计冲突<a class="headerlink" href="#5-contract" title="Permanent link">&para;</a></h2>
+<p>Phase <code>CONTRACTS.md</code> 中的跨模块接口默认冻结。无法满足正式需求时先报告：</p>
+<pre><code class="language-text">DESIGN_CHANGE_REQUIRED
+当前设计 / 问题 / 建议修改 / 影响模块与 Phase
+API / Database / Migration / V1-V2 Compatibility 影响
+是否需要修改 Baseline：YES | NO
+</code></pre>
+<p>下层文档与 Baseline 冲突时报告 <code>DESIGN_CONFLICT</code>，不得静默选择或自行重写架构。</p>
+<h2 id="6-contract-check-phase-gate">6. Contract Check 与 Phase Gate<a class="headerlink" href="#6-contract-check-phase-gate" title="Permanent link">&para;</a></h2>
+<p>每完成 3–5 个关联 Task，执行轻量 Contract Check：接口漂移、输入输出、重复模型、Phase 边界、Guardrails 和冻结 Contract。</p>
+<p>Phase 宣称完成前必须执行单独 Phase Architecture Conformance Review，允许读取 Level 3，并逐项核对 Baseline、Guardrails、SCOPE、CONTRACTS、ACCEPTANCE、STATUS、代码、Migration、API、测试和前后 Phase 接口。只有无未决 Blocker 且 Acceptance 全部有证据，才能标记 <code>DONE/ACCEPTED</code>。</p>
+<h2 id="7">7. 文档更新范围<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p>普通 Task 主要更新代码、测试、Phase STATUS 和必要局部文档。只有真实 Requirement、Architecture、Contract、Schema 或 Phase Boundary 变化才同步大型 Source of Truth。Phase Gate 统一检查全局文档是否需要更新。</p>
+<p>正式 Markdown 必须生成同名 HTML；Markdown 是唯一内容源。历史材料默认归档且不进入普通 Task 上下文。</p>
+<h2 id="8">8. 跨机器恢复标准<a class="headerlink" href="#8" title="Permanent link">&para;</a></h2>
+<p>新电脑只需 clone 仓库，即可从根 <code>AGENTS.md</code> 找到 Guardrails、Context Policy、当前 Phase Capsule、下一 Task、冻结接口和验收方式。任何必须依赖旧聊天、某台电脑或未提交文件才能恢复的项目知识都视为治理缺陷。</p></main></div><a class="backtop" href="#top">返回顶部</a></body></html>

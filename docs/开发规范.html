@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="1482040bcf05d9777eed04e3980e59fd959ebd5355091399ed94045122c462ad"><title>gpt-market 开发工作规范</title><style>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><meta name="source-sha256" content="96b6506d04ae6454cc243e7007e4a66981c1b746dbc8d7210e9820791ad76405"><title>gpt-market 开发工作规范</title><style>
 :root{--bg:#f5f7fb;--paper:#fff;--ink:#172033;--muted:#657087;--line:#dfe5ef;--brand:#3157d5;--soft:#eef2ff;--code:#152033;--shadow:0 12px 35px rgba(35,48,80,.09)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}.layout{max-width:1480px;margin:0 auto;padding:28px 24px 64px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px}.toc{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow:auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px 14px}.toc h2{font-size:16px;margin:0 8px 12px}.toc ul{padding-left:18px}.toc li{margin:4px 0}.toc a{color:#46536b;font-size:13px}.paper{min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:48px 56px}h1{margin:0 0 22px;font-size:34px;line-height:1.25}h2{scroll-margin-top:18px;margin:48px 0 18px;padding-top:10px;border-top:1px solid var(--line);font-size:24px;line-height:1.4}h3{margin:28px 0 10px;font-size:18px}p{margin:10px 0}blockquote{margin:18px 0;padding:14px 18px;border-left:4px solid var(--brand);background:var(--soft);color:#44506a;border-radius:0 9px 9px 0}ul,ol{padding-left:1.55em}li{margin:4px 0}code{font-family:"Cascadia Code",Consolas,monospace;font-size:.9em;background:#f0f3f8;border-radius:5px;padding:.12em .35em}pre{overflow:auto;background:var(--code);color:#e8edf7;border-radius:10px;padding:18px 20px;line-height:1.55}pre code{background:transparent;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;min-width:110px}th{background:#f2f5fa}.meta{color:var(--muted);font-size:13px;margin-bottom:20px}.backtop{position:fixed;right:22px;bottom:22px;border:1px solid var(--line);background:#fff;padding:8px 12px;border-radius:999px;box-shadow:var(--shadow)}
 @media(max-width:980px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:16px}.paper{padding:32px 26px}h1{font-size:28px}}@media(max-width:620px){body{font-size:14px}.layout{padding:8px}.paper{padding:25px 17px}.toc{display:none}h1{font-size:25px}h2{font-size:21px}.backtop{display:none}}@media print{body{background:#fff;font-size:11pt}.layout{display:block;max-width:none;padding:0}.toc,.backtop{display:none}.paper{border:0;box-shadow:none;padding:0}h2{break-after:avoid}pre,table,blockquote{break-inside:avoid}a{color:inherit}}
@@ -18,13 +18,17 @@
 <li><a href="#10">10. 回滚与交接</a></li>
 </ul>
 </div>
-</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/开发规范.md · 内容哈希：1482040bcf05</div><h1 id="gpt-market">gpt-market 开发工作规范<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
+</aside><main class="paper" id="top"><div class="meta">人类阅读版 · 来源：docs/开发规范.md · 内容哈希：96b6506d04ae</div><h1 id="gpt-market">gpt-market 开发工作规范<a class="headerlink" href="#gpt-market" title="Permanent link">&para;</a></h1>
 <blockquote>
 <p>本规范用于防止换电脑、换模型、上下文压缩或 Token 额度中断造成工作丢失。所有参与者（用户、Codex、其他模型和人工开发者）均应遵守。</p>
 </blockquote>
 <h2 id="1">1. 文档职责<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>README.md</code>：项目入口、当前能力和接手阅读顺序；</li>
+<li><code>AGENTS.md</code>：跨 Agent 的日常开发导航和最高级执行规则；</li>
+<li><code>docs/ARCHITECTURE_GUARDRAILS.md</code>：从 Baseline 提炼的长期架构红线；</li>
+<li><code>docs/development/CONTEXT_POLICY.md</code>：最小必要上下文和逐级扩大规则；</li>
+<li><code>docs/phases/&lt;phase&gt;/</code>：当前 Phase 的 Scope、冻结 Contract、Acceptance 和 Task Status；</li>
 <li><code>docs/架构设计实施稿.md</code>：V3 唯一架构基线，回答“要建设什么、边界是什么”；</li>
 <li><code>docs/开发规范.md</code>：固定协作规则，回答“每一步应该怎样做”；</li>
 <li><code>docs/工作状态.md</code>：唯一实时进度入口，回答“已经做了什么、正在做什么、下一步是什么”；</li>
@@ -33,16 +37,8 @@
 </ul>
 <p>架构基线、工作状态和代码发生冲突时，不允许静默选择。先在工作状态中记录冲突，再由用户确认以代码现状、架构基线或新决策中的哪一个为准。</p>
 <h2 id="2">2. 换电脑或换模型的接手顺序<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
-<p>新环境开始工作前必须依次阅读：</p>
-<ol>
-<li>根目录 <code>README.md</code>；</li>
-<li><code>docs/架构设计实施稿.md</code>；</li>
-<li><code>docs/开发规范.md</code>；</li>
-<li><code>docs/工作状态.md</code>；</li>
-<li>与“下一步”直接相关的代码、测试和当前参考文档；</li>
-<li>查看 <code>git status</code>、当前分支、最近提交和远端同步状态。</li>
-</ol>
-<p>默认不读取 <code>docs/archive/</code>。只有需要追溯 V1/V2 设计原因、历史验收证据或 V3 Review 原文时，才按 <code>docs/README.md</code> 的索引定向读取。</p>
+<p>新环境按 <code>AGENTS.md</code> 导航依次读取 Guardrails、Context Policy、工作状态、当前 Phase Capsule、当前 Task和直接相关代码/测试，然后查看 Git 状态与远端。普通 Task 不再默认全文读取大型 Baseline 配套文档；信息不足时按 Context Policy 从 Level 0 精确扩大到 Level 1–3。</p>
+<p>默认不读取 <code>docs/archive/</code>。只有需要追溯 V1/V2 设计原因、历史验收证据或治理输入原文时，才按 <code>docs/README.md</code> 定向读取。</p>
 <h2 id="3">3. 开始任务前<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
 <p>每个任务开始前执行并记录：</p>
 <pre><code class="language-bash">git status --short --branch
@@ -54,7 +50,7 @@ git remote -v
 <li>核对 <code>docs/工作状态.md</code> 中的当前阶段、下一步和阻塞项；</li>
 <li>明确本次允许修改的范围和明确禁止项；</li>
 <li>检查工作区已有改动，禁止覆盖或误提交他人的文件；</li>
-<li>将本次任务写入“进行中”，再开始实现；</li>
+<li>使用 <code>docs/development/TASK_TEMPLATE.md</code> 明确 Task ID、READ/WRITE Scope、禁止项和验收，并写入当前 Phase <code>STATUS.md</code>；</li>
 <li>功能开发优先使用 <code>codex/&lt;phase&gt;-&lt;feature&gt;</code> 分支；纯文档和用户明确允许的极小修订可以直接在主分支完成。</li>
 </ol>
 <h2 id="4-git">4. 小步开发与 Git 检查点<a class="headerlink" href="#4-git" title="Permanent link">&para;</a></h2>
@@ -69,12 +65,12 @@ git remote -v
 <p>每完成一步，必须按以下顺序操作：</p>
 <ol>
 <li>运行与改动风险相匹配的测试或检查；</li>
-<li>更新 <code>docs/工作状态.md</code>：完成内容、验证结果、剩余事项、已知问题；</li>
+<li>更新当前 Phase <code>STATUS.md</code>；只有项目级里程碑、Phase 或部署状态变化才更新 <code>docs/工作状态.md</code>；</li>
 <li>检查 <code>git diff</code>，确认没有 Secret、运行数据或无关改动；</li>
 <li>使用中文提交说明提交；</li>
 <li>立即推送到 GitHub；</li>
 <li>核对本地 HEAD 与远端分支一致；</li>
-<li>再开始下一步。</li>
+<li>停止，不自动开始下一 Task。</li>
 </ol>
 <p>推荐提交格式：</p>
 <pre><code class="language-text">阶段：动作和结果

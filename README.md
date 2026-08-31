@@ -6,19 +6,17 @@ V3 按 [架构设计实施稿](docs/架构设计实施稿.md) 分阶段建设。
 
 ## 接手开发必读
 
-换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。必须按顺序阅读：
+换电脑、换模型或新会话时，不要依赖聊天记录恢复上下文。普通 Task 按最小必要上下文读取：
 
-1. 本 README；
-2. [当前工作状态](docs/工作状态.md)；
-3. [V3 需求规格说明](docs/需求规格说明.md)、[需求追踪矩阵](docs/需求追踪矩阵.md)与[系统功能架构](docs/系统功能架构.md)；
-4. [技术架构](docs/技术架构设计.md)、[数据库设计](docs/数据库设计.md)和[详细设计](docs/详细设计.md)；
-5. [V3 架构设计实施稿](docs/架构设计实施稿.md)与[功能清单](docs/功能清单与开发状态.md)；
-6. [开发工作规范](docs/开发规范.md)；
-7. 当前任务相关代码和测试。
+1. 根 [AGENTS.md](AGENTS.md) 及当前路径生效的局部 `AGENTS.md`；
+2. [Architecture Guardrails](docs/ARCHITECTURE_GUARDRAILS.md)；
+3. [Context Policy](docs/development/CONTEXT_POLICY.md)；
+4. [当前工作状态](docs/工作状态.md)指向的 Phase Capsule；
+5. 当前 Task、直接相关代码和测试。
 
-然后检查 `git status --short --branch`、最近提交和远端同步状态。默认无需阅读 V1/V2 历史过程文档；需要追溯时再通过 [文档索引](docs/README.md) 定向查看。
+然后检查 `git status --short --branch`、最近提交和远端同步状态。只有 Contract 不足、架构冲突或 Phase Gate 时才精确读取大型 Baseline 配套文档；默认不全文扫描仓库或读取历史归档。
 
-开发必须遵循“小步可验证”：每完成一个独立步骤，就更新工作状态、运行测试、使用中文提交说明提交并立即推送 GitHub。若 Token、时间或外部条件即将中断，必须在任务分支创建可恢复检查点并写清下一步，禁止只把进度留在对话中。
+开发必须遵循“小步可验证”：使用 [Task 模板](docs/development/TASK_TEMPLATE.md)明确范围，每完成一个独立 Task 就更新 Phase STATUS、运行测试、使用中文提交说明提交并立即推送 GitHub，然后停止，不自动进入下一 Task。
 
 ## 文档导航
 

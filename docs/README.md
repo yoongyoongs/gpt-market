@@ -2,22 +2,25 @@
 
 ## 接手必读
 
-按以下顺序阅读：
+按以下顺序读取最小上下文：
 
-1. [项目 README](../README.md)
-2. [当前工作状态](工作状态.md)
-3. [V3 需求规格说明](需求规格说明.md)
-4. [P0/P1 需求追踪矩阵](需求追踪矩阵.md)
-5. [V3 系统功能架构](系统功能架构.md)
-6. [V3 技术架构设计](技术架构设计.md)
-7. [V3 数据库设计](数据库设计.md)
-8. [V3 详细设计](详细设计.md)
-9. [V3 架构设计实施稿](架构设计实施稿.md)
-10. [功能清单与开发状态](功能清单与开发状态.md)
-11. [开发工作规范](开发规范.md)
-12. 当前任务相关代码与测试
+1. [根 AGENTS](../AGENTS.md)及当前路径的局部 `AGENTS.md`；
+2. [Architecture Guardrails](ARCHITECTURE_GUARDRAILS.md)；
+3. [最小必要上下文规范](development/CONTEXT_POLICY.md)；
+4. [当前工作状态](工作状态.md)指向的 Phase Capsule；
+5. 当前 Task、直接相关代码和测试。
 
-换电脑、换模型或新会话时，以这套 Baseline 文档和当前代码恢复上下文。归档材料不是必读项；数据库/详细设计可以在进入相应 Phase 时重点阅读，但不得绕过需求和功能架构。
+[V3 架构设计实施稿](架构设计实施稿.md)仍是最高 Source of Truth，但普通 Task 不再默认全文读取。需求、功能架构、技术架构、数据库和详细设计只在 Context Policy 的 Level 3 或 Phase Gate 中精确使用。
+
+## 开发治理与 Phase Capsule
+
+- [开发工作规范](开发规范.md)
+- [Task 模板](development/TASK_TEMPLATE.md)
+- [Phase Capsule 模板](phases/_template/SCOPE.md)
+- [当前 Phase 6 Scope](phases/phase6/SCOPE.md)
+- [Phase 6 Contracts](phases/phase6/CONTRACTS.md)
+- [Phase 6 Acceptance](phases/phase6/ACCEPTANCE.md)
+- [Phase 6 Status](phases/phase6/STATUS.md)
 
 ## 当前参考文档
 
@@ -55,12 +58,12 @@ HTML 由 Markdown 自动生成，Markdown 是内容源；禁止只手工修改 H
 
 ### `archive/v3-design-inputs/`
 
-保存 V3 蓝图、两轮 GPT 指导意见和最终文档审查原文。它们用于审计 Baseline 1.0 的形成过程，不是独立实施依据。若其内容与架构实施稿冲突，以架构实施稿为准。
+保存 V3 蓝图、两轮 GPT 指导意见、最终文档审查和开发上下文治理输入原文。它们用于审计 Baseline 1.0 与治理规则的形成过程，不是独立实施依据。若其内容与架构实施稿冲突，以架构实施稿为准。
 
 ## 文档维护规则
 
 - 当前架构只有 `架构设计实施稿.md` 是有效 Baseline；
-- 当前进度只更新 `工作状态.md`，不要复制日期版状态文件；
-- 每完成一个开发步骤，必须同步状态、中文提交并推送 GitHub；
+- 项目级当前进度更新 `工作状态.md`；普通 Task 细节只更新当前 Phase `STATUS.md`；
+- 每完成一个开发 Task，必须同步 Phase STATUS、中文提交并推送 GitHub，然后停止；
 - 历史文档只移动归档，不随意删除；
 - 探针和验收 JSON 是历史样例，不能作为当前行情或投资事实。
