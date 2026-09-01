@@ -118,7 +118,10 @@ class BuildDailyBarRevisionsService:
         raw_by_time = {bar.bar_time: bar for bar in raw_formal}
         pairs = [(bar, raw_by_time.get(bar.bar_time)) for bar in qfq_formal]
         complete_pairs = [(adjusted, source) for adjusted, source in pairs if source is not None]
-        factors_complete = len(complete_pairs) == len(qfq_formal) and bool(qfq_formal)
+        factors_complete = (
+            len(complete_pairs) == len(qfq_formal) == len(raw_formal)
+            and bool(qfq_formal)
+        )
         known_at = max(self._clock(), raw.fetch_time, qfq.fetch_time)
         factor_revision = None
         if complete_pairs:

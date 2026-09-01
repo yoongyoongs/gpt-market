@@ -114,6 +114,30 @@ async def test_hfq_normalizes_non_integer_factor_before_hashing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unaligned_raw_date_is_limited_without_hfq_key_error() -> None:
+    class UnalignedProvider(FakeProvider):
+        async def fetch(self, code, period, adjust_type, limit):
+            fetched = await super().fetch(code, period, adjust_type, limit)
+            if adjust_type is AdjustType.RAW:
+                extra = fetched.bars[0].model_copy(
+                    update={"bar_time": fetched.bars[0].bar_time - timedelta(days=1)}
+                )
+                return fetched.model_copy(update={"bars": (extra, *fetched.bars)})
+            return fetched
+
+    bundle = await BuildDailyBarRevisionsService(
+        [UnalignedProvider("fixture")], clock=lambda: NOW
+    ).execute(uuid4(), "600000")
+
+    assert bundle.raw_revision is not None
+    assert bundle.factor_revision is not None
+    assert bundle.adjusted_revision.factor_revision_id is None
+    assert bundle.adjusted_revision.point_in_time_precision is PointInTimePrecision.LIMITED
+    assert bundle.adjusted_revision.precision_reason == "raw/qfq dates did not align completely"
+    assert bundle.hfq_revision is None
+
+
+@pytest.mark.asyncio
 async def test_raw_failure_prefers_later_paired_provider() -> None:
     first = FakeProvider("first", raw_error=RuntimeError("raw unavailable"))
     second = FakeProvider("second")
