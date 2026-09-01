@@ -1,7 +1,23 @@
+from datetime import datetime, timezone
+from decimal import Decimal
+
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app.v3.security import V3AuthMiddleware, V3AuthPolicy
+from app.v3.domain.ai_import import AIResultConfirmCommand
+from app.v3.domain.portfolio import (
+    AdjustmentConfirmation,
+    AdjustmentType,
+    PortfolioAdjustmentCreate,
+)
+from app.v3.domain.strategy import ActorType, StrategyProposalCreate
+from app.v3.security import (
+    V3AuthMiddleware,
+    V3AuthPolicy,
+    V3Principal,
+    V3Scope,
+    bind_v3_principal,
+)
 
 
 def _client(*, public_market_read: bool = True) -> TestClient:
@@ -87,3 +103,68 @@ def test_strategy_admin_token_can_enter_business_gate() -> None:
         )
     assert response.status_code == 200
     assert response.json() == {"principal_id": "admin-1"}
+
+
+def test_confirmed_by_is_overwritten_by_authenticated_principal() -> None:
+    command = AIResultConfirmCommand(
+        preview_revision=1,
+        bundle_hash="a" * 64,
+        idempotency_key="idempotency-key-1",
+        confirmed_by="forged-user",
+    )
+    principal = V3Principal(
+        principal_id="operator-1",
+        principal_type="HUMAN",
+        scopes=frozenset({V3Scope.V3_WRITE}),
+        request_id="request-1",
+    )
+    bound = bind_v3_principal(command, principal)
+    assert bound.confirmed_by == "operator-1"
+    assert command.confirmed_by == "forged-user"
+
+
+def test_actor_identity_is_overwritten_by_authenticated_principal() -> None:
+    command = StrategyProposalCreate(
+        proposed_strategy_version_id="11111111-1111-1111-1111-111111111111",
+        actor_type=ActorType.AI,
+        actor_id="forged-agent",
+        source_result_id="22222222-2222-2222-2222-222222222222",
+        hypothesis="test",
+        expected_improvements={"recall": "better"},
+        risks=("known",),
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    principal = V3Principal(
+        principal_id="operator-1",
+        principal_type="HUMAN",
+        scopes=frozenset({V3Scope.V3_WRITE}),
+        request_id="request-1",
+    )
+    bound = bind_v3_principal(command, principal)
+    assert bound.actor_type is ActorType.HUMAN
+    assert bound.actor_id == "operator-1"
+    assert command.actor_type is ActorType.AI
+    assert command.actor_id == "forged-agent"
+
+
+def test_pending_adjustment_stays_unconfirmed_but_confirmed_one_gets_principal() -> None:
+    principal = V3Principal(
+        principal_id="operator-1",
+        principal_type="HUMAN",
+        scopes=frozenset({V3Scope.V3_WRITE}),
+        request_id="request-1",
+    )
+    common = {
+        "account_id": "11111111-1111-1111-1111-111111111111",
+        "security_id": "22222222-2222-2222-2222-222222222222",
+        "adjustment_type": AdjustmentType.CASH_DIVIDEND,
+        "effective_time": datetime(2026, 9, 1, tzinfo=timezone.utc),
+        "cash_delta": Decimal("10"),
+        "known_at": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    }
+    pending = PortfolioAdjustmentCreate(**common)
+    confirmed = PortfolioAdjustmentCreate(
+        **common, confirmation_status=AdjustmentConfirmation.CONFIRMED
+    )
+    assert bind_v3_principal(pending, principal).confirmed_by is None
+    assert bind_v3_principal(confirmed, principal).confirmed_by == "operator-1"

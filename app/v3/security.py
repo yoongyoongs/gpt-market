@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum
+from typing import Any
 from uuid import uuid4
 
 from fastapi.responses import JSONResponse
@@ -21,6 +22,28 @@ class V3Principal:
     principal_type: str
     scopes: frozenset[V3Scope]
     request_id: str
+
+
+def bind_v3_principal(command: Any, principal: V3Principal):
+    """Replace caller-declared identity fields with the authenticated principal."""
+    model_fields = getattr(type(command), "model_fields", {})
+    updates: dict[str, Any] = {}
+    if "actor_id" in model_fields:
+        updates["actor_id"] = principal.principal_id
+    if "actor_type" in model_fields:
+        current = getattr(command, "actor_type")
+        updates["actor_type"] = (
+            type(current)(principal.principal_type)
+            if isinstance(current, Enum)
+            else principal.principal_type
+        )
+    if "confirmed_by" in model_fields:
+        confirmed_by = getattr(command, "confirmed_by")
+        confirmation_status = getattr(command, "confirmation_status", None)
+        status_value = getattr(confirmation_status, "value", confirmation_status)
+        if confirmed_by is not None or status_value == "CONFIRMED":
+            updates["confirmed_by"] = principal.principal_id
+    return command.model_copy(update=updates) if updates else command
 
 
 @dataclass(frozen=True, slots=True)

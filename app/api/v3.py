@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.container import container
 from app.v3.application.build_candidate_comparison import (
@@ -73,6 +73,7 @@ from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
 )
+from app.v3.security import V3Principal, bind_v3_principal
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
 
@@ -81,6 +82,13 @@ def _uow():
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
     return container.v3.uow()
+
+
+def _bind_principal(command, request: Request):
+    principal = getattr(request.state, "v3_principal", None)
+    if not isinstance(principal, V3Principal):
+        raise HTTPException(status_code=401, detail="authenticated V3 principal is required")
+    return bind_v3_principal(command, principal)
 
 
 async def _feature_query(
@@ -401,7 +409,10 @@ async def preview_ai_result_import(bundle: AIResultBundle):
 
 
 @router.post("/ai-results/imports/{import_id}/confirm")
-async def confirm_ai_result_import(import_id: UUID, command: AIResultConfirmCommand):
+async def confirm_ai_result_import(
+    import_id: UUID, command: AIResultConfirmCommand, request: Request,
+):
+    command = _bind_principal(command, request)
     try:
         return await ConfirmAIResultImportService(_uow).execute(import_id, command)
     except RepositoryNotFoundError as exc:
@@ -432,7 +443,10 @@ async def import_portfolio_image(command: ImageDraftImport):
 
 
 @router.post("/portfolio/trade-drafts/{draft_id}/confirm")
-async def confirm_portfolio_trade(draft_id: UUID, command: TradeConfirm):
+async def confirm_portfolio_trade(
+    draft_id: UUID, command: TradeConfirm, request: Request,
+):
+    command = _bind_principal(command, request)
     try:
         return await PortfolioWriteService(_uow).confirm_trade(draft_id, command)
     except RepositoryNotFoundError as exc:
@@ -442,12 +456,16 @@ async def confirm_portfolio_trade(draft_id: UUID, command: TradeConfirm):
 
 
 @router.post("/portfolio/opening-positions")
-async def create_opening_position(command: OpeningPositionCreate):
+async def create_opening_position(command: OpeningPositionCreate, request: Request):
+    command = _bind_principal(command, request)
     return await PortfolioWriteService(_uow).add_opening(command)
 
 
 @router.post("/portfolio/position-drafts/{draft_id}/confirm")
-async def confirm_position_snapshot_draft(draft_id: UUID, command: DraftConfirmation):
+async def confirm_position_snapshot_draft(
+    draft_id: UUID, command: DraftConfirmation, request: Request,
+):
+    command = _bind_principal(command, request)
     try:
         return await PortfolioWriteService(_uow).confirm_position_draft(draft_id, command)
     except RepositoryNotFoundError as exc:
@@ -457,12 +475,16 @@ async def confirm_position_snapshot_draft(draft_id: UUID, command: DraftConfirma
 
 
 @router.post("/portfolio/adjustments")
-async def create_portfolio_adjustment(command: PortfolioAdjustmentCreate):
+async def create_portfolio_adjustment(
+    command: PortfolioAdjustmentCreate, request: Request,
+):
+    command = _bind_principal(command, request)
     return await PortfolioWriteService(_uow).add_adjustment(command)
 
 
 @router.post("/portfolio/trade-corrections")
-async def create_trade_correction(command: TradeCorrectionCreate):
+async def create_trade_correction(command: TradeCorrectionCreate, request: Request):
+    command = _bind_principal(command, request)
     try:
         return await PortfolioWriteService(_uow).add_trade_correction(command)
     except RepositoryNotFoundError as exc:
@@ -470,7 +492,8 @@ async def create_trade_correction(command: TradeCorrectionCreate):
 
 
 @router.post("/portfolio/reconciliations")
-async def create_reconciliation(command: ReconciliationCreate):
+async def create_reconciliation(command: ReconciliationCreate, request: Request):
+    command = _bind_principal(command, request)
     return await PortfolioWriteService(_uow).add_reconciliation(command)
 
 
@@ -593,8 +616,9 @@ async def read_watchlist(
 
 @router.post("/watchlist/{security_id}/transitions")
 async def transition_watchlist(
-    security_id: UUID, command: WatchlistTransitionCommand,
+    security_id: UUID, command: WatchlistTransitionCommand, request: Request,
 ):
+    command = _bind_principal(command, request)
     try:
         return await DecisionStateService(_uow).transition_watchlist(
             security_id, command
@@ -634,7 +658,8 @@ async def read_strategy_catalog(limit: int = Query(default=50, ge=1, le=200)):
 
 
 @router.post("/strategies/proposals")
-async def create_strategy_proposal(command: StrategyProposalCreate):
+async def create_strategy_proposal(command: StrategyProposalCreate, request: Request):
+    command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).add_proposal(command)
     except RepositoryNotFoundError as exc:
@@ -661,8 +686,9 @@ async def create_strategy_experiment(command: StrategyExperimentCreate):
 
 @router.post("/strategies/experiments/{experiment_id}/events")
 async def strategy_experiment_event(
-    experiment_id: UUID, command: ExperimentEventCommand,
+    experiment_id: UUID, command: ExperimentEventCommand, request: Request,
 ):
+    command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).experiment_event(
             experiment_id, command
@@ -715,8 +741,9 @@ async def create_capacity_evaluation(command: CapacityEvaluationCreate):
 
 @router.post("/strategies/releases/{environment}/activate")
 async def activate_strategy(
-    environment: str, command: StrategyActivationCommand,
+    environment: str, command: StrategyActivationCommand, request: Request,
 ):
+    command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).activate(
             environment, command
@@ -729,8 +756,9 @@ async def activate_strategy(
 
 @router.post("/strategies/releases/{environment}/rollback")
 async def rollback_strategy(
-    environment: str, command: StrategyRollbackCommand,
+    environment: str, command: StrategyRollbackCommand, request: Request,
 ):
+    command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).rollback(
             environment, command
