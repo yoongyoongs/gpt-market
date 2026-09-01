@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -57,6 +59,7 @@ class ContextBuildSource(V3Contract):
     code: str | None = Field(default=None, max_length=16)
     name: str | None = Field(default=None, max_length=128)
     feature: PublishedSecurityFeatureView | None = None
+    portfolio: ContextPortfolioSummary | None = None
 
 
 class ContextLevel(StrEnum):
@@ -74,6 +77,32 @@ class EvidenceSelectionSide(StrEnum):
 class ContextSubjectType(StrEnum):
     SECURITY = "SECURITY"
     MARKET = "MARKET"
+    # RC-05（CTX-002）：持仓主体，subject_id = "{account_id}:{market}:{code}"
+    POSITION = "POSITION"
+
+
+class ContextPortfolioSummary(V3Contract):
+    """Context 内嵌的持仓事实（RC-05 / CTX-002）。
+
+    来自 Position Projection（Ledger 重放产物），只含已确认事实；
+    成本法当前固定为 WEIGHTED_AVERAGE（POR-003，其它成本法未版本化前不放开）。
+    """
+
+    account_id: UUID
+    quantity: Decimal
+    cost_method: Literal["WEIGHTED_AVERAGE"] = "WEIGHTED_AVERAGE"
+    cost_basis: Decimal
+    average_cost: Decimal
+    realized_pnl: Decimal
+    cash_impact: Decimal
+    projection_version: int = Field(ge=1)
+    input_hash: str = Field(min_length=64, max_length=64)
+    rebuilt_at: datetime
+
+    @field_validator("rebuilt_at")
+    @classmethod
+    def _require_aware(cls, value: datetime) -> datetime:
+        return require_aware(value, "rebuilt_at")
 
 
 class CandidateComparisonMember(V3Contract):

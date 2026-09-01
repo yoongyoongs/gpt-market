@@ -169,7 +169,10 @@ class BuildContextPackService:
             missing_fields.append("recall_run")
         if not ranked:
             missing_fields.append("evidence")
-        if command.subject_type is ContextSubjectType.SECURITY:
+        if (
+            command.subject_type is ContextSubjectType.POSITION
+            and source.portfolio is None
+        ):
             missing_fields.append("portfolio_context")
         coverage_values = [source.feature_run.coverage]
         if source.feature is not None:
@@ -181,7 +184,9 @@ class BuildContextPackService:
             subject_type=command.subject_type,
             subject_id=(
                 f"{source.market}:{source.code}"
-                if source.code is not None
+                # POSITION 主体需保留账户维度，subject_id 维持 account:market:code
+                if command.subject_type is ContextSubjectType.SECURITY
+                and source.code is not None
                 else command.subject_id
             ),
             task_profile_id=command.task_profile_id,
@@ -285,7 +290,14 @@ class BuildContextPackService:
                 "content_hash": comparison.content_hash,
                 "candidate_set_id": str(comparison.candidate_set_id),
             },
-            "portfolio": {"status": "UNKNOWN", "reason": "not_available_in_phase6"},
+            "portfolio": (
+                {"status": "AVAILABLE", **source.portfolio.model_dump(mode="json")}
+                if source.portfolio is not None
+                else {
+                    "status": "NOT_APPLICABLE",
+                    "reason": "SECURITY_SUBJECT_HAS_NO_ACCOUNT_BINDING",
+                }
+            ),
         }
 
     @staticmethod

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -10,7 +12,12 @@ from app.v3.application.build_context_pack import (
     BuildContextPackService,
 )
 from app.v3.contracts.evidence import EvidenceType
-from app.v3.domain.context import ContextBuildSource, ContextLevel, ContextSubjectType
+from app.v3.domain.context import (
+    ContextBuildSource,
+    ContextLevel,
+    ContextPortfolioSummary,
+    ContextSubjectType,
+)
 from app.v3.domain.evidence import (
     DecayModel,
     EvidenceMatchType,
@@ -154,3 +161,57 @@ async def test_context_levels_enforce_budget_selection_and_untrusted_boundary(le
         range(1, len(pack.evidence_selections) + 1)
     )
     assert pack.content_hash == pack.computed_content_hash()
+
+
+def _portfolio_source():
+    source = _source()
+    portfolio = ContextPortfolioSummary(
+        account_id=uuid4(), quantity=Decimal("1000"),
+        cost_method="WEIGHTED_AVERAGE", cost_basis=Decimal("12500"),
+        average_cost=Decimal("12.5"), realized_pnl=Decimal("300"),
+        cash_impact=Decimal("-12500"), projection_version=2,
+        input_hash="a" * 64, rebuilt_at=NOW - timedelta(minutes=1),
+    )
+    return ContextBuildSource(
+        **source.model_dump(exclude={"portfolio"}), portfolio=portfolio,
+    )
+
+
+def test_security_subject_portfolio_is_not_applicable_without_account():
+    source = _source()
+    contexts = _ContextRepository(source)
+    service = BuildContextPackService(
+        lambda: _Uow(contexts, _EvidenceRepository(())), clock=lambda: NOW
+    )
+    pack = asyncio.run(service.execute(BuildContextPackCommand(
+        context_level=ContextLevel.FAST, subject_type=ContextSubjectType.SECURITY,
+        subject_id="SH:600000", task_profile_id=uuid4(), task_profile_version=1,
+        as_of=NOW,
+    )))
+    assert pack.payload["portfolio"] == {
+        "status": "NOT_APPLICABLE",
+        "reason": "SECURITY_SUBJECT_HAS_NO_ACCOUNT_BINDING",
+    }
+    assert "portfolio_context" not in pack.missing_fields
+
+
+def test_position_subject_backfills_real_portfolio_and_keeps_subject_id():
+    source = _portfolio_source()
+    contexts = _ContextRepository(source)
+    service = BuildContextPackService(
+        lambda: _Uow(contexts, _EvidenceRepository(())), clock=lambda: NOW
+    )
+    command = BuildContextPackCommand(
+        context_level=ContextLevel.FAST, subject_type=ContextSubjectType.POSITION,
+        subject_id=f"{source.portfolio.account_id}:SH:600000",
+        task_profile_id=uuid4(), task_profile_version=1, as_of=NOW,
+    )
+    pack = asyncio.run(service.execute(command))
+    portfolio = pack.payload["portfolio"]
+    assert portfolio["status"] == "AVAILABLE"
+    assert portfolio["quantity"] == "1000"
+    assert portfolio["cost_method"] == "WEIGHTED_AVERAGE"
+    assert portfolio["average_cost"] == "12.5"
+    assert portfolio["realized_pnl"] == "300"
+    assert pack.subject_id == command.subject_id
+    assert "portfolio_context" not in pack.missing_fields

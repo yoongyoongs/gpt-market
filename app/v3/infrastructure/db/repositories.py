@@ -22,6 +22,7 @@ from app.v3.domain.context import (
     ContextEvidenceSelection,
     ContextLevel,
     ContextPack,
+    ContextPortfolioSummary,
     ContextSubjectType,
 )
 from app.v3.domain.evidence import (
@@ -99,6 +100,7 @@ from app.v3.domain.task import (
     TaskRunStatus,
 )
 from app.v3.infrastructure.db.models import (
+    PositionProjectionModel,
     AdjustmentFactorModel,
     AdjustmentFactorRevisionModel,
     AgentTaskModel,
@@ -2653,11 +2655,22 @@ class SQLAlchemyContextPackRepository:
         }
         if subject_type == ContextSubjectType.MARKET.value:
             return ContextBuildSource(**common)
-        if subject_type != ContextSubjectType.SECURITY.value:
+        if subject_type not in {
+            ContextSubjectType.SECURITY.value,
+            ContextSubjectType.POSITION.value,
+        }:
             raise ValueError("unsupported context subject_type")
-        market, code = SQLAlchemyCandidateComparisonRepository._parse_candidate_code(
-            subject_id
-        )
+        if subject_type == ContextSubjectType.POSITION.value:
+            # POSITION subject_id = "{account_id}:{market}:{code}"
+            account_part, market, code = subject_id.split(":")
+            try:
+                account_id = UUID(account_part)
+            except ValueError as exc:
+                raise ValueError("position subject_id requires an account UUID") from exc
+        else:
+            market, code = SQLAlchemyCandidateComparisonRepository._parse_candidate_code(
+                subject_id
+            )
         rows = (
             await self._session.execute(
                 select(SecurityModel, SecurityFeatureModel)
@@ -2677,12 +2690,34 @@ class SQLAlchemyContextPackRepository:
         if len(rows) != 1:
             raise ValueError("security code is ambiguous; use MARKET:CODE")
         security, feature = rows[0]
+        portfolio = None
+        if subject_type == ContextSubjectType.POSITION.value:
+            row = await self._session.get(
+                PositionProjectionModel, (account_id, security.security_id)
+            )
+            if row is None:
+                raise RepositoryNotFoundError(
+                    "position projection is unavailable for context"
+                )
+            portfolio = ContextPortfolioSummary(
+                account_id=account_id,
+                quantity=row.quantity,
+                cost_method="WEIGHTED_AVERAGE",
+                cost_basis=row.cost_basis,
+                average_cost=row.average_cost,
+                realized_pnl=row.realized_pnl,
+                cash_impact=row.cash_impact,
+                projection_version=row.projection_version,
+                input_hash=row.input_hash,
+                rebuilt_at=row.rebuilt_at,
+            )
         return ContextBuildSource(
             **common,
             market=security.market,
             code=security.code,
             name=security.name,
             feature=SQLAlchemyCandidateComparisonRepository._comparison_feature(feature),
+            portfolio=portfolio,
         )
 
     async def _validate_references(self, pack: ContextPack) -> None:
