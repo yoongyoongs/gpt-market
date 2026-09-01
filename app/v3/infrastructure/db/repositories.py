@@ -1421,6 +1421,37 @@ class SQLAlchemyFeatureRepository:
         self._session.add(MarketRegimeSnapshotModel(**regime_payload))
         return True
 
+    async def latest_security_feature(
+        self, security_id: UUID, *, as_of: datetime
+    ) -> PublishedSecurityFeatureView | None:
+        """最新已发布 Feature Run 中该证券的特征视图（RC-05B）。"""
+        run = await self._session.scalar(
+            select(FeatureRunModel)
+            .where(
+                FeatureRunModel.status == FeatureRunStatus.PUBLISHED.value,
+                FeatureRunModel.as_of <= as_of,
+                FeatureRunModel.completed_at.is_not(None),
+                FeatureRunModel.completed_at <= as_of,
+            )
+            .order_by(
+                FeatureRunModel.as_of.desc(),
+                FeatureRunModel.completed_at.desc(),
+                FeatureRunModel.feature_run_id.desc(),
+            )
+            .limit(1)
+        )
+        if run is None:
+            return None
+        model = await self._session.scalar(
+            select(SecurityFeatureModel).where(
+                SecurityFeatureModel.feature_run_id == run.feature_run_id,
+                SecurityFeatureModel.security_id == security_id,
+            )
+        )
+        if model is None:
+            return None
+        return SQLAlchemyCandidateComparisonRepository._comparison_feature(model)
+
     async def query(self, query: FeatureQuery) -> FeaturePage | None:
         run_statement = select(FeatureRunModel).where(FeatureRunModel.status == "PUBLISHED")
         if query.feature_run_id is not None:
