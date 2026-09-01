@@ -139,6 +139,11 @@ V3_TEST_DATABASE_URL='postgresql+asyncpg://用户:密码@127.0.0.1:5432/gpt_mark
 | `MAX_KLINE_CONCURRENCY` | 8 | 所有 Provider 合计的 K 线网络并发上限 |
 | `KLINE_CACHE_PATH` | `data/kline_cache.sqlite3` | 日 K 线 SQLite 持久化路径 |
 | `SCAN_HISTORY_PATH` | `data/scan_history` | V1/V2 扫描 JSONL 历史快照目录，Docker 默认为 `/data/scan_history` |
+| `V3_API_TOKEN` | 回退 `MCP_TOKEN` | V3 Portfolio READ 与普通 WRITE Bearer；生产建议使用独立随机密钥 |
+| `V3_API_PRINCIPAL_ID` | `v3-operator` | 普通 V3 Token 对应的服务端身份，不信任请求体自报身份 |
+| `V3_PUBLIC_MARKET_READ` | `true` | 是否允许公开读取 V3 市场事实；关闭后需要 `MARKET_READ` Scope |
+| `V3_STRATEGY_ADMIN_TOKEN` | 空 | Strategy Activate/Rollback 独立管理员 Bearer；不回退普通 V3 Token |
+| `V3_STRATEGY_ADMIN_PRINCIPAL_ID` | `v3-strategy-admin` | Strategy Admin 服务端身份 |
 | `KLINE_REFRESH_TRADING_SECONDS` | 300 | 交易时段正式历史 K 刷新间隔 |
 | `KLINE_REFRESH_CLOSED_SECONDS` | 1800 | 非交易时段正式历史 K 刷新间隔 |
 

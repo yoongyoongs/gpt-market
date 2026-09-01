@@ -15,6 +15,7 @@ from app.container import container
 from app.mcp.server import mcp
 from app.providers.base import ProviderError
 from app.utils.time import now_shanghai
+from app.v3.security import V3AuthMiddleware, V3AuthPolicy
 
 settings = get_settings()
 mcp_app = mcp.http_app(path="/")
@@ -35,6 +36,16 @@ async def lifespan(_: FastAPI):
 
 
 api = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+api.add_middleware(
+    V3AuthMiddleware,
+    policy=V3AuthPolicy(
+        api_token=settings.v3_api_token,
+        api_principal_id=settings.v3_api_principal_id,
+        strategy_admin_token=settings.v3_strategy_admin_token,
+        strategy_admin_principal_id=settings.v3_strategy_admin_principal_id,
+        public_market_read=settings.v3_public_market_read,
+    ),
+)
 api.include_router(router)
 api.include_router(v3_router)
 api.include_router(v3_dashboard_router)

@@ -35,6 +35,22 @@ class Settings(BaseSettings):
     v3_database_max_overflow: int = Field(
         default_factory=lambda: int(os.getenv("V3_DATABASE_MAX_OVERFLOW", "5")), ge=0
     )
+    v3_api_token: str | None = Field(
+        default_factory=lambda: os.getenv("V3_API_TOKEN") or os.getenv("MCP_TOKEN") or None
+    )
+    v3_api_principal_id: str = Field(
+        default_factory=lambda: os.getenv("V3_API_PRINCIPAL_ID", "v3-operator")
+    )
+    v3_strategy_admin_token: str | None = Field(
+        default_factory=lambda: os.getenv("V3_STRATEGY_ADMIN_TOKEN") or None
+    )
+    v3_strategy_admin_principal_id: str = Field(
+        default_factory=lambda: os.getenv("V3_STRATEGY_ADMIN_PRINCIPAL_ID", "v3-strategy-admin")
+    )
+    v3_public_market_read: bool = Field(
+        default_factory=lambda: os.getenv("V3_PUBLIC_MARKET_READ", "true").lower()
+        in {"1", "true", "yes", "on"}
+    )
     kline_refresh_trading_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_TRADING_SECONDS", "300")))
     kline_refresh_closed_seconds: int = Field(default_factory=lambda: int(os.getenv("KLINE_REFRESH_CLOSED_SECONDS", "1800")))
     stale_after_seconds: int = 30
