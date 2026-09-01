@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import Field, field_validator, model_validator
@@ -43,7 +43,8 @@ class AccountCreate(V3Contract):
     account_id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=128)
     currency: str = Field(default="CNY", min_length=3, max_length=8)
-    cost_method: str = Field(default="WEIGHTED_AVERAGE", min_length=1, max_length=32)
+    # 当前 V3 只实现加权平均成本法；其它成本法需单独版本化后再放开（POR-003）
+    cost_method: Literal["WEIGHTED_AVERAGE"] = "WEIGHTED_AVERAGE"
 
 
 class TradeDraftCreate(V3Contract):
@@ -60,6 +61,7 @@ class TradeDraftCreate(V3Contract):
     entry_plan_version: int | None = Field(default=None, ge=1)
     source: str = Field(default="MANUAL", min_length=1, max_length=64)
     source_reference: str | None = Field(default=None, max_length=512)
+    trigger_facts: dict[str, Any] | None = None
     field_confidence: dict[str, float] = Field(default_factory=dict)
     image_import_id: UUID | None = None
 
@@ -300,3 +302,123 @@ class PositionProjection(V3Contract):
             exclude={"input_hash"}
         )
         return cls(**payload, input_hash=canonical_hash(payload))
+
+
+_PRICE_PCT_QUANTUM = Decimal("0.0001")
+
+
+def _pct(value: Decimal, base: Decimal) -> str:
+    if base == 0:
+        return "UNKNOWN"
+    if value == 0:
+        return "0"
+    return str((value / base * 100).quantize(_PRICE_PCT_QUANTUM))
+
+
+def _minutes_delta(trade_time: datetime, boundary: datetime) -> str:
+    return str(int((trade_time - boundary).total_seconds() // 60))
+
+
+def _evaluate_condition(
+    condition: Any, facts: dict[str, Any] | None,
+) -> str:
+    """评估价格类触发/取消条件，返回 TRUE/FALSE/UNKNOWN；事实缺失时不猜测。"""
+    if not isinstance(condition, dict) or not facts:
+        return "UNKNOWN"
+    fact_price = facts.get("price")
+    if fact_price is None:
+        return "UNKNOWN"
+    try:
+        price = Decimal(str(fact_price))
+        condition_type = condition["type"]
+        if condition_type == "PRICE_ABOVE":
+            return "TRUE" if price >= Decimal(str(condition["price"])) else "FALSE"
+        if condition_type == "PRICE_BELOW":
+            return "TRUE" if price <= Decimal(str(condition["price"])) else "FALSE"
+        if condition_type == "PRICE_IN_RANGE":
+            low = Decimal(str(condition["low"]))
+            high = Decimal(str(condition["high"]))
+            return "TRUE" if low <= price <= high else "FALSE"
+    except (KeyError, ArithmeticError, ValueError, TypeError):
+        pass
+    return "UNKNOWN"
+
+
+def build_execution_deviation(
+    plan: dict[str, Any],
+    price: Decimal,
+    quantity: Decimal,
+    trade_time: datetime,
+    *,
+    trigger_facts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """按冻结语义计算五维执行偏差；任何事实缺失一律 UNKNOWN，不得伪造。"""
+    low = Decimal(str(plan["entry_price_low"])) if plan.get("entry_price_low") is not None else None
+    high = Decimal(str(plan["entry_price_high"])) if plan.get("entry_price_high") is not None else None
+    price_delta = Decimal("0")
+    boundary: Decimal | None = None
+    if low is not None and price < low:
+        price_delta = price - low
+        boundary = low
+    elif high is not None and price > high:
+        price_delta = price - high
+        boundary = high
+    if low is not None and high is not None:
+        price_window_relation = "BELOW" if price < low else "ABOVE" if price > high else "INSIDE"
+    else:
+        price_window_relation = "UNKNOWN"
+    window_start = plan.get("entry_window_start")
+    window_end = plan.get("entry_window_end")
+    if window_start is not None and window_end is not None:
+        try:
+            start = datetime.fromisoformat(str(window_start))
+            end = datetime.fromisoformat(str(window_end))
+        except (TypeError, ValueError):
+            start = end = None
+        if start is not None and end is not None:
+            if trade_time < start:
+                time_window_relation = "BEFORE"
+                session_delta = _minutes_delta(trade_time, start)
+            elif trade_time > end:
+                time_window_relation = "AFTER"
+                session_delta = _minutes_delta(trade_time, end)
+            else:
+                time_window_relation = "INSIDE"
+                session_delta = "0"
+        else:
+            time_window_relation = session_delta = "UNKNOWN"
+    else:
+        time_window_relation = session_delta = "UNKNOWN"
+    planned_quantity = Decimal(str(plan["quantity"])) if plan.get("quantity") is not None else None
+    quantity_delta = (
+        str(quantity - planned_quantity) if planned_quantity is not None else "UNKNOWN"
+    )
+    quantity_delta_pct = (
+        _pct(quantity - planned_quantity, planned_quantity)
+        if planned_quantity is not None else "UNKNOWN"
+    )
+    trigger_result = _evaluate_condition(plan.get("trigger"), trigger_facts)
+    cancel_result = _evaluate_condition(plan.get("cancel_condition"), trigger_facts)
+    return {
+        "price_delta_to_entry_window": str(price_delta),
+        "price_delta_pct": (
+            "0" if price_window_relation != "UNKNOWN" and price_delta == 0 else
+            _pct(price_delta, boundary) if boundary is not None else "UNKNOWN"
+        ),
+        "price_window_relation": price_window_relation,
+        "entry_window_start": str(window_start) if window_start is not None else None,
+        "entry_window_end": str(window_end) if window_end is not None else None,
+        "time_window_relation": time_window_relation,
+        "session_delta_minutes": session_delta,
+        "quantity_delta": quantity_delta,
+        "quantity_delta_pct": quantity_delta_pct,
+        "trade_time": trade_time.isoformat(),
+        "trigger_match": {
+            "TRUE": "MATCH", "FALSE": "NOT_MATCH", "UNKNOWN": "UNKNOWN",
+        }[trigger_result],
+        "cancel_condition_violated": {
+            "TRUE": "VIOLATED", "FALSE": "NOT_VIOLATED", "UNKNOWN": "UNKNOWN",
+        }[cancel_result],
+        "trigger_facts_hash": canonical_hash(trigger_facts) if trigger_facts else None,
+        "plan_snapshot_hash": canonical_hash(plan),
+    }

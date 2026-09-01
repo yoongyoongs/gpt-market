@@ -22,6 +22,7 @@ from app.v3.domain.portfolio import (
     TradeCorrectionStep,
     TradeDraftCreate,
     apply_trade_correction_chain,
+    build_execution_deviation,
 )
 from app.v3.infrastructure.db.models import (
     AccountModel,
@@ -152,7 +153,8 @@ class SQLAlchemyPortfolioRepository:
             if plan is None or plan.version != entry_plan_version:
                 raise RepositoryConflictError("bound entry plan version does not exist")
             deviation = self._execution_deviation(
-                plan.plan, price, quantity, datetime.fromisoformat(payload["trade_time"])
+                plan.plan, price, quantity, datetime.fromisoformat(payload["trade_time"]),
+                payload.get("trigger_facts"),
             )
         trade_id = uuid4()
         content = {
@@ -188,23 +190,11 @@ class SQLAlchemyPortfolioRepository:
     @staticmethod
     def _execution_deviation(
         plan: dict[str, Any], price: Decimal, quantity: Decimal, trade_time: datetime,
+        trigger_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        low = Decimal(str(plan["entry_price_low"])) if plan.get("entry_price_low") is not None else None
-        high = Decimal(str(plan["entry_price_high"])) if plan.get("entry_price_high") is not None else None
-        price_delta = Decimal("0")
-        if low is not None and price < low:
-            price_delta = price - low
-        elif high is not None and price > high:
-            price_delta = price - high
-        planned_quantity = Decimal(str(plan["quantity"])) if plan.get("quantity") is not None else None
-        return {
-            "price_delta_to_entry_window": str(price_delta),
-            "quantity_delta": str(quantity - planned_quantity) if planned_quantity is not None else "UNKNOWN",
-            "trade_time": trade_time.isoformat(),
-            "trigger_match": "UNKNOWN",
-            "cancel_condition_violated": "UNKNOWN",
-            "plan_snapshot_hash": canonical_hash(plan),
-        }
+        return build_execution_deviation(
+            plan, price, quantity, trade_time, trigger_facts=trigger_facts,
+        )
 
     async def add_opening_position(self, opening: OpeningPositionCreate) -> UUID:
         content = opening.model_dump(mode="json")
