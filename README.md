@@ -49,6 +49,8 @@ V2 选股作为并行能力保留 V1，不覆盖旧工具：
 
 V3 与 Legacy 隔离。生产已设置 `V3_ENABLED=true` 并迁移至 `0011_strategy_stabilization`；READ API 已上线，但新数据库的数据集需要由正式任务逐步生成。策略发布状态仍为 `mode=V2`，不得把“API 已部署”表述为“V3 策略已激活”。
 
+供人工查看的 V3 全市场特征看板为 `GET /v3/dashboard`。页面只读取最新 Published Feature Run 和 Market Regime，不调用行情 Provider、不生成统一评分、不改变 JSON API；生产数据尚未发布时立即显示 `INITIALIZING`。
+
 V1 仍按 `total_score` 排名；V2 按 `opportunity_score` 排名，并返回 `raw_top30`、`action_top30`、`top100`、`score_version=v2`、完整评分拆解、支撑压力、ATR 止损和风险收益比。Phase 1 只使用当前可验证行情/K 线数据；基本面、估值、公告新闻、政策产业催化和主力资金不会被伪造，相关组件以 `coverage=false`、`score=null` 和 `missing_fields` 暴露。
 
 REST 调试接口：`GET /health`、`/quote/{code}`、`/quotes?codes=...`、`/kline/{code}`、`/detail/{code}`、`/market`、`/sectors`、`/scan`、`/scan/coverage`。REST 与 MCP 使用完全相同的 service/provider 层。

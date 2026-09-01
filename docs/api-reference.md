@@ -11,6 +11,7 @@
 | MCP | `/mcp/` | `Authorization: Bearer <MCP_TOKEN>` |
 | GPT Web | `/gpt/{secret}/...` | URL 中的 `GPT_WEB_SECRET` |
 | REST 调试 | `/quote`、`/market` 等 | 当前版本无认证，仅用于受控环境调试 |
+| V3 人工看板 | `GET /v3/dashboard` | 当前版本无认证；只读 Published Feature/Regime |
 
 生产环境应在 Nginx 或防火墙限制 REST 调试端点，不应依赖其公开可访问性。
 
@@ -28,7 +29,11 @@
 | `GET /api/v3/raw-opportunities` | 读取 Recall 命中并集，不含 Final Score 或 Action 建议 |
 | `GET /api/v3/recalls/misses` | 读取成熟评价；支持 `threshold_version`、`only_misses`、`limit` 和 `cursor` |
 
-Feature Query 参数包括 `feature_run_id`、`market`、`stale`、`sort_by`、`descending`、`min_value`、`max_value`、逗号分隔的 `fields`、`limit` 和 `cursor`。默认 50、最大 200；字段和排序键使用白名单，下一页必须原样沿用排序参数。当前部署仍默认关闭 V3，这些接口不代表 V3 已在生产启用。
+Feature Query 参数包括 `feature_run_id`、`market`、`stale`、`sort_by`、`descending`、`min_value`、`max_value`、逗号分隔的 `fields`、`limit` 和 `cursor`。默认 50、最大 200；字段和排序键使用白名单，下一页必须原样沿用排序参数。生产已启用 V3 API 和独立数据库，但策略发布状态仍为 `mode=V2`；API 可用不代表 V3 策略已激活。
+
+### V3 人工行情特征看板
+
+`GET /v3/dashboard` 返回轻量 HTML，展示最新 Published Feature Run 的覆盖率、Market Regime 事实和全市场证券特征。支持 `market`、`sort_by`、`descending`、`limit` 查询参数，最多展示 100 条。该页面只执行 PostgreSQL 读取，不调用 Provider、不写 Candidate Pack、不产生统一评分；没有 Feature Run 时立即返回 HTTP 503 初始化页。
 
 ## 2. MCP tools
 

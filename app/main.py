@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import live_cache, router, v2_dashboard_cache
 from app.api.v3 import router as v3_router
+from app.api.v3_dashboard import router as v3_dashboard_router
 from app.config import get_settings
 from app.container import container
 from app.mcp.server import mcp
@@ -36,6 +37,7 @@ async def lifespan(_: FastAPI):
 api = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
 api.include_router(router)
 api.include_router(v3_router)
+api.include_router(v3_dashboard_router)
 api.mount("/mcp", mcp_app)
 
 
