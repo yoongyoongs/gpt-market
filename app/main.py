@@ -16,6 +16,8 @@ from app.mcp.server import mcp
 from app.providers.base import ProviderError
 from app.utils.time import now_shanghai
 from app.v3.security import V3AuthMiddleware, V3AuthPolicy
+from app.v3 import errors as v3_errors
+from app.v3.errors import register_v3_error_envelope
 
 settings = get_settings()
 mcp_app = mcp.http_app(path="/")
@@ -53,23 +55,26 @@ api.mount("/mcp", mcp_app)
 
 
 @api.exception_handler(ValueError)
-async def validation_error(_: Request, exc: ValueError) -> JSONResponse:
-    return JSONResponse(status_code=400, content={"ok": False, "error": str(exc), "source": "eastmoney", "server_timestamp": now_shanghai().isoformat()})
+async def validation_error(request: Request, exc: ValueError) -> JSONResponse:
+    return v3_errors.value_error_response(request, exc)
 
 
 @api.exception_handler(ProviderError)
-async def provider_error(_: Request, exc: ProviderError) -> JSONResponse:
-    return JSONResponse(status_code=503, content={"ok": False, "error": str(exc), "source": "eastmoney", "server_timestamp": now_shanghai().isoformat()})
+async def provider_error(request: Request, exc: ProviderError) -> JSONResponse:
+    return v3_errors.provider_error_response(request, exc)
 
 
 @api.exception_handler(RequestValidationError)
-async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(status_code=422, content={"ok": False, "error": str(exc), "source": "eastmoney", "server_timestamp": now_shanghai().isoformat()})
+async def request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return v3_errors.validation_error_response(request, exc)
 
 
 @api.exception_handler(Exception)
-async def unexpected_error(_: Request, exc: Exception) -> JSONResponse:
-    return JSONResponse(status_code=500, content={"ok": False, "error": f"internal error: {type(exc).__name__}", "source": "eastmoney", "server_timestamp": now_shanghai().isoformat()})
+async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    return v3_errors.internal_error_response(request, exc)
+
+
+register_v3_error_envelope(api)
 
 
 class BearerAuthMiddleware:

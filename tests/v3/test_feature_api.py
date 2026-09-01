@@ -7,7 +7,8 @@ def test_v3_read_api_is_explicitly_unavailable_when_feature_flag_is_off() -> Non
     with TestClient(api) as client:
         response = client.get("/api/v3/universe/features")
     assert response.status_code == 503
-    assert response.json()["detail"] == "V3 is not enabled"
+    assert response.json()["code"] == "V3_UNAVAILABLE"
+    assert response.json()["message"] == "V3 is not enabled"
 
 
 def test_v3_openapi_exposes_feature_and_regime_reads() -> None:
