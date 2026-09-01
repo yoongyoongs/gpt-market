@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.container import container
+from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -608,6 +609,15 @@ async def create_replay(command: ReplayRunCreate):
 async def create_regression_case(command: RegressionCaseCreate):
     try:
         return await PerformanceService(_uow).add_regression_case(command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/regression-cases/{regression_case_id}/execute")
+async def execute_regression_case(regression_case_id: UUID):
+    """RC-06C：真执行 —— run replay → evaluate invariants → PASS/FAIL/BLOCKED → diff。"""
+    try:
+        return await ExecuteRegressionCaseService(_uow).execute(regression_case_id)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

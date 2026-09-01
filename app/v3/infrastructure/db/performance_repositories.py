@@ -24,6 +24,7 @@ from app.v3.infrastructure.db.models import (
     PerformanceSummaryModel,
     RecallMissEvaluationModel,
     RecallMissRunModel,
+    RegressionCaseExecutionModel,
     RegressionCaseModel,
     ReplayRunModel,
     SecurityFeatureModel,
@@ -229,6 +230,37 @@ class SQLAlchemyPerformanceRepository:
             )},
         ))
         return {"replay_run_id": command.replay_run_id, **payload}
+
+    async def get_regression_case(self, case_id: UUID) -> dict | None:
+        model = await self._session.get(RegressionCaseModel, case_id)
+        if model is None:
+            return None
+        return {
+            "regression_case_id": model.regression_case_id,
+            "name": model.name,
+            "strategy_version": model.strategy_version,
+            "replay_as_of": model.replay_as_of,
+            "input_requirements": dict(model.input_requirements or {}),
+            "expected_invariants": dict(model.expected_invariants or {}),
+            "source_replay_run_id": model.source_replay_run_id,
+            "status": model.status,
+            "blocked_reason": model.blocked_reason,
+        }
+
+    async def record_regression_execution(self, payload: dict) -> dict:
+        """RC-06C：真执行结果 append-only 落库（PASS/FAIL/BLOCKED + diff）。"""
+        self._session.add(RegressionCaseExecutionModel(
+            execution_id=payload["execution_id"],
+            regression_case_id=payload["regression_case_id"],
+            status=payload["status"],
+            replay_run_id=payload["replay_run_id"],
+            blocked_reason=payload["blocked_reason"],
+            invariant_results=payload["invariant_results"],
+            diff=payload["diff"],
+            known_at=payload["known_at"],
+            content_hash=canonical_hash(payload),
+        ))
+        return payload
 
     async def run_replay(self, command: ReplayRunCreate) -> dict:
         checks: list[dict] = []

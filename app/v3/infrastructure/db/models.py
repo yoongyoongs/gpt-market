@@ -2030,6 +2030,29 @@ class RegressionCaseModel(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class RegressionCaseExecutionModel(Base):
+    """RC-06C：Regression Case 真执行的 append-only 执行记录。"""
+
+    __tablename__ = "regression_case_executions"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_regression_case_executions_hash"),
+        {"schema": V3_SCHEMA},
+    )
+    execution_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    regression_case_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.regression_cases.regression_case_id"), nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    replay_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{V3_SCHEMA}.replay_runs.replay_run_id"),
+    )
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    invariant_results: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    diff: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class RecallMissRunModel(Base):
     __tablename__ = "recall_miss_runs"
     __table_args__ = (UniqueConstraint("content_hash", name="uq_recall_miss_runs_hash"), {"schema": V3_SCHEMA})
