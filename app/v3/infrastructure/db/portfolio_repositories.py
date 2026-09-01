@@ -312,9 +312,16 @@ class SQLAlchemyPortfolioRepository:
         cash_impact = Decimal("0")
         realized_pnl = Decimal("0")
         last_ledger = 0
-        trades = (await self._session.scalars(select(TradeLedgerModel).where(
+        trade_filters = [
             TradeLedgerModel.account_id == account_id,
             TradeLedgerModel.security_id == security_id,
+        ]
+        if opening is not None:
+            # Opening baseline 覆盖 baseline_time（含）之前的全部成交；
+            # 同一时刻 Tie-break：trade_time == baseline_time 归属基准，不重复重放。
+            trade_filters.append(TradeLedgerModel.trade_time > opening.baseline_time)
+        trades = (await self._session.scalars(select(TradeLedgerModel).where(
+            *trade_filters
         ).order_by(TradeLedgerModel.ledger_sequence))).all()
         corrections = (await self._session.scalars(select(TradeCorrectionModel).where(
             TradeCorrectionModel.trade_id.in_([item.trade_id for item in trades])
