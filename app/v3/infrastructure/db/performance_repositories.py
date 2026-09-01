@@ -16,6 +16,7 @@ from app.v3.domain.performance import (
 from app.v3.infrastructure.db.models import (
     BarSeriesRevisionModel,
     ContextPackModel,
+    DecisionModel,
     EntryPlanModel,
     EvidenceRecordModel,
     PerformanceAttributionModel,
@@ -50,6 +51,62 @@ class SQLAlchemyPerformanceRepository:
             **command.model_dump(mode="python"), content_hash=content_hash(command)
         ))
         return command.attribution_id
+
+    async def mature_decision_candidates(self, as_of: datetime) -> list[dict]:
+        """RC-06A：成熟引擎候选 —— 含 original EntryPlan 的决策（produced_at <= as_of）。"""
+        rows = (
+            await self._session.scalars(
+                select(DecisionModel).where(
+                    DecisionModel.original_entry_plan_id.is_not(None),
+                    DecisionModel.produced_at <= as_of,
+                )
+            )
+        ).all()
+        return [
+            {
+                "decision_id": row.decision_id,
+                "security_id": row.security_id,
+                "as_of": row.as_of,
+                "produced_at": row.produced_at,
+                "payload": dict(row.payload or {}),
+                "original_entry_plan_id": row.original_entry_plan_id,
+                "original_entry_plan_snapshot": dict(
+                    row.original_entry_plan_snapshot or {}
+                ),
+            }
+            for row in rows
+        ]
+
+    async def decision_trades(self, decision_id: UUID) -> list[dict]:
+        """RC-06A：决策关联的已确认成交事实（Trade Ledger）。"""
+        rows = (
+            await self._session.scalars(
+                select(TradeLedgerModel).where(
+                    TradeLedgerModel.decision_id == decision_id
+                ).order_by(TradeLedgerModel.trade_time)
+            )
+        ).all()
+        return [
+            {
+                "trade_id": row.trade_id,
+                "side": row.side,
+                "trade_time": row.trade_time,
+                "price": row.price,
+                "quantity": row.quantity,
+            }
+            for row in rows
+        ]
+
+    async def attribution_exists(self, content_hash_value: str) -> bool:
+        return (
+            await self._session.scalar(
+                select(
+                    select(PerformanceAttributionModel.attribution_id)
+                    .where(PerformanceAttributionModel.content_hash == content_hash_value)
+                    .exists()
+                )
+            )
+        ) is True
 
     async def run_replay(self, command: ReplayRunCreate) -> dict:
         checks: list[dict] = []
