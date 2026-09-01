@@ -453,6 +453,41 @@ class SQLAlchemyStrategyRepository:
         return {"health_event_id": command.health_event_id,
                 "automatic_rollback_event_id": rollback_event_id}
 
+    async def resolve_release(self, environment: str) -> dict:
+        """RC-07B：唯一 Runtime 解析点——每次调用都读最新 ReleaseState
+        （回滚立即生效），返回当前 executor 配置；不完整状态显式回落 V2。"""
+        self._validate_environment(environment)
+        state = await self._session.scalar(select(ReleaseStateModel).where(
+            ReleaseStateModel.environment == environment
+        ))
+        if state is None:
+            return {"mode": "V2", "effective_mode": "V2", "reason": "NO_V3_RELEASE",
+                    "strategy_version_id": None, "guardrail_version_id": None,
+                    "configuration": None, "row_version": None}
+        if state.mode == ReleaseMode.V2.value or state.active_strategy_version_id is None:
+            reason = (
+                "RELEASE_MODE_V2" if state.mode == ReleaseMode.V2.value
+                else "RELEASE_STATE_INCOMPLETE"
+            )
+            return {"mode": state.mode, "effective_mode": "V2", "reason": reason,
+                    "strategy_version_id": None, "guardrail_version_id": None,
+                    "configuration": None, "row_version": state.row_version}
+        strategy = await self._session.get(
+            StrategyVersionModel, state.active_strategy_version_id
+        )
+        if strategy is None:
+            return {"mode": state.mode, "effective_mode": "V2",
+                    "reason": "ACTIVE_STRATEGY_VERSION_MISSING",
+                    "strategy_version_id": None, "guardrail_version_id": None,
+                    "configuration": None, "row_version": state.row_version}
+        return {
+            "mode": state.mode, "effective_mode": state.mode, "reason": None,
+            "strategy_version_id": strategy.strategy_version_id,
+            "guardrail_version_id": state.active_guardrail_version_id,
+            "configuration": dict(strategy.configuration or {}),
+            "row_version": state.row_version,
+        }
+
     async def release_dashboard(self, environment: str) -> dict:
         self._validate_environment(environment)
         state = await self._session.scalar(select(ReleaseStateModel).where(

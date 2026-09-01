@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.container import container
 from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
+from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -620,6 +621,17 @@ async def execute_regression_case(regression_case_id: UUID):
         return await ExecuteRegressionCaseService(_uow).execute(regression_case_id)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/release/resolution")
+async def resolve_release():
+    """RC-07B：唯一 Runtime Release Resolver —— 当次执行的策略/护栏/配置解析结果。"""
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    resolver = ReleaseResolver(
+        _uow, v3_enabled=container.v3.enabled,
+    )
+    return await resolver.resolve()
 
 
 @router.post("/performance/recall-miss-runs")

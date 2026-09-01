@@ -26,6 +26,7 @@ from app.config import Settings
 from app.utils.time import SHANGHAI
 from app.v3.application.ingest_index_benchmarks import IngestIndexBenchmarksService
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
+from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.verify_position_projections import (
     VerifyPositionProjectionsService,
@@ -215,6 +216,11 @@ async def run_once(output: Path) -> dict:
             "coverage_end": calendar.metadata.coverage_end.isoformat(),
         },
     }
+    # RC-07B：每次生产运行都先解析当前 Release（紧急开关关闭 → V2_FALLBACK）
+    v3_enabled = os.getenv("V3_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    report["release_resolution"] = await ReleaseResolver(
+        lambda: SQLAlchemyUnitOfWork(database.sessions), v3_enabled=v3_enabled,
+    ).resolve("production")
     if report["trading_day"]:
         trade_date = latest_completed_session(calendar, now)
         report["main"] = await main.execute(trade_date=trade_date, as_of=now)
