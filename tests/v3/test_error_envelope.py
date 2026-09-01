@@ -103,3 +103,17 @@ async def test_unknown_v3_route_returns_envelope_404() -> None:
     body = response.json()
     assert body["code"] == "V3_NOT_FOUND"
     assert "detail" not in body
+
+
+async def test_unknown_legacy_route_keeps_default_404_detail() -> None:
+    """V2 路径的路由级 404 保持 FastAPI 默认 {"detail": ...}，不回到 500。"""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import api
+
+    transport = ASGITransport(app=api)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/definitely-not-a-route")
+    assert response.status_code == 404
+    body = response.json()
+    assert body == {"detail": "Not Found"}

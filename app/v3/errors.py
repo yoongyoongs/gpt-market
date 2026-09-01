@@ -80,7 +80,13 @@ def register_v3_error_envelope(api: FastAPI) -> None:
     @api.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Request, exc: StarletteHTTPException):
         if not is_v3_path(request):
-            return None
+            # 覆盖了 FastAPI 默认 handler，legacy 路径必须自己补回默认行为，
+            # 返回 None 会变成 500
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=getattr(exc, "headers", None),
+            )
         code = {
             404: "V3_NOT_FOUND", 401: "V3_UNAUTHORIZED", 403: "V3_FORBIDDEN",
             409: "V3_CONFLICT", 503: "V3_UNAVAILABLE",
