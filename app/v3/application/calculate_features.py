@@ -25,6 +25,7 @@ class CalculateSecurityFeatureService:
         feature_run_id: UUID,
         revision: BarSeriesRevision,
         as_of: datetime,
+        weekly_revision: BarSeriesRevision | None = None,
         index_return_20d: float | None = None,
         industry_return_20d: float | None = None,
         stale_after: timedelta = timedelta(days=7),
@@ -104,7 +105,7 @@ class CalculateSecurityFeatureService:
             "bar_count": len(bars),
             "latest_bar_time": latest_time,
             "daily_trend_state": self._trend_state(values),
-            "weekly_state": "UNKNOWN",
+            "weekly_trend_state": self._weekly_trend_state(weekly_revision, as_of),
             "overheated": bool(values["position_60d"] is not None and values["position_60d"] >= 0.9),
             "liquidity_quality": self._liquidity_quality(bars[-1].amount),
         }
@@ -208,6 +209,46 @@ class CalculateSecurityFeatureService:
             return "UP"
         if ma20 < ma60 and (values.get("ma20_slope") or 0) < 0:
             return "DOWN"
+        return "RANGE"
+
+    @classmethod
+    def _weekly_trend_state(
+        cls, weekly_revision: BarSeriesRevision | None, as_of: datetime
+    ) -> str:
+        """周级趋势状态（RC-04-01 冻结语义）。
+
+        输入必须是已发布的 QFQ WEEK revision，按同一 as_of 过滤完整周 K。
+        以周收盘计算 MA10W/MA30W 及 MA10W 斜率：比率 > +1% 且斜率 > 0 为 UP，
+        < -1% 且斜率 < 0 为 DOWN，|比率| <= 1% 为 BASE（周均线收敛筑底），
+        其余为 RANGE；无周 K revision 或不足 30 根完整周 K 一律 UNKNOWN，
+        不猜测。
+        """
+        if weekly_revision is None:
+            return "UNKNOWN"
+        if (
+            weekly_revision.period is not BarPeriod.WEEK
+            or weekly_revision.adjust_type is not AdjustType.QFQ
+        ):
+            raise ValueError("weekly trend state requires a published QFQ WEEK revision")
+        bars = tuple(
+            bar for bar in weekly_revision.bars
+            if bar.bar_time <= as_of and not bar.provisional
+        )
+        closes = [bar.close for bar in bars]
+        if len(closes) < 30:
+            return "UNKNOWN"
+        ma10 = cls._mean(closes, 10)
+        ma30 = statistics.fmean(closes[-30:])
+        slope = cls._ma_slope(closes, 10)
+        if ma10 is None or ma30 == 0 or slope is None:
+            return "UNKNOWN"
+        ratio = ma10 / ma30 - 1
+        if ratio > 0.01 and slope > 0:
+            return "UP"
+        if ratio < -0.01 and slope < 0:
+            return "DOWN"
+        if abs(ratio) <= 0.01:
+            return "BASE"
         return "RANGE"
 
     @staticmethod

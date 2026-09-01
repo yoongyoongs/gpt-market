@@ -22,7 +22,7 @@ def feature(**updates) -> SecurityFeature:
         "volume_ratio_5d": 1.8, "volume_expansion": True,
         "relative_index_strength": 0.04, "relative_industry_strength": 0.05,
         "coverage": 1.0, "stale": False,
-        "features": {"weekly_state": "BASE", "daily_trend_state": "UP"},
+        "features": {"weekly_trend_state": "BASE", "daily_trend_state": "UP"},
         "input_hash": canonical_hash({"fixture": str(uuid4())}),
     }
     values.update(updates)
@@ -65,3 +65,17 @@ def test_channel_sort_is_deterministic_and_stale_rows_never_hit() -> None:
         strong.security_id, weak.security_id,
     ]
     assert result.unavailable_count == 1
+
+
+def test_week_base_day_strength_requires_unified_weekly_trend_state_field() -> None:
+    channel = next(
+        item for item in feature_recall_channels()
+        if item.channel.code == "WEEK_BASE_DAY_STRENGTH"
+    )
+    assert channel.channel.configuration["required_fields"] == (
+        "features.weekly_trend_state", "features.daily_trend_state", "return_5d",
+    )
+    # 旧字段名 weekly_state 不存在：缺字段必须显式不可用，而不是静默无命中
+    legacy = feature(features={"weekly_state": "BASE", "daily_trend_state": "UP"})
+    with pytest.raises(RecallChannelUnavailable):
+        channel.evaluate((legacy,))

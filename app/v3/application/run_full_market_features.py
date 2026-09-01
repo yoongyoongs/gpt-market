@@ -49,13 +49,20 @@ class RunFullMarketFeaturesService:
                 revisions = await uow.bars.latest_daily_revisions(
                     tuple(target.security_id for target in batch), as_of=as_of
                 )
+                weekly = {
+                    revision.security_id: revision
+                    for revision in await uow.bars.latest_weekly_revisions(
+                        tuple(target.security_id for target in batch), as_of=as_of
+                    )
+                }
             seen = set()
             for revision in revisions:
                 seen.add(revision.security_id)
                 target = target_by_id[revision.security_id]
                 try:
                     item = self._calculator.execute(
-                        feature_run_id=UUID(int=0), revision=revision, as_of=as_of
+                        feature_run_id=UUID(int=0), revision=revision, as_of=as_of,
+                        weekly_revision=weekly.get(revision.security_id),
                     )
                     features.append(item)
                     revision_manifest.append((str(revision.security_id), revision.content_hash))

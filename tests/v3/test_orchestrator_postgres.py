@@ -9,6 +9,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
+from app.v3.domain.features import FeatureQuery
 from app.v3.domain.market_data import (
     AdjustType,
     BarPeriod,
@@ -187,6 +188,27 @@ def _make_revision(security_id, seed: int) -> BarSeriesRevision:
     ))
 
 
+def _make_weekly_revision(security_id) -> BarSeriesRevision:
+    closes = [10 + index * 0.2 + (index % 3) * 0.05 for index in range(40)]
+    bars = tuple(
+        MarketBar(
+            bar_time=NOW - timedelta(weeks=40 - index),
+            open=close * 0.99, high=close * 1.01, low=close * 0.98,
+            close=close, volume=10_000, amount=200_000,
+            fetch_time=NOW - timedelta(minutes=1),
+        )
+        for index, close in enumerate(closes)
+    )
+    return BarSeriesRevision.build(BarSeriesRevisionContent(
+        revision_id=uuid4(), security_id=security_id, period=BarPeriod.WEEK,
+        adjust_type=AdjustType.QFQ, source="orchestrator-fixture",
+        upstream_source="fixture", raw_bar_available=False,
+        point_in_time_precision=PointInTimePrecision.LIMITED,
+        precision_reason="fixture QFQ only",
+        known_at=NOW - timedelta(seconds=1), bars=bars,
+    ))
+
+
 @pytest.mark.asyncio
 async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> None:
     engine = create_async_engine(DATABASE_URL)
@@ -208,6 +230,9 @@ async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> Non
         for seed, target in enumerate(targets):
             assert await uow.bars.publish_series_revision(
                 _make_revision(target.security_id, seed)
+            ) is True
+            assert await uow.bars.publish_series_revision(
+                _make_weekly_revision(target.security_id)
             ) is True
         await uow.commit()
 
@@ -242,6 +267,16 @@ async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> Non
     assert report["status"] == "COMPLETED"
     assert by_job["features"]["metrics"]["status"] == "PUBLISHED"
     assert by_job["features"]["metrics"]["successful_count"] == 2
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        page = await uow.features.query(FeatureQuery(
+            feature_run_id=UUID(by_job["features"]["metrics"]["feature_run_id"]),
+            fields=("features",), limit=5,
+        ))
+    assert page is not None and len(page.items) == 2
+    assert all(
+        item["features"]["weekly_trend_state"] == "UP" for item in page.items
+    )
+
     # 第二次运行：特征 Run 零重复，Job 记录幂等跳过
     second = await orchestrator.execute(trade_date=_trade_date(4), as_of=NOW)
     await engine.dispose()

@@ -127,9 +127,9 @@ def feature_recall_channels() -> tuple[FeatureRecallChannel, ...]:
         FeatureRecallChannel(
             code="WEEK_BASE_DAY_STRENGTH",
             description="周级底座明确且日级趋势转强",
-            required_fields=("features.weekly_state", "features.daily_trend_state", "return_5d"),
+            required_fields=("features.weekly_trend_state", "features.daily_trend_state", "return_5d"),
             predicate=lambda f: (
-                f.features["weekly_state"] in {"BASE", "UP"}
+                f.features["weekly_trend_state"] in {"BASE", "UP"}
                 and f.features["daily_trend_state"] == "UP"
                 and f.return_5d > 0
             ),

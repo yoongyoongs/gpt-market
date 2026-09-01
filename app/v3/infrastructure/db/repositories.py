@@ -1282,6 +1282,65 @@ class SQLAlchemyBarRepository:
             for model, bars in grouped.values()
         )
 
+    async def latest_weekly_revisions(
+        self, security_ids: tuple[UUID, ...], *, as_of: datetime
+    ) -> tuple[BarSeriesRevision, ...]:
+        """与 latest_daily_revisions 相同语义的周 K 读取（RC-04-01）。"""
+        if not security_ids:
+            return ()
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id,
+                func.row_number().over(
+                    partition_by=BarSeriesRevisionModel.security_id,
+                    order_by=(BarSeriesRevisionModel.known_at.desc(), BarSeriesRevisionModel.revision_id.desc()),
+                ).label("revision_rank"),
+            )
+            .where(
+                BarSeriesRevisionModel.security_id.in_(security_ids),
+                BarSeriesRevisionModel.period == "WEEK",
+                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.status == "PUBLISHED",
+                BarSeriesRevisionModel.known_at <= as_of,
+            )
+            .subquery()
+        )
+        revision_ids = select(ranked.c.revision_id).where(ranked.c.revision_rank == 1)
+        rows = (
+            await self._session.execute(
+                select(BarSeriesRevisionModel, MarketBarModel)
+                .join(MarketBarModel, MarketBarModel.revision_id == BarSeriesRevisionModel.revision_id)
+                .where(
+                    BarSeriesRevisionModel.revision_id.in_(revision_ids),
+                    MarketBarModel.bar_time <= as_of,
+                )
+                .order_by(BarSeriesRevisionModel.security_id, MarketBarModel.bar_time)
+            )
+        ).all()
+        grouped: dict[UUID, tuple[BarSeriesRevisionModel, list[MarketBar]]] = {}
+        for revision, bar in rows:
+            if revision.revision_id not in grouped:
+                grouped[revision.revision_id] = (revision, [])
+            grouped[revision.revision_id][1].append(MarketBar(
+                bar_time=bar.bar_time, open=float(bar.open), high=float(bar.high),
+                low=float(bar.low), close=float(bar.close), volume=bar.volume,
+                amount=None if bar.amount is None else float(bar.amount),
+                provisional=bar.provisional, fetch_time=bar.fetch_time,
+            ))
+        return tuple(
+            BarSeriesRevision.build(BarSeriesRevisionContent(
+                revision_id=model.revision_id, security_id=model.security_id,
+                period=BarPeriod(model.period), adjust_type=AdjustType(model.adjust_type),
+                source=model.source, upstream_source=model.upstream_source,
+                raw_bar_available=model.raw_bar_available,
+                factor_revision_id=model.factor_revision_id,
+                point_in_time_precision=PointInTimePrecision(model.point_in_time_precision),
+                precision_reason=model.precision_reason, known_at=model.known_at,
+                supersedes_revision_id=model.supersedes_revision_id, bars=tuple(bars),
+            ))
+            for model, bars in grouped.values()
+        )
+
 
 class SQLAlchemyFeatureRepository:
     FIELD_COLUMNS = {
