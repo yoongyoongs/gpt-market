@@ -21,3 +21,8 @@ def test_v3_openapi_exposes_feature_and_regime_reads() -> None:
     assert "/api/v3/recalls/misses" in paths
     assert "/api/v3/candidates/comparison-pack" in paths
     assert "/api/v3/portfolio/intraday/{code}" in paths
+
+
+def test_v3_openapi_exposes_ocr_image_upload() -> None:
+    paths = api.openapi()["paths"]
+    assert "/api/v3/portfolio/images" in paths

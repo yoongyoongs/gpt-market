@@ -22,6 +22,11 @@ from app.v3.application.import_ai_results import (
     ConfirmAIResultImportService,
     PreviewAIResultImportService,
 )
+from app.v3.application.ocr import OcrUnavailableError, build_ocr_adapter
+from app.v3.application.ocr_pipeline import (
+    ImageUploadCommand,
+    RecognizeImageService,
+)
 from app.v3.application.manage_portfolio import (
     DraftConfirmation,
     ImageDraftImport,
@@ -428,6 +433,24 @@ async def confirm_ai_result_import(
 @router.post("/portfolio/accounts")
 async def create_portfolio_account(command: AccountCreate):
     return await PortfolioWriteService(_uow).create_account(command)
+
+
+@router.post("/portfolio/images")
+async def upload_portfolio_image(command: ImageUploadCommand, request: Request):
+    """RC-09A：上传券商截图 → 服务端 OCR Adapter 识别 → Draft Preview。"""
+    command = _bind_principal(command, request)
+    import os
+
+    service = RecognizeImageService(
+        _uow, adapter=build_ocr_adapter(),
+        store_dir=os.getenv("V3_IMAGE_STORE_DIR", "data/v3-images"),
+    )
+    try:
+        return await service.execute(command)
+    except OcrUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"OCR provider unavailable: {exc.reason}"
+        ) from exc
 
 
 @router.post("/portfolio/trade-drafts")
