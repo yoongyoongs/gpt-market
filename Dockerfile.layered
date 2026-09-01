@@ -1,7 +1,7 @@
 # 分层生产镜像：基于上一个已验收镜像，只叠加代码层（依赖未变时使用）。
 # 用法（在服务器 /opt/gpt-market 下）：
 #   docker build -f Dockerfile.layered -t gpt-market:main-<sha> .
-FROM gpt-market:main-cd0cb11
+FROM gpt-market:main-780a9be
 WORKDIR /app
 COPY alembic.ini ./
 COPY app ./app
