@@ -73,6 +73,7 @@ from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
 )
+from app.v3.application.deep_market_data import DeepMarketDataService
 from app.v3.security import V3Principal, bind_v3_principal
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
@@ -516,6 +517,18 @@ async def portfolio_position(account_id: UUID, security_id: UUID):
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")
     return position
+
+
+@router.get("/portfolio/intraday/{code}")
+async def portfolio_intraday_structure(
+    code: str,
+    as_of: datetime | None = Query(default=None),
+):
+    """分钟级深度结构（RC-04D）：只服务持仓上下文，fetch-time 事实。"""
+    service = DeepMarketDataService(container.eastmoney)
+    return await service.get_intraday_structure(
+        code, as_of=as_of or datetime.now(timezone.utc),
+    )
 
 
 @router.post("/actions")
