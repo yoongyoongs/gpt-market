@@ -43,7 +43,9 @@ def main() -> int:
     if not database_url:
         parser.error("v3-postgres 必须显式设置 V3_TEST_DATABASE_URL，禁止默认连接生产数据库")
     env["V3_DATABASE_URL"] = database_url
-    env["V3_ENABLED"] = "true"
+    # Repository integration tests use V3_TEST_DATABASE_URL directly. Keep the
+    # application feature flag disabled so default-off API contracts remain valid.
+    env["V3_ENABLED"] = "false"
     _run([python, "-m", "alembic", "upgrade", "head"], env=env)
     _run([python, "-m", "pytest", "tests/v3", "-q", *extra], env=env)
     return 0

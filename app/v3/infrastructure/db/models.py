@@ -1703,13 +1703,29 @@ class TradeLedgerModel(Base):
 
 class TradeCorrectionModel(Base):
     __tablename__ = "trade_corrections"
-    __table_args__ = (UniqueConstraint("content_hash", name="uq_trade_corrections_hash"), {"schema": V3_SCHEMA})
+    __table_args__ = (
+        UniqueConstraint(
+            "correction_sequence", name="uq_trade_corrections_sequence"
+        ),
+        UniqueConstraint("content_hash", name="uq_trade_corrections_hash"),
+        Index(
+            "ix_trade_corrections_trade_sequence",
+            "trade_id",
+            "correction_sequence",
+        ),
+        {"schema": V3_SCHEMA},
+    )
     correction_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    correction_sequence: Mapped[int] = mapped_column(
+        BigInteger, Identity(), nullable=False, unique=True
+    )
     trade_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.trade_ledger.trade_id"), nullable=False)
     correction_type: Mapped[str] = mapped_column(String(16), nullable=False)
     replacement: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     confirmed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    previous_effective_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    effective_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

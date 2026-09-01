@@ -80,6 +80,73 @@ class TradeConfirm(V3Contract):
     confirmed_by: str = Field(min_length=1, max_length=128)
 
 
+class EffectiveTradeState(V3Contract):
+    side: TradeSide
+    quantity: Decimal = Field(gt=0)
+    price: Decimal = Field(gt=0)
+    fee: Decimal = Field(ge=0)
+    reversed: bool = False
+
+    @property
+    def effective_hash(self) -> str:
+        return canonical_hash(self.model_dump(mode="python"))
+
+
+def _apply_trade_correction(
+    state: EffectiveTradeState,
+    correction_type: str,
+    replacement: dict[str, Any],
+) -> EffectiveTradeState:
+    if state.reversed:
+        raise ValueError("reversed trade is terminal")
+    if correction_type == "REVERSE":
+        return state.model_copy(update={"reversed": True})
+    payload = state.model_dump(mode="python")
+    payload.update(replacement)
+    return EffectiveTradeState(**payload)
+
+
+class TradeCorrectionStep(V3Contract):
+    correction_type: str = Field(pattern=r"^(REVERSE|CORRECT)$")
+    replacement: dict[str, Any] = Field(default_factory=dict)
+    previous_effective_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effective_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        correction_type: str,
+        replacement: dict[str, Any],
+        previous_state: EffectiveTradeState,
+    ) -> "TradeCorrectionStep":
+        effective = _apply_trade_correction(
+            previous_state, correction_type, replacement
+        )
+        return cls(
+            correction_type=correction_type,
+            replacement=replacement,
+            previous_effective_hash=previous_state.effective_hash,
+            effective_hash=effective.effective_hash,
+        )
+
+
+def apply_trade_correction_chain(
+    original: EffectiveTradeState,
+    corrections: tuple[TradeCorrectionStep, ...],
+) -> EffectiveTradeState:
+    effective = original
+    for correction in corrections:
+        if correction.previous_effective_hash != effective.effective_hash:
+            raise ValueError("trade correction previous effective hash mismatch")
+        effective = _apply_trade_correction(
+            effective, correction.correction_type, correction.replacement
+        )
+        if correction.effective_hash != effective.effective_hash:
+            raise ValueError("trade correction effective hash mismatch")
+    return effective
+
+
 class OpeningPositionCreate(V3Contract):
     opening_position_id: UUID = Field(default_factory=uuid4)
     account_id: UUID
@@ -120,6 +187,29 @@ class TradeCorrectionCreate(V3Contract):
     replacement: dict[str, Any] = Field(default_factory=dict)
     reason: str = Field(min_length=1, max_length=1024)
     confirmed_by: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_replacement(self) -> "TradeCorrectionCreate":
+        allowed = {"side", "quantity", "price", "fee"}
+        unsupported = sorted(set(self.replacement) - allowed)
+        if unsupported:
+            raise ValueError(
+                f"unsupported correction fields: {', '.join(unsupported)}"
+            )
+        if self.correction_type == "REVERSE":
+            if self.replacement:
+                raise ValueError("replacement must be empty for REVERSE")
+            return self
+        if not self.replacement:
+            raise ValueError("replacement must not be empty for CORRECT")
+        probe = {
+            "side": self.replacement.get("side", TradeSide.BUY),
+            "quantity": self.replacement.get("quantity", Decimal("1")),
+            "price": self.replacement.get("price", Decimal("1")),
+            "fee": self.replacement.get("fee", Decimal("0")),
+        }
+        EffectiveTradeState(**probe)
+        return self
 
 
 class ReconciliationCreate(V3Contract):

@@ -41,7 +41,15 @@ from app.v3.domain.performance import (
     PerformanceAttributionCreate,
     ReplayRunCreate,
 )
-from app.v3.domain.portfolio import PositionProjection, TradeDraftCreate, TradeSide
+from app.v3.domain.portfolio import (
+    EffectiveTradeState,
+    PositionProjection,
+    TradeCorrectionCreate,
+    TradeCorrectionStep,
+    TradeDraftCreate,
+    TradeSide,
+    apply_trade_correction_chain,
+)
 from app.v3.domain.strategy import (
     ActorType,
     ExperimentEventCommand,
@@ -61,6 +69,76 @@ AGENT = AgentIdentity(
     provider=AgentProvider.OPENAI,
     model="acceptance-fixture",
 )
+
+
+def test_phase8_trade_corrections_apply_partial_patches_cumulatively() -> None:
+    original = EffectiveTradeState(
+        side=TradeSide.BUY,
+        quantity=Decimal("100"),
+        price=Decimal("10"),
+        fee=Decimal("5"),
+    )
+    quantity_patch = TradeCorrectionStep.build(
+        correction_type="CORRECT",
+        replacement={"quantity": "80"},
+        previous_state=original,
+    )
+    after_quantity = apply_trade_correction_chain(original, (quantity_patch,))
+    fee_patch = TradeCorrectionStep.build(
+        correction_type="CORRECT",
+        replacement={"fee": "4"},
+        previous_state=after_quantity,
+    )
+
+    effective = apply_trade_correction_chain(
+        original, (quantity_patch, fee_patch)
+    )
+
+    assert effective.quantity == Decimal("80")
+    assert effective.fee == Decimal("4")
+    assert effective.price == Decimal("10")
+    assert effective.reversed is False
+
+
+def test_phase8_trade_reverse_is_terminal_and_hash_chain_is_verified() -> None:
+    original = EffectiveTradeState(
+        side=TradeSide.BUY,
+        quantity=Decimal("100"),
+        price=Decimal("10"),
+        fee=Decimal("5"),
+    )
+    reverse = TradeCorrectionStep.build(
+        correction_type="REVERSE", replacement={}, previous_state=original
+    )
+    reversed_state = apply_trade_correction_chain(original, (reverse,))
+    assert reversed_state.reversed is True
+
+    later_patch = TradeCorrectionStep(
+        correction_type="CORRECT",
+        replacement={"fee": "4"},
+        previous_effective_hash=reversed_state.effective_hash,
+        effective_hash="0" * 64,
+    )
+    with pytest.raises(ValueError, match="reversed trade is terminal"):
+        apply_trade_correction_chain(original, (reverse, later_patch))
+
+    tampered = reverse.model_copy(update={"previous_effective_hash": "f" * 64})
+    with pytest.raises(ValueError, match="previous effective hash"):
+        apply_trade_correction_chain(original, (tampered,))
+
+
+def test_phase8_trade_correction_contract_rejects_ambiguous_patch() -> None:
+    with pytest.raises(ValidationError, match="replacement must be empty"):
+        TradeCorrectionCreate(
+            trade_id=uuid4(), correction_type="REVERSE",
+            replacement={"fee": "1"}, reason="reverse", confirmed_by="human",
+        )
+    with pytest.raises(ValidationError, match="unsupported correction fields"):
+        TradeCorrectionCreate(
+            trade_id=uuid4(), correction_type="CORRECT",
+            replacement={"trade_time": NOW.isoformat()},
+            reason="bad patch", confirmed_by="human",
+        )
 
 
 def envelope(

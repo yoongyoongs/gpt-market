@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.v3.domain.hashing import canonical_hash
 from app.v3.domain.portfolio import (
     AccountCreate,
+    EffectiveTradeState,
     OpeningPositionCreate,
     PortfolioAdjustmentCreate,
     PortfolioPreferenceCreate,
@@ -18,7 +19,9 @@ from app.v3.domain.portfolio import (
     ReconciliationCreate,
     TradeConfirm,
     TradeCorrectionCreate,
+    TradeCorrectionStep,
     TradeDraftCreate,
+    apply_trade_correction_chain,
 )
 from app.v3.infrastructure.db.models import (
     AccountModel,
@@ -242,15 +245,35 @@ class SQLAlchemyPortfolioRepository:
         return adjustment.portfolio_adjustment_id
 
     async def add_trade_correction(self, correction: TradeCorrectionCreate) -> UUID:
-        trade = await self._session.get(TradeLedgerModel, correction.trade_id)
+        trade = await self._session.get(
+            TradeLedgerModel, correction.trade_id, with_for_update=True
+        )
         if trade is None:
             raise RepositoryNotFoundError("trade not found")
+        existing = (
+            await self._session.scalars(
+                select(TradeCorrectionModel)
+                .where(TradeCorrectionModel.trade_id == correction.trade_id)
+                .order_by(TradeCorrectionModel.correction_sequence)
+            )
+        ).all()
+        effective = self._effective_trade_state(trade, existing)
+        if effective.reversed:
+            raise RepositoryConflictError("reversed trade is terminal")
+        step = TradeCorrectionStep.build(
+            correction_type=correction.correction_type,
+            replacement=correction.replacement,
+            previous_state=effective,
+        )
         payload = correction.model_dump(mode="json")
         self._session.add(TradeCorrectionModel(
             correction_id=correction.correction_id, trade_id=correction.trade_id,
             correction_type=correction.correction_type,
             replacement=correction.replacement, reason=correction.reason,
-            confirmed_by=correction.confirmed_by, content_hash=canonical_hash(payload),
+            confirmed_by=correction.confirmed_by,
+            previous_effective_hash=step.previous_effective_hash,
+            effective_hash=step.effective_hash,
+            content_hash=canonical_hash(payload),
         ))
         await self._session.flush()
         await self.rebuild_position(trade.account_id, trade.security_id)
@@ -295,18 +318,21 @@ class SQLAlchemyPortfolioRepository:
         ).order_by(TradeLedgerModel.ledger_sequence))).all()
         corrections = (await self._session.scalars(select(TradeCorrectionModel).where(
             TradeCorrectionModel.trade_id.in_([item.trade_id for item in trades])
-        ).order_by(TradeCorrectionModel.created_at))).all() if trades else []
-        correction_by_trade = {item.trade_id: item for item in corrections}
+        ).order_by(TradeCorrectionModel.correction_sequence))).all() if trades else []
+        corrections_by_trade: dict[UUID, list[TradeCorrectionModel]] = {}
+        for correction in corrections:
+            corrections_by_trade.setdefault(correction.trade_id, []).append(correction)
         for trade in trades:
             last_ledger = max(last_ledger, trade.ledger_sequence)
-            correction = correction_by_trade.get(trade.trade_id)
-            if correction is not None and correction.correction_type == "REVERSE":
+            effective = self._effective_trade_state(
+                trade, corrections_by_trade.get(trade.trade_id, [])
+            )
+            if effective.reversed:
                 continue
-            replacement = correction.replacement if correction is not None else {}
-            side = str(replacement.get("side", trade.side))
-            trade_quantity = Decimal(str(replacement.get("quantity", trade.quantity)))
-            trade_price = Decimal(str(replacement.get("price", trade.price)))
-            trade_fee = Decimal(str(replacement.get("fee", trade.fee)))
+            side = effective.side.value
+            trade_quantity = effective.quantity
+            trade_price = effective.price
+            trade_fee = effective.fee
             if side == "BUY":
                 quantity += trade_quantity
                 cost_basis += trade_price * trade_quantity + trade_fee
@@ -359,6 +385,33 @@ class SQLAlchemyPortfolioRepository:
                 setattr(existing, key, value)
         return {"account_id": account_id, "security_id": security_id, **values,
                 "projection_version": existing.projection_version}
+
+    @staticmethod
+    def _effective_trade_state(
+        trade: TradeLedgerModel,
+        corrections: list[TradeCorrectionModel],
+    ) -> EffectiveTradeState:
+        original = EffectiveTradeState(
+            side=trade.side,
+            quantity=trade.quantity,
+            price=trade.price,
+            fee=trade.fee,
+        )
+        steps = tuple(
+            TradeCorrectionStep(
+                correction_type=item.correction_type,
+                replacement=item.replacement,
+                previous_effective_hash=item.previous_effective_hash,
+                effective_hash=item.effective_hash,
+            )
+            for item in corrections
+        )
+        try:
+            return apply_trade_correction_chain(original, steps)
+        except ValueError as exc:
+            raise RepositoryConflictError(
+                f"invalid trade correction chain: {exc}"
+            ) from exc
 
     async def position(self, account_id: UUID, security_id: UUID):
         row = await self._session.get(PositionProjectionModel, (account_id, security_id))
