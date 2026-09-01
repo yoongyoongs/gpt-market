@@ -804,6 +804,34 @@ class UniverseDiffModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class OrchestratorJobRunModel(Base):
+    __tablename__ = "orchestrator_job_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('RUNNING','SUCCEEDED','FAILED','SKIPPED')", name="valid_status"),
+        CheckConstraint("attempt >= 1", name="positive_attempt"),
+        UniqueConstraint("content_hash", name="uq_orchestrator_job_runs_hash"),
+        UniqueConstraint("job_id", "idempotency_key", "attempt", name="uq_orchestrator_job_runs_job_key_attempt"),
+        Index("ix_orchestrator_job_runs_job_time", "job_id", "known_at"),
+        Index("ix_orchestrator_job_runs_orchestrator_run", "orchestrator_run_id"),
+        {"schema": V3_SCHEMA},
+    )
+
+    job_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    orchestrator_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class MarketDataIngestionRunModel(Base):
     __tablename__ = "market_data_ingestion_runs"
     __table_args__ = (

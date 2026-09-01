@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v3_dashboard import router
 from app.container import container
-from app.v3.domain.features import FeaturePage, MarketRegimeSnapshot
+from app.v3.domain.features import FeaturePage
 
 
 NOW = datetime(2026, 9, 1, 7, 30, tzinfo=timezone.utc)
