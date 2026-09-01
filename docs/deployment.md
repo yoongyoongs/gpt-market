@@ -127,6 +127,8 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 
 公网入口：`http://106.13.171.166/v3/dashboard`。页面只读取 PostgreSQL 中最新 Published Feature Run 与 Market Regime，不调用 Provider、不生成统一评分。2026-09-01 生产数据为 Universe `5,553/5,553`、Feature `5,551/5,553`，覆盖率 99.96%；两只三源均无历史数据的证券显式保留为 `UNAVAILABLE`。
 
+当前应用与 Worker 镜像：`gpt-market:main-31fffa9`。公网烟测 Health、V1 Quote、V2 Dashboard、V3 Dashboard、V3 Feature 和 Market Regime 均为 HTTP 200；切换前容器保留为停止态，可用于回滚。
+
 ## 2026-09-01 生产部署记录
 
 - Git 基线：`main@c25f6e4`；Phase 7–11 验收分支已快进合并并推送 `origin/main`。
