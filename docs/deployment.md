@@ -97,6 +97,15 @@ Web 与 MCP 只在最外层包装不同，业务 `data` 来自相同 Pydantic �
 
 ## V3 PostgreSQL 与 Worker
 
+生产构建建议使用明确提交标签，并让应用与 Worker 引用同一镜像：
+
+```bash
+docker build -t gpt-market:main-<commit> .
+APP_IMAGE=gpt-market:main-<commit> docker compose --profile v3-worker up -d --no-build market-mcp v3-market-worker
+```
+
+需要回滚时把 `APP_IMAGE` 改回上一个已验收标签并执行同一命令；PostgreSQL 数据卷不会随容器重建删除。
+
 V3 默认关闭，不影响现有 V1/V2。只有对应 Phase 已验收并明确批准启用时，才在服务器 `.env` 设置 `V3_ENABLED=true` 和真实 `V3_DATABASE_URL`。数据库密码只保存在服务器，不提交 Git。
 
 只启动 V3 PostgreSQL：

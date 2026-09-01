@@ -2,6 +2,7 @@ version: "3.4"
 
 services:
   market-mcp:
+    image: ${APP_IMAGE:-gpt-market:latest}
     build: .
     container_name: market-mcp
     restart: unless-stopped
@@ -46,6 +47,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   v3-market-worker:
+    image: ${APP_IMAGE:-gpt-market:latest}
     build: .
     container_name: gpt-market-v3-worker
     profiles:
