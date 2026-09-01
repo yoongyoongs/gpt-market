@@ -129,6 +129,8 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 
 当前应用与 Worker 镜像：`gpt-market:main-31fffa9`。公网烟测 Health、V1 Quote、V2 Dashboard、V3 Dashboard、V3 Feature 和 Market Regime 均为 HTTP 200；切换前容器保留为停止态，可用于回滚。
 
+当前服务器的 `V3_PHASE2_CONCURRENCY=4`。首次使用 16 并发回填时出现 PostgreSQL 连接池争用和公网超时，生产环境不得恢复为默认 16，除非先完成容量测试；修改前 `.env` 已保留备份。
+
 ## 2026-09-01 生产部署记录
 
 - Git 基线：`main@c25f6e4`；Phase 7–11 验收分支已快进合并并推送 `origin/main`。
