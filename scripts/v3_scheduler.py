@@ -24,6 +24,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.utils.time import SHANGHAI
+from app.v3.application.ingest_index_benchmarks import IngestIndexBenchmarksService
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.verify_position_projections import (
@@ -31,6 +32,7 @@ from app.v3.application.verify_position_projections import (
 )
 from app.v3.infrastructure.db.session import V3Database
 from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
+from app.providers.eastmoney import EastmoneyProvider
 from app.v3.infrastructure.providers.exchange_calendar import (
     ExchangeCalendarsAShareCalendar,
 )
@@ -89,6 +91,8 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
     def uow_factory() -> SQLAlchemyUnitOfWork:
         return SQLAlchemyUnitOfWork(database.sessions)
 
+    eastmoney = EastmoneyProvider(settings)
+
     async def market_data_handler(context) -> dict:
         report = await execute_market_job(
             build_job_parser().parse_args(["--mode", "all"])
@@ -127,6 +131,26 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             "coverage": str(run.coverage),
         }
 
+    async def index_benchmarks_handler(context) -> dict:
+        service = IngestIndexBenchmarksService(
+            context.uow_factory, eastmoney,
+            clock=lambda: context.as_of,
+        )
+        report = await service.execute()
+        published = sum(
+            item["status"] == "PUBLISHED" for item in report["benchmarks"].values()
+        )
+        failed = sum(
+            item["status"] == "FAILED" for item in report["benchmarks"].values()
+        )
+        if failed == len(report["benchmarks"]):
+            raise RuntimeError("all index benchmark ingestions failed")
+        return {
+            "status": report["status"],
+            "published_count": published,
+            "failed_count": failed,
+        }
+
     async def corporate_action_match_handler(context) -> dict:
         service = MatchCorporateActionsService(context.uow_factory)
         result = await service.execute(
@@ -149,7 +173,12 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
         (
             JobDefinition(job_id="market-data", handler=market_data_handler),
             JobDefinition(
-                job_id="features", handler=features_handler, depends_on=("market-data",)
+                job_id="index-benchmarks", handler=index_benchmarks_handler,
+                depends_on=("market-data",),
+            ),
+            JobDefinition(
+                job_id="features", handler=features_handler,
+                depends_on=("index-benchmarks",),
             ),
         ),
         advisory_lock_key="v3-scheduler-main",

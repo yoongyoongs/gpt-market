@@ -40,7 +40,9 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     main, maintenance, database = module.build_orchestrators(
         os.getenv("V3_TEST_DATABASE_URL", "postgresql+asyncpg://invalid")
     )
-    assert main.execution_order() == ("market-data", "features")
+    assert main.execution_order() == (
+        "market-data", "index-benchmarks", "features",
+    )
     assert maintenance.execution_order() == (
         "corporate-action-match",
         "projection-verify",

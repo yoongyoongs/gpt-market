@@ -1366,6 +1366,7 @@ class SQLAlchemyFeatureRepository:
         "volatility20": SecurityFeatureModel.volatility20,
         "amount": SecurityFeatureModel.amount,
         "volume_ratio_5d": SecurityFeatureModel.volume_ratio_5d,
+        "relative_index_strength": SecurityFeatureModel.relative_index_strength,
         "coverage": SecurityFeatureModel.coverage,
         "stale": SecurityFeatureModel.stale,
         "missing_fields": SecurityFeatureModel.missing_fields,

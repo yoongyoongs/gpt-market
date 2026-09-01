@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.domain.features import FeatureQuery
+from app.v3.domain.index_benchmark import (
+    IndexBenchmarkBar,
+    IndexBenchmarkRevision,
+    IndexBenchmarkRevisionContent,
+)
 from app.v3.domain.market_data import (
     AdjustType,
     BarPeriod,
@@ -223,8 +228,21 @@ async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> Non
             SecurityMember(code="000012", market=Market.SZ, name="pipe two"),
         ),
     ))
+    index_revision = IndexBenchmarkRevision.build(IndexBenchmarkRevisionContent(
+        revision_id=uuid4(), benchmark_code="HS300", source="fixture",
+        upstream_source="fixture",
+        fetch_time=NOW - timedelta(seconds=1), known_at=NOW - timedelta(seconds=1),
+        bars=tuple(
+            IndexBenchmarkBar(
+                bar_time=NOW - timedelta(days=60 - index),
+                close=3800 + index * 5 + (index % 4), amount=1e11,
+            )
+            for index in range(60)
+        ),
+    ))
     async with SQLAlchemyUnitOfWork(sessions) as uow:
         assert await uow.universes.publish(snapshot) is True
+        assert await uow.index_benchmarks.publish(index_revision) is True
         await uow.commit()
         targets = await uow.universes.targets(snapshot.snapshot_id)
         for seed, target in enumerate(targets):
@@ -270,11 +288,15 @@ async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> Non
     async with SQLAlchemyUnitOfWork(sessions) as uow:
         page = await uow.features.query(FeatureQuery(
             feature_run_id=UUID(by_job["features"]["metrics"]["feature_run_id"]),
-            fields=("features",), limit=5,
+            fields=("features", "relative_index_strength"), limit=5,
         ))
     assert page is not None and len(page.items) == 2
     assert all(
         item["features"]["weekly_trend_state"] == "UP" for item in page.items
+    )
+    # RC-04-02：指数基准 20 日收益已注入，相对指数强度可计算
+    assert all(
+        item["relative_index_strength"] is not None for item in page.items
     )
 
     # 第二次运行：特征 Run 零重复，Job 记录幂等跳过

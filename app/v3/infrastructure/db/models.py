@@ -832,6 +832,28 @@ class OrchestratorJobRunModel(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class IndexBenchmarkRevisionModel(Base):
+    """指数基准 Revision（RC-04-02）：独立于个股的 append-only 市场事实。"""
+
+    __tablename__ = "index_benchmark_revisions"
+    __table_args__ = (
+        CheckConstraint("status IN ('PUBLISHED')", name="valid_status"),
+        UniqueConstraint("content_hash", name="uq_index_benchmark_revisions_hash"),
+        Index("ix_index_benchmark_revisions_code_time", "benchmark_code", "known_at"),
+        {"schema": V3_SCHEMA},
+    )
+
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    benchmark_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    upstream_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    fetch_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    bars: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class MarketDataIngestionRunModel(Base):
     __tablename__ = "market_data_ingestion_runs"
     __table_args__ = (

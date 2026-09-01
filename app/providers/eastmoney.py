@@ -260,6 +260,50 @@ class EastmoneyProvider(MarketDataProvider):
 
         return await self.cache.get_or_set(f"index:{market}:{code}", 3, load)
 
+    async def get_index_kline(
+        self, code: str, market: str, period: str = "day", limit: int = 400
+    ) -> KlineResult:
+        """指数日 K：与 get_index_quote 相同的指数 secid 规则（RC-04-02）。
+
+        指数无复权概念，固定 fqt=0（raw）；用于 V3 指数基准事实摄取。
+        """
+        code = validate_code(code)
+        if market not in {"SH", "SZ"}:
+            raise ValueError("index market must be SH or SZ")
+        if period not in PERIOD_MAP:
+            raise ValueError(f"period must be one of {', '.join(PERIOD_MAP)}")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        secid = f"{1 if market == 'SH' else 0}.{code}"
+
+        async def load() -> KlineResult:
+            payload = await self._request(
+                self.kline_url,
+                {
+                    "secid": secid,
+                    "ut": QUOTE_UT,
+                    "klt": PERIOD_MAP[period],
+                    "fqt": 0,
+                    "lmt": limit,
+                    "end": "20500101",
+                    "fields1": "f1,f2,f3,f4,f5,f6",
+                    "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                },
+                require_key="klines",
+                attempts=self.settings.eastmoney_retries,
+            )
+            klines = parse_kline_rows(payload["data"].get("klines"))
+            if not klines:
+                raise ProviderEmptyDataError(
+                    f"eastmoney returned no {period} index kline for {code}"
+                )
+            return KlineResult(
+                code=code, period=period, klines=klines,
+                **self.quality_service.assess(klines[-1].timestamp),
+            )
+
+        return await self.cache.get_or_set(f"index-kline:{market}:{code}:{period}", 60, load)
+
     async def get_quotes(self, codes: list[str]) -> list[Quote]:
         unique = list(dict.fromkeys(validate_code(code) for code in codes))
         if len(unique) > 100:

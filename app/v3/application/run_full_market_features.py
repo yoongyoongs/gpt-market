@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from app.v3.application.calculate_features import CalculateSecurityFeatureService
+from app.v3.application.calculate_index_benchmark_return import (
+    CalculateIndexBenchmarkReturn,
+)
 from app.v3.application.calculate_market_regime import CalculateMarketRegimeService
 from app.v3.domain.features import FeatureRun, FeatureRunStatus
 from app.v3.domain.hashing import canonical_hash
@@ -17,6 +20,7 @@ class RunFullMarketFeaturesService:
         uow_factory: Callable[[], UnitOfWork],
         *,
         calculator: CalculateSecurityFeatureService | None = None,
+        index_benchmark_code: str = "HS300",
         regime_calculator: CalculateMarketRegimeService | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         batch_size: int = 100,
@@ -25,6 +29,8 @@ class RunFullMarketFeaturesService:
             raise ValueError("batch_size must be positive")
         self._uow_factory = uow_factory
         self._calculator = calculator or CalculateSecurityFeatureService()
+        self._index_return_calculator = CalculateIndexBenchmarkReturn()
+        self._index_benchmark_code = index_benchmark_code
         self._regime_calculator = regime_calculator or CalculateMarketRegimeService()
         self._clock = clock
         self._batch_size = batch_size
@@ -39,6 +45,15 @@ class RunFullMarketFeaturesService:
         started_at = self._clock()
         async with self._uow_factory() as uow:
             targets = await uow.universes.targets(universe_snapshot_id)
+        # RC-04-02：按同一 as_of 点时加载匹配的指数基准 revision，确定性
+        # 计算 20 日收益后传入 Calculator；基准缺失时保持 None 并显式记录。
+        async with self._uow_factory() as uow:
+            index_revision = await uow.index_benchmarks.latest(
+                self._index_benchmark_code, as_of=as_of
+            )
+        index_return = self._index_return_calculator.execute(
+            revision=index_revision, as_of=as_of
+        )
         features = []
         revision_manifest: list[tuple[str, str]] = []
         errors: dict[str, str] = {}
@@ -63,6 +78,7 @@ class RunFullMarketFeaturesService:
                     item = self._calculator.execute(
                         feature_run_id=UUID(int=0), revision=revision, as_of=as_of,
                         weekly_revision=weekly.get(revision.security_id),
+                        index_return_20d=index_return.return_20d,
                     )
                     features.append(item)
                     revision_manifest.append((str(revision.security_id), revision.content_hash))
@@ -101,6 +117,21 @@ class RunFullMarketFeaturesService:
                 "period": "DAY",
                 "revision_count": str(successful),
                 "revision_manifest_hash": manifest_hash,
+                "index_benchmark_code": self._index_benchmark_code,
+                "index_benchmark_revision_id": (
+                    str(index_return.revision_id) if index_return.revision_id else ""
+                ),
+                "index_benchmark_known_at": (
+                    index_return.known_at.isoformat() if index_return.known_at else ""
+                ),
+                "index_benchmark_source": index_return.source or "",
+                "index_benchmark_calculation_version": (
+                    index_return.calculation_version
+                ),
+                "index_benchmark_return_20d": (
+                    "" if index_return.return_20d is None
+                    else repr(index_return.return_20d)
+                ),
             },
             error_summary={"count": len(errors), "errors": errors},
             started_at=started_at,

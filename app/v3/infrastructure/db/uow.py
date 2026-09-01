@@ -23,6 +23,7 @@ from app.v3.infrastructure.db.decision_repositories import (
 )
 from app.v3.infrastructure.db.portfolio_repositories import SQLAlchemyPortfolioRepository
 from app.v3.infrastructure.db.orchestrator_repositories import SQLAlchemyOrchestratorJobRunRepository
+from app.v3.infrastructure.db.index_benchmark_repositories import SQLAlchemyIndexBenchmarkRepository
 from app.v3.infrastructure.db.action_repositories import SQLAlchemyActionRepository
 from app.v3.infrastructure.db.performance_repositories import SQLAlchemyPerformanceRepository
 from app.v3.infrastructure.db.strategy_repositories import SQLAlchemyStrategyRepository
@@ -57,6 +58,7 @@ class SQLAlchemyUnitOfWork:
         self.performance = SQLAlchemyPerformanceRepository(self._session)
         self.strategies = SQLAlchemyStrategyRepository(self._session)
         self.orchestrator = SQLAlchemyOrchestratorJobRunRepository(self._session)
+        self.index_benchmarks = SQLAlchemyIndexBenchmarkRepository(self._session)
         return self
 
     async def __aexit__(
