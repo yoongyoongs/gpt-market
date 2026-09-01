@@ -108,6 +108,22 @@ curl 'http://127.0.0.1:8000/scan?top_n=30'
 curl 'http://127.0.0.1:8000/scan/v2?top_n=30&pool_size=420'
 ```
 
+统一测试入口：
+
+```bash
+# 全量离线测试；联网用例和未配置的 PostgreSQL 用例会明确 skip
+python scripts/test_suite.py local
+
+# 只运行 V3 测试
+python scripts/test_suite.py v3
+
+# 仅允许显式测试库；脚本先迁移到 head，再运行全部 V3 测试
+V3_TEST_DATABASE_URL='postgresql+asyncpg://用户:密码@127.0.0.1:5432/gpt_market_test' \
+  python scripts/test_suite.py v3-postgres
+```
+
+第三个命令会修改指定数据库，只能传入可丢弃的测试库，禁止填写生产库。
+
 ## 配置
 
 | 变量 | 默认 | 说明 |

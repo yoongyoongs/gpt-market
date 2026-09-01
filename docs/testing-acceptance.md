@@ -22,8 +22,23 @@
 ## 3. 本地确定性测试
 
 ```bash
-python -m pytest -q
+python scripts/test_suite.py local
 ```
+
+该入口始终复用当前 Python 解释器，并统一工作目录；缺少 `V3_TEST_DATABASE_URL` 时 PostgreSQL 用例会给出明确 skip 原因。只运行 V3 离线测试可使用：
+
+```bash
+python scripts/test_suite.py v3
+```
+
+使用可丢弃 PostgreSQL 测试库执行 Migration Head 与全部 V3 测试：
+
+```bash
+V3_TEST_DATABASE_URL='postgresql+asyncpg://用户:密码@127.0.0.1:5432/gpt_market_test' \
+  python scripts/test_suite.py v3-postgres
+```
+
+`v3-postgres` 会修改指定数据库，脚本拒绝在变量缺失时运行，禁止指向生产数据库。
 
 联网用例默认跳过。当前基线为：
 
