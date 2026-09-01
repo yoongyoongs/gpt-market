@@ -136,6 +136,7 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
     coverage = float(quality.get("coverage", 0))
     successful = int(quality.get("successful_count", 0))
     failed = int(quality.get("failed_count", 0))
+    expected = successful + failed
     stale_count = sum(1 for item in page.items if item.get("stale"))
     sort_options = "".join(
         f'<option value="{item.value}"{" selected" if item is sort_by else ""}>{escape(label)}</option>'
@@ -182,11 +183,11 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
 <section class="card hero"><div><span class="badge">V3 READ-ONLY</span><h1 style="margin-top:8px">V3 全市场行情特征看板</h1>
 <p class="subtitle">展示不可变 Feature Run 的事实特征；当前排序不是统一评分，也不构成投资建议。</p></div>
 <div class="meta">数据时点：{_text(page.as_of.isoformat())}<br>Feature Version：{_text(page.feature_version)}<br>Run ID：{_text(page.feature_run_id)}</div></section>
-<div class="stats"><section class="card stat"><span>证券总数</span><strong>{page.total_count:,}</strong></section>
+<div class="stats"><section class="card stat"><span>本轮证券总数</span><strong>{expected:,}</strong></section>
 <section class="card stat"><span>成功</span><strong>{successful:,}</strong></section><section class="card stat"><span>失败</span><strong>{failed:,}</strong></section>
 <section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页陈旧</span><strong>{stale_count}</strong></section></div>
 {regime_html}
-<section class="card section"><div class="section-head"><div><h2>全市场事实特征</h2><p class="subtitle">当前按“{escape(SORT_LABELS[sort_by])}”{'降序' if descending else '升序'}展示，最多读取 100 条。</p></div>
+<section class="card section"><div class="section-head"><div><h2>全市场事实特征</h2><p class="subtitle">筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”{'降序' if descending else '升序'}展示，最多读取 100 条。</p></div>
 <form class="controls" method="get"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
 <select name="descending">{direction_options}</select><input name="limit" type="number" min="20" max="100" value="{limit}" aria-label="显示数量"><button type="submit">应用</button></form></div>
 <div class="table-wrap"><table><thead><tr><th class="num">#</th><th>市场</th><th>代码</th><th>名称</th><th class="num">收盘价</th><th class="num">3日</th><th class="num">5日</th><th class="num">20日</th><th class="num">60日</th><th class="num">60日位置</th><th class="num">5日量比</th><th class="num">ATR%</th><th class="num">成交额</th><th class="num">覆盖</th><th>状态</th><th>缺失字段</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>

@@ -82,7 +82,7 @@ def _page():
         ),
         quality_summary={
             "coverage": 0.998,
-            "successful_count": 5540,
+            "successful_count": 5542,
             "failed_count": 11,
             "errors": {},
         },
@@ -102,6 +102,7 @@ def test_dashboard_renders_read_only_feature_facts(monkeypatch):
     assert response.headers["cache-control"].startswith("no-store")
     assert "V3 全市场行情特征看板" in response.text
     assert "5,551" in response.text
+    assert "筛选后可查询 5,551 条" in response.text
     assert "603019" in response.text
     assert "中科曙光&lt;script&gt;" in response.text
     assert "不是统一评分" in response.text
