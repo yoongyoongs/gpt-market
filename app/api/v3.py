@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.container import container
 from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
 from app.v3.application.release_resolver import ReleaseResolver
+from app.v3.application.read_operations import ReadOperationsService
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -632,6 +633,73 @@ async def resolve_release():
         _uow, v3_enabled=container.v3.enabled,
     )
     return await resolver.resolve()
+
+
+@router.get("/portfolio")
+async def read_portfolio(limit: int = 100):
+    """RC-08B READ：账户与持仓投影（只读）。"""
+    return await ReadOperationsService(_uow).portfolio_overview(limit)
+
+
+@router.get("/portfolio/{code}/reviews")
+async def read_position_reviews(code: str, limit: int = 100):
+    """RC-08B READ：按证券代码查 Position Review 历史（只读）。"""
+    return await ReadOperationsService(_uow).position_reviews_by_code(code, limit)
+
+
+@router.get("/portfolio/{code}/adjustments")
+async def read_portfolio_adjustments(code: str, limit: int = 100):
+    """RC-08B READ：按证券代码查持仓调整事实（只读）。"""
+    return await ReadOperationsService(_uow).adjustments_by_code(code, limit)
+
+
+@router.get("/portfolio/preferences")
+@router.get("/portfolio-preferences")
+async def read_portfolio_preferences(limit: int = 100):
+    """RC-08B READ：组合偏好版本（只读）。"""
+    return await ReadOperationsService(_uow).preferences(limit)
+
+
+@router.get("/entry-plans/{entry_plan_id}/versions")
+async def read_entry_plan_versions(entry_plan_id: UUID):
+    """RC-08B READ：EntryPlan 版本链（同 decision 全版本，只读）。"""
+    return await ReadOperationsService(_uow).entry_plan_versions(entry_plan_id)
+
+
+@router.get("/watchlist/changes")
+async def read_watchlist_changes(limit: int = 100):
+    """RC-08B READ：Watchlist 事件历史（append-only，只读）。"""
+    return await ReadOperationsService(_uow).watchlist_changes(limit)
+
+
+@router.get("/decisions")
+async def read_decisions(limit: int = 100):
+    """RC-08B READ：决策列表（immutable 投影，只读）。"""
+    return await ReadOperationsService(_uow).decisions(limit)
+
+
+@router.get("/reviews")
+async def read_reviews(limit: int = 100):
+    """RC-08B READ：决策 Review 历史（只读）。"""
+    return await ReadOperationsService(_uow).reviews(limit)
+
+
+@router.get("/market-reviews")
+async def read_market_reviews(limit: int = 100):
+    """RC-08B READ：市场 Review 历史（只读）。"""
+    return await ReadOperationsService(_uow).market_reviews(limit)
+
+
+@router.get("/performance")
+async def read_performance(limit: int = 100):
+    """RC-08B READ：绩效 attribution/summary 事实（只读）。"""
+    return await ReadOperationsService(_uow).performance(limit)
+
+
+@router.get("/health/data-quality")
+async def read_data_quality():
+    """RC-08B READ：数据质量事实（最新 feature run 覆盖率/状态 + 最新 bar revision known_at，只读）。"""
+    return await ReadOperationsService(_uow).data_quality()
 
 
 @router.post("/performance/recall-miss-runs")
