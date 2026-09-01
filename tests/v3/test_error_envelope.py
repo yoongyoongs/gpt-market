@@ -88,3 +88,18 @@ def test_v3_validation_error_from_pydantic_body() -> None:
     assert body["code"] == "V3_VALIDATION"
     assert body["details"]
     assert "source" not in body
+
+
+async def test_unknown_v3_route_returns_envelope_404() -> None:
+    """路由级 404（starlette HTTPException 父类）也必须走 V3 envelope。"""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import api
+
+    transport = ASGITransport(app=api)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v3/definitely-not-a-route")
+    assert response.status_code == 404
+    body = response.json()
+    assert body["code"] == "V3_NOT_FOUND"
+    assert "detail" not in body

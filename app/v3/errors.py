@@ -12,7 +12,8 @@ V3AuthMiddleware 直接产出同构 envelope)、Internal error(500)。
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.utils.time import now_shanghai
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -76,8 +77,8 @@ def register_v3_error_envelope(api: FastAPI) -> None:
             message=str(exc) or "conflict",
         )
 
-    @api.exception_handler(HTTPException)
-    async def _http_exception(request: Request, exc: HTTPException):
+    @api.exception_handler(StarletteHTTPException)
+    async def _http_exception(request: Request, exc: StarletteHTTPException):
         if not is_v3_path(request):
             return None
         code = {
