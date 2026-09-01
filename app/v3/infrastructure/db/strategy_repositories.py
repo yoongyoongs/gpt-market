@@ -44,6 +44,24 @@ class SQLAlchemyStrategyRepository:
         self._session = session
 
     async def add_strategy_version(self, command: StrategyVersionCreate) -> UUID:
+        existing = await self._session.scalar(select(StrategyVersionModel).where(
+            StrategyVersionModel.strategy_code == command.strategy_code,
+            StrategyVersionModel.version == command.version,
+        ))
+        if existing is not None:
+            # 幂等重放：同 code+version 同内容 → 返回原 id；内容不同 → 明确冲突
+            same = (
+                existing.configuration == command.configuration
+                and existing.rationale == command.rationale
+                and existing.created_by == command.created_by
+                and existing.supersedes_strategy_version_id
+                == command.supersedes_strategy_version_id
+            )
+            if not same:
+                raise RepositoryConflictError(
+                    "strategy version identity exists with different content"
+                )
+            return existing.strategy_version_id
         if command.version > 1:
             previous = await self._session.get(
                 StrategyVersionModel, command.supersedes_strategy_version_id
@@ -113,6 +131,13 @@ class SQLAlchemyStrategyRepository:
         latest = await self._session.scalar(select(StrategyExperimentEventModel).where(
             StrategyExperimentEventModel.experiment_id == experiment_id
         ).order_by(StrategyExperimentEventModel.sequence.desc()).limit(1))
+        if latest is not None and (
+            latest.event_type == command.event_type
+            and latest.actor_id == command.actor_id
+            and latest.reason == command.reason
+        ):
+            # 幂等重放：与最新事件完全一致的重复请求 → 返回原事件 id
+            return latest.event_id
         current = latest.event_type if latest else "CREATED"
         allowed = {
             "CREATED": {"STARTED", "STOPPED"},
@@ -422,13 +447,25 @@ class SQLAlchemyStrategyRepository:
         return event_id
 
     async def add_health_event(self, command: OperationalHealthEventCreate) -> dict:
+        payload = command.model_dump(mode="json")
+        payload.pop("health_event_id")
+        identity_hash = canonical_hash(payload)
+        existing = await self._session.scalar(
+            select(OperationalHealthEventModel).where(
+                OperationalHealthEventModel.content_hash == identity_hash
+            )
+        )
+        if existing is not None:
+            # 幂等重放：同一健康事件重复上报 → 返回原 id
+            return {"health_event_id": existing.health_event_id,
+                    "automatic_rollback_event_id": None}
         self._session.add(OperationalHealthEventModel(
             health_event_id=command.health_event_id, environment=command.environment,
             component=command.component,
             capability=command.capability, status=command.status,
             latency_ms=command.latency_ms, error_type=command.error_type,
             circuit_state=command.circuit_state, observed_at=command.observed_at,
-            metadata_payload=command.metadata, content_hash=content_hash(command),
+            metadata_payload=command.metadata, content_hash=identity_hash,
         ))
         rollback_event_id = None
         state = await self._release_state(command.environment, lock=True)

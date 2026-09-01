@@ -198,6 +198,20 @@ class SQLAlchemyPortfolioRepository:
 
     async def add_opening_position(self, opening: OpeningPositionCreate) -> UUID:
         content = opening.model_dump(mode="json")
+        content.pop("opening_position_id")
+        identity_hash = canonical_hash(content)
+        existing = await self._session.scalar(select(OpeningPositionModel).where(
+            OpeningPositionModel.account_id == opening.account_id,
+            OpeningPositionModel.security_id == opening.security_id,
+            OpeningPositionModel.baseline_time == opening.baseline_time,
+        ))
+        if existing is not None:
+            # 幂等重放：同业务身份同内容 → 返回原 id；内容不同 → 明确冲突
+            if existing.content_hash != identity_hash:
+                raise RepositoryConflictError(
+                    "opening position with same identity has different content"
+                )
+            return existing.opening_position_id
         self._session.add(OpeningPositionModel(
             opening_position_id=opening.opening_position_id,
             account_id=opening.account_id, security_id=opening.security_id,
@@ -205,7 +219,7 @@ class SQLAlchemyPortfolioRepository:
             average_cost=opening.average_cost, source=opening.source,
             confirmed_by=opening.confirmed_by,
             evidence_ids=[str(item) for item in opening.evidence_ids],
-            content_hash=canonical_hash(content),
+            content_hash=identity_hash,
         ))
         await self._session.flush()
         await self.rebuild_position(opening.account_id, opening.security_id)
@@ -213,6 +227,15 @@ class SQLAlchemyPortfolioRepository:
 
     async def add_adjustment(self, adjustment: PortfolioAdjustmentCreate) -> UUID:
         payload = adjustment.model_dump(mode="json")
+        identity_hash = canonical_hash({
+            key: value for key, value in payload.items()
+            if key != "portfolio_adjustment_id"
+        })
+        existing = await self._session.scalar(select(PortfolioAdjustmentModel).where(
+            PortfolioAdjustmentModel.content_hash == identity_hash
+        ))
+        if existing is not None:
+            return existing.portfolio_adjustment_id
         confirmed_at = datetime.now(timezone.utc) if adjustment.confirmation_status.value == "CONFIRMED" else None
         self._session.add(PortfolioAdjustmentModel(
             portfolio_adjustment_id=adjustment.portfolio_adjustment_id,
@@ -227,7 +250,7 @@ class SQLAlchemyPortfolioRepository:
             confirmation_status=adjustment.confirmation_status.value,
             confirmed_by=adjustment.confirmed_by, confirmed_at=confirmed_at,
             supersedes_adjustment_id=adjustment.supersedes_adjustment_id,
-            content_hash=canonical_hash(payload),
+            content_hash=identity_hash,
         ))
         await self._session.flush()
         if adjustment.confirmation_status.value == "CONFIRMED":
@@ -235,6 +258,16 @@ class SQLAlchemyPortfolioRepository:
         return adjustment.portfolio_adjustment_id
 
     async def add_trade_correction(self, correction: TradeCorrectionCreate) -> UUID:
+        payload = correction.model_dump(mode="json")
+        identity_hash = canonical_hash({
+            key: value for key, value in payload.items() if key != "correction_id"
+        })
+        duplicate = await self._session.scalar(select(TradeCorrectionModel).where(
+            TradeCorrectionModel.content_hash == identity_hash
+        ))
+        if duplicate is not None:
+            # 幂等重放：同一笔修正内容重复提交 → 返回原 correction_id
+            return duplicate.correction_id
         trade = await self._session.get(
             TradeLedgerModel, correction.trade_id, with_for_update=True
         )
@@ -263,7 +296,7 @@ class SQLAlchemyPortfolioRepository:
             confirmed_by=correction.confirmed_by,
             previous_effective_hash=step.previous_effective_hash,
             effective_hash=step.effective_hash,
-            content_hash=canonical_hash(payload),
+            content_hash=identity_hash,
         ))
         await self._session.flush()
         await self.rebuild_position(trade.account_id, trade.security_id)
@@ -271,6 +304,15 @@ class SQLAlchemyPortfolioRepository:
 
     async def add_reconciliation(self, command: ReconciliationCreate) -> UUID:
         payload = command.model_dump(mode="json")
+        identity_hash = canonical_hash({
+            key: value for key, value in payload.items()
+            if key != "reconciliation_id"
+        })
+        existing = await self._session.scalar(select(ReconciliationModel).where(
+            ReconciliationModel.content_hash == identity_hash
+        ))
+        if existing is not None:
+            return existing.reconciliation_id
         self._session.add(ReconciliationModel(
             reconciliation_id=command.reconciliation_id,
             account_id=command.account_id, security_id=command.security_id,
@@ -279,7 +321,7 @@ class SQLAlchemyPortfolioRepository:
             difference=command.difference, reason=command.reason,
             resolution=command.resolution,
             evidence_ids=[str(item) for item in command.evidence_ids],
-            confirmed_by=command.confirmed_by, content_hash=canonical_hash(payload),
+            confirmed_by=command.confirmed_by, content_hash=identity_hash,
         ))
         return command.reconciliation_id
 
