@@ -63,6 +63,7 @@ from app.v3.domain.market_data import (
     BarSeriesRevision,
     BarSeriesRevisionContent,
     CorporateAction,
+    CorporateActionType,
     IngestionRunStatus,
     Market,
     MarketBar,
@@ -3216,6 +3217,39 @@ class SQLAlchemyCorporateActionRepository:
             )
         ).scalar_one_or_none()
         return inserted is not None
+
+    async def effective_between(
+        self, effective_from: datetime, effective_to: datetime
+    ) -> list[CorporateAction]:
+        rows = (
+            await self._session.scalars(
+                select(CorporateActionModel)
+                .where(
+                    CorporateActionModel.effective_time >= effective_from,
+                    CorporateActionModel.effective_time <= effective_to,
+                )
+                .order_by(CorporateActionModel.known_at, CorporateActionModel.corporate_action_id)
+            )
+        ).all()
+        return [
+            CorporateAction(
+                corporate_action_id=row.corporate_action_id,
+                security_id=row.security_id,
+                action_type=CorporateActionType(row.action_type),
+                announcement_time=row.announcement_time,
+                record_time=row.record_time,
+                effective_time=row.effective_time,
+                payload=row.payload,
+                source=row.source,
+                source_reference=row.source_reference,
+                evidence_id=row.evidence_id,
+                fetch_time=row.fetch_time,
+                known_at=row.known_at,
+                supersedes_action_id=row.supersedes_action_id,
+                content_hash=row.content_hash,
+            )
+            for row in rows
+        ]
 
 
 class SQLAlchemyIngestionRunRepository:

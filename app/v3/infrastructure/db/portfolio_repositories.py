@@ -293,35 +293,95 @@ class SQLAlchemyPortfolioRepository:
         return command.preference_id
 
     async def rebuild_position(self, account_id: UUID, security_id: UUID) -> dict[str, Any]:
+        opening, trades, corrections, adjustments = await self._load_replay_inputs(
+            account_id, security_id
+        )
+        values = self._replay_values(opening, trades, corrections, adjustments)
+        if values["quantity"] < 0:
+            raise RepositoryConflictError("ledger replay produced a negative position")
+        last_ledger = max(
+            (item.ledger_sequence for item in trades), default=0,
+        )
+        last_adjustment = max(
+            (item.adjustment_sequence for item in adjustments), default=0,
+        )
+        existing = await self._session.get(
+            PositionProjectionModel, (account_id, security_id), with_for_update=True
+        )
+        inputs = {
+            "opening": str(opening.content_hash) if opening else None,
+            "trades": [item.content_hash for item in trades],
+            "corrections": [item.content_hash for item in corrections],
+            "adjustments": [item.content_hash for item in adjustments],
+        }
+        values.update(
+            last_ledger_sequence=last_ledger,
+            last_adjustment_sequence=last_adjustment,
+            rebuilt_at=datetime.now(timezone.utc), input_hash=canonical_hash(inputs),
+        )
+        if existing is None:
+            existing = PositionProjectionModel(
+                account_id=account_id, security_id=security_id,
+                projection_version=1, **values,
+            )
+            self._session.add(existing)
+        else:
+            existing.projection_version += 1
+            for key, value in values.items():
+                setattr(existing, key, value)
+        return {"account_id": account_id, "security_id": security_id, **values,
+                "projection_version": existing.projection_version}
+
+    async def replay_position_values(self, account_id: UUID, security_id: UUID) -> dict[str, Any]:
+        """只读重放计算，供 Projection Verify Job 使用；不写任何数据、不做负持仓断言。"""
+        opening, trades, corrections, adjustments = await self._load_replay_inputs(
+            account_id, security_id
+        )
+        return self._replay_values(opening, trades, corrections, adjustments)
+
+    async def _load_replay_inputs(self, account_id: UUID, security_id: UUID):
         opening = await self._session.scalar(select(OpeningPositionModel).where(
             OpeningPositionModel.account_id == account_id,
             OpeningPositionModel.security_id == security_id,
         ).order_by(OpeningPositionModel.baseline_time.desc()).limit(1))
-        quantity = opening.quantity if opening else Decimal("0")
-        cost_basis = quantity * opening.average_cost if opening else Decimal("0")
-        cash_impact = Decimal("0")
-        realized_pnl = Decimal("0")
-        last_ledger = 0
         trade_filters = [
             TradeLedgerModel.account_id == account_id,
             TradeLedgerModel.security_id == security_id,
         ]
+        adjustment_filters = [
+            PortfolioAdjustmentModel.account_id == account_id,
+            PortfolioAdjustmentModel.security_id == security_id,
+            PortfolioAdjustmentModel.confirmation_status == "CONFIRMED",
+        ]
         if opening is not None:
-            # Opening baseline 覆盖 baseline_time（含）之前的全部成交；
-            # 同一时刻 Tie-break：trade_time == baseline_time 归属基准，不重复重放。
+            # Opening baseline 覆盖 baseline_time（含）之前的全部成交与 Adjustment；
+            # 同一时刻 Tie-break：生效时刻 == baseline_time 归属基准，不重复重放。
             trade_filters.append(TradeLedgerModel.trade_time > opening.baseline_time)
+            adjustment_filters.append(
+                PortfolioAdjustmentModel.effective_time > opening.baseline_time
+            )
         trades = (await self._session.scalars(select(TradeLedgerModel).where(
             *trade_filters
         ).order_by(TradeLedgerModel.ledger_sequence))).all()
         corrections = (await self._session.scalars(select(TradeCorrectionModel).where(
             TradeCorrectionModel.trade_id.in_([item.trade_id for item in trades])
         ).order_by(TradeCorrectionModel.correction_sequence))).all() if trades else []
+        adjustments = (await self._session.scalars(select(PortfolioAdjustmentModel).where(
+            *adjustment_filters
+        ).order_by(PortfolioAdjustmentModel.adjustment_sequence))).all()
+        return opening, trades, corrections, adjustments
+
+    @staticmethod
+    def _replay_values(opening, trades, corrections, adjustments) -> dict[str, Any]:
+        quantity = opening.quantity if opening else Decimal("0")
+        cost_basis = quantity * opening.average_cost if opening else Decimal("0")
+        cash_impact = Decimal("0")
+        realized_pnl = Decimal("0")
         corrections_by_trade: dict[UUID, list[TradeCorrectionModel]] = {}
         for correction in corrections:
             corrections_by_trade.setdefault(correction.trade_id, []).append(correction)
         for trade in trades:
-            last_ledger = max(last_ledger, trade.ledger_sequence)
-            effective = self._effective_trade_state(
+            effective = SQLAlchemyPortfolioRepository._effective_trade_state(
                 trade, corrections_by_trade.get(trade.trade_id, [])
             )
             if effective.reversed:
@@ -340,48 +400,15 @@ class SQLAlchemyPortfolioRepository:
                 cost_basis -= average * trade_quantity
                 quantity -= trade_quantity
                 cash_impact += trade_price * trade_quantity - trade_fee
-        last_adjustment = 0
-        adjustments = (await self._session.scalars(select(PortfolioAdjustmentModel).where(
-            PortfolioAdjustmentModel.account_id == account_id,
-            PortfolioAdjustmentModel.security_id == security_id,
-            PortfolioAdjustmentModel.confirmation_status == "CONFIRMED",
-        ).order_by(PortfolioAdjustmentModel.adjustment_sequence))).all()
         for item in adjustments:
-            last_adjustment = max(last_adjustment, item.adjustment_sequence)
             quantity += item.quantity_delta
             cost_basis += item.cost_basis_delta
             cash_impact += item.cash_delta
-        if quantity < 0:
-            raise RepositoryConflictError("ledger replay produced a negative position")
         average_cost = cost_basis / quantity if quantity else Decimal("0")
-        existing = await self._session.get(
-            PositionProjectionModel, (account_id, security_id), with_for_update=True
-        )
-        inputs = {
-            "opening": str(opening.content_hash) if opening else None,
-            "trades": [item.content_hash for item in trades],
-            "corrections": [item.content_hash for item in corrections],
-            "adjustments": [item.content_hash for item in adjustments],
-        }
-        values = dict(
+        return dict(
             quantity=quantity, cost_basis=cost_basis, average_cost=average_cost,
             cash_impact=cash_impact, realized_pnl=realized_pnl,
-            last_ledger_sequence=last_ledger,
-            last_adjustment_sequence=last_adjustment,
-            rebuilt_at=datetime.now(timezone.utc), input_hash=canonical_hash(inputs),
         )
-        if existing is None:
-            existing = PositionProjectionModel(
-                account_id=account_id, security_id=security_id,
-                projection_version=1, **values,
-            )
-            self._session.add(existing)
-        else:
-            existing.projection_version += 1
-            for key, value in values.items():
-                setattr(existing, key, value)
-        return {"account_id": account_id, "security_id": security_id, **values,
-                "projection_version": existing.projection_version}
 
     @staticmethod
     def _effective_trade_state(
@@ -415,6 +442,29 @@ class SQLAlchemyPortfolioRepository:
         if row is None:
             return None
         return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+    async def holdings(self, security_id: UUID) -> dict[UUID, Decimal]:
+        """当前持有该证券的账户及其数量（Projection 数量非 0）。"""
+        rows = (await self._session.scalars(select(PositionProjectionModel).where(
+            PositionProjectionModel.security_id == security_id,
+            PositionProjectionModel.quantity != 0,
+        ))).all()
+        return {row.account_id: row.quantity for row in rows}
+
+    async def has_adjustment_for_action(
+        self, account_id: UUID, security_id: UUID, corporate_action_id: UUID
+    ) -> bool:
+        return await self._session.scalar(select(
+            PortfolioAdjustmentModel.portfolio_adjustment_id
+        ).where(
+            PortfolioAdjustmentModel.account_id == account_id,
+            PortfolioAdjustmentModel.security_id == security_id,
+            PortfolioAdjustmentModel.corporate_action_id == corporate_action_id,
+        ).limit(1)) is not None
+
+    async def projection_keys(self) -> list[tuple[UUID, UUID]]:
+        rows = (await self._session.scalars(select(PositionProjectionModel))).all()
+        return [(row.account_id, row.security_id) for row in rows]
 
     async def position_context(
         self, account_id: UUID, code: str, market: str | None = None,
