@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field, field_validator
 
 from app.v3.contracts.base import V3Contract, require_aware
+from app.v3.application.deterministic_replay import DeterministicReplayService
 from app.v3.domain.performance import (
     PerformanceAbility,
     PerformanceAttributionCreate,
@@ -42,10 +43,8 @@ class PerformanceService:
         return {"attribution_id": object_id, "ability": command.ability}
 
     async def replay(self, command: ReplayRunCreate):
-        async with self._uow_factory() as uow:
-            result = await uow.performance.run_replay(command)
-            await uow.commit()
-        return result
+        # RC-06B：真实 Replay Engine（Gate → server deterministic 层 → AI 决策回放边界）
+        return await DeterministicReplayService(self._uow_factory).execute(command)
 
     async def add_regression_case(self, command: RegressionCaseCreate):
         async with self._uow_factory() as uow:

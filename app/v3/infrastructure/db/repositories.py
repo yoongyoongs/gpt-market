@@ -1284,6 +1284,47 @@ class SQLAlchemyBarRepository:
             for model, bars in grouped.values()
         )
 
+    async def load_revisions_by_ids(
+        self, revision_ids: tuple[UUID, ...] | list[UUID], *, as_of: datetime
+    ) -> list[BarSeriesRevision]:
+        """RC-06B Replay：按 pinned revision_id 精确加载（非 latest），bar_time <= as_of。"""
+        if not revision_ids:
+            return []
+        rows = (
+            await self._session.execute(
+                select(BarSeriesRevisionModel, MarketBarModel)
+                .join(MarketBarModel, MarketBarModel.revision_id == BarSeriesRevisionModel.revision_id)
+                .where(
+                    BarSeriesRevisionModel.revision_id.in_(list(revision_ids)),
+                    MarketBarModel.bar_time <= as_of,
+                )
+                .order_by(BarSeriesRevisionModel.revision_id, MarketBarModel.bar_time)
+            )
+        ).all()
+        grouped: dict[UUID, tuple[BarSeriesRevisionModel, list[MarketBar]]] = {}
+        for revision, bar in rows:
+            if revision.revision_id not in grouped:
+                grouped[revision.revision_id] = (revision, [])
+            grouped[revision.revision_id][1].append(MarketBar(
+                bar_time=bar.bar_time, open=float(bar.open), high=float(bar.high),
+                low=float(bar.low), close=float(bar.close), volume=bar.volume,
+                amount=None if bar.amount is None else float(bar.amount),
+                provisional=bar.provisional, fetch_time=bar.fetch_time,
+            ))
+        return [
+            BarSeriesRevision.build(BarSeriesRevisionContent(
+                revision_id=model.revision_id, security_id=model.security_id,
+                period=BarPeriod(model.period), adjust_type=AdjustType(model.adjust_type),
+                source=model.source, upstream_source=model.upstream_source,
+                raw_bar_available=model.raw_bar_available,
+                factor_revision_id=model.factor_revision_id,
+                point_in_time_precision=PointInTimePrecision(model.point_in_time_precision),
+                precision_reason=model.precision_reason, known_at=model.known_at,
+                supersedes_revision_id=model.supersedes_revision_id, bars=tuple(bars),
+            ))
+            for model, bars in grouped.values()
+        ]
+
     async def latest_weekly_revisions(
         self, security_ids: tuple[UUID, ...], *, as_of: datetime
     ) -> tuple[BarSeriesRevision, ...]:

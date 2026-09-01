@@ -14,6 +14,7 @@ from app.v3.domain.performance import (
     content_hash,
 )
 from app.v3.infrastructure.db.models import (
+    AIResultEnvelopeModel,
     BarSeriesRevisionModel,
     ContextPackModel,
     DecisionModel,
@@ -25,9 +26,23 @@ from app.v3.infrastructure.db.models import (
     RecallMissRunModel,
     RegressionCaseModel,
     ReplayRunModel,
+    SecurityFeatureModel,
+    SecurityModel,
     TradeLedgerModel,
 )
 from app.v3.repositories.errors import RepositoryConflictError, RepositoryNotFoundError
+
+# RC-06B 特征核验只比较仅依赖 pinned 日 K 的列（storage 精度容差内）
+_RUN_FEATURE_FIELDS = (
+    "close", "return_3d", "return_5d", "return_10d", "return_20d",
+    "return_60d", "return_120d", "return_250d",
+    "position_60d", "position_120d", "position_250d",
+    "ma5", "ma10", "ma20", "ma60", "ma20_slope", "ma60_slope",
+    "atr14", "atr_pct", "volatility20",
+    "distance_60d_high", "distance_60d_low",
+    "breakout_20d", "pullback_20d", "amount",
+    "volume_ratio_5d", "volume_expansion",
+)
 
 
 class SQLAlchemyPerformanceRepository:
@@ -107,6 +122,113 @@ class SQLAlchemyPerformanceRepository:
                 )
             )
         ) is True
+
+    async def replay_gate(
+        self, bar_revision_ids, evidence_ids, context_pack_ids, *, replay_as_of: datetime,
+    ) -> tuple[list[dict], dict]:
+        """RC-06B 第一道 Gate（保留 `_check_references` 语义）。"""
+        checks: list[dict] = []
+        revision_set: dict[str, list] = {"bars": [], "evidence": [], "contexts": []}
+        await self._check_references(
+            bar_revision_ids, BarSeriesRevisionModel, "revision_id", "bars",
+            replay_as_of, checks, revision_set,
+        )
+        await self._check_references(
+            evidence_ids, EvidenceRecordModel, "evidence_id", "evidence",
+            replay_as_of, checks, revision_set,
+        )
+        await self._check_references(
+            context_pack_ids, ContextPackModel, "context_pack_id", "contexts",
+            replay_as_of, checks, revision_set,
+        )
+        return checks, revision_set
+
+    async def replay_verification_targets(self, context_pack_ids) -> list[dict]:
+        """RC-06B：pinned Context Pack 的特征核验目标解析。"""
+        targets = []
+        for pack_id in context_pack_ids:
+            pack = await self._session.get(ContextPackModel, pack_id)
+            if pack is None:
+                targets.append({"context_pack_id": pack_id, "available": False,
+                                "reason": "MISSING_CONTEXT_PACK"})
+                continue
+            if pack.subject_type != "SECURITY":
+                targets.append({"context_pack_id": pack_id, "available": False,
+                                "reason": "NON_SECURITY_SUBJECT_NOT_VERIFIED"})
+                continue
+            try:
+                market, code = str(pack.subject_id).split(":", 1)
+            except ValueError:
+                targets.append({"context_pack_id": pack_id, "available": False,
+                                "reason": "UNPARSEABLE_SECURITY_SUBJECT"})
+                continue
+            security_id = await self._session.scalar(
+                select(SecurityModel.security_id).where(
+                    SecurityModel.market == market, SecurityModel.code == code,
+                )
+            )
+            if security_id is None:
+                targets.append({"context_pack_id": pack_id, "available": False,
+                                "reason": "SECURITY_NOT_FOUND"})
+                continue
+            targets.append({
+                "context_pack_id": pack_id, "available": True,
+                "feature_run_id": pack.feature_run_id, "security_id": security_id,
+            })
+        return targets
+
+    async def load_run_feature(
+        self, feature_run_id: UUID, security_id: UUID,
+    ) -> dict | None:
+        """RC-06B：读取当时落库的 immutable Feature（可比较列）。"""
+        model = await self._session.scalar(
+            select(SecurityFeatureModel).where(
+                SecurityFeatureModel.feature_run_id == feature_run_id,
+                SecurityFeatureModel.security_id == security_id,
+            )
+        )
+        if model is None:
+            return None
+        stored = {field: getattr(model, field) for field in _RUN_FEATURE_FIELDS}
+        stored = {
+            key: (float(value) if value is not None else None)
+            for key, value in stored.items()
+        }
+        features = dict(model.features or {})
+        stored["daily_trend_state"] = features.get("daily_trend_state")
+        return stored
+
+    async def immutable_ai_result_for_pack(self, context_pack_id: UUID) -> dict | None:
+        """RC-06B：当时 immutable 的 AI Result（结果回放来源），无模型重跑。"""
+        model = (
+            await self._session.scalars(
+                select(AIResultEnvelopeModel)
+                .where(AIResultEnvelopeModel.context_pack_id == context_pack_id)
+                .order_by(AIResultEnvelopeModel.produced_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if model is None:
+            return None
+        return {
+            "result_id": model.result_id,
+            "result_type": model.result_type,
+            "provider": model.provider,
+            "model": model.model,
+            "content_hash": model.content_hash,
+            "payload": dict(model.payload or {}),
+        }
+
+    async def record_replay(self, command: ReplayRunCreate, payload: dict) -> dict:
+        self._session.add(ReplayRunModel(
+            replay_run_id=command.replay_run_id,
+            content_hash=canonical_hash(payload),
+            **{key: payload[key] for key in (
+                "strategy_version", "replay_as_of", "revision_set",
+                "parameters", "status", "leakage_checks", "result",
+            )},
+        ))
+        return {"replay_run_id": command.replay_run_id, **payload}
 
     async def run_replay(self, command: ReplayRunCreate) -> dict:
         checks: list[dict] = []
