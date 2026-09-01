@@ -175,3 +175,11 @@ curl http://127.0.0.1:8000/api/v3/strategies
 ```
 
 本次生产烟测已通过公网/本机 Health、Quote、日 K、`/scan/v2`、V3 Strategy List 和 Production Release State。数据库包含 `v3` schema 的 81 张表，65 张不可变表均有 Trigger；V2 扫描规则和权重未修改。
+
+## 2026-09-01 RC-02A 生产部署
+
+- 生产应用与 Worker：`gpt-market:main-35a55b1`；API `healthy`，Worker `running` 且重启次数 0。
+- PostgreSQL Migration：`0012_trade_correction_chain`；`trade_corrections` 新增 Sequence 和前后状态 Hash，用户 Trigger 数量复核为 1。
+- 迁移前备份：`/opt/gpt-market-backups/pre-rc02a-20260901-211910`，其中 PostgreSQL 自定义格式 Dump 约 336 MB；旧 API/Worker 容器和 `main-0d090da` 回滚镜像保留。
+- 公网烟测：Health、Quote、V2 Scan、V3 Dashboard、V3 Strategy 均为 HTTP 200；未认证 Portfolio READ 为 401；Nginx 配置检查通过。
+- Release State 保持 `mode=V2`；本批未修改 V1/V2 评分、行情 Provider 或策略规则。

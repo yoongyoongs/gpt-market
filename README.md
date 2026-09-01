@@ -47,7 +47,7 @@ V2 选股作为并行能力保留 V1，不覆盖旧工具：
 - MCP：`scan_mainboard_v2`、`scan_mainboard_ab`
 - REST/GPT：`GET /scan/v2`、`GET /gpt/{secret}/scan/v2`、`GET /gpt/{secret}/scan/v2/html`、`GET /gpt/{secret}/scan/ab`
 
-V3 与 Legacy 隔离。生产已设置 `V3_ENABLED=true` 并迁移至 `0011_strategy_stabilization`；READ API 已上线，但新数据库的数据集需要由正式任务逐步生成。策略发布状态仍为 `mode=V2`，不得把“API 已部署”表述为“V3 策略已激活”。
+V3 与 Legacy 隔离。生产已设置 `V3_ENABLED=true` 并迁移至 `0012_trade_correction_chain`；READ API 已上线，但业务数据集仍需由正式任务逐步生成。策略发布状态保持 `mode=V2`，不得把“API 已部署”表述为“V3 策略已激活”。
 
 供人工查看的 V3 全市场特征看板为 `GET /v3/dashboard`。页面只读取最新 Published Feature Run 和 Market Regime，不调用行情 Provider、不生成统一评分、不改变 JSON API；生产数据尚未发布时立即显示 `INITIALIZING`。
 
