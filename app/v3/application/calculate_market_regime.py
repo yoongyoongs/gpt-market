@@ -4,7 +4,16 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from app.v3.application.calculate_features import mean_available
+from app.v3.application.calculate_index_benchmark_return import (
+    IndexBenchmarkReturnResult,
+)
 from app.v3.domain.features import MarketRegimeSnapshot, SecurityFeature
+
+
+# RC-04-04 冻结语义：指数 20 日收益 >= +2% 为 UP、<= -2% 为 DOWN、
+# 其余为 RANGE；基准缺失或历史不足时保持 UNKNOWN（原因透传）。
+INDEX_STATE_UP_THRESHOLD = 0.02
+INDEX_STATE_DOWN_THRESHOLD = -0.02
 
 
 class CalculateMarketRegimeService:
@@ -16,6 +25,7 @@ class CalculateMarketRegimeService:
         as_of: datetime,
         known_at: datetime,
         expected_count: int,
+        index_benchmark: IndexBenchmarkReturnResult | None = None,
     ) -> MarketRegimeSnapshot:
         usable = tuple(item for item in features if not item.stale)
         returns = [item.return_3d for item in usable if item.return_3d is not None]
@@ -31,7 +41,7 @@ class CalculateMarketRegimeService:
             feature_run_id=feature_run_id,
             as_of=as_of,
             known_at=known_at,
-            index_states={"status": "UNKNOWN", "reason": "index benchmark not bound to this feature run"},
+            index_states=self._index_states(index_benchmark),
             breadth={
                 "observed": len(returns),
                 "advancing": advancing,
@@ -40,7 +50,14 @@ class CalculateMarketRegimeService:
                 "advance_decline_ratio": advancing / declining if declining else None,
                 "mean_return_3d": mean_available(returns),
             },
-            turnover={"observed": sum(item.amount is not None for item in usable), "total_amount": total_amount},
+            turnover={
+                "observed": sum(item.amount is not None for item in usable),
+                "total_amount": total_amount,
+                "coverage": (
+                    sum(item.amount is not None for item in usable) / expected_count
+                    if expected_count else 0.0
+                ),
+            },
             limit_structure={"status": "UNKNOWN", "reason": "board-specific price-limit facts unavailable"},
             size_style={"status": "UNKNOWN", "reason": "market-cap facts unavailable"},
             growth_value_style={"status": "UNKNOWN", "reason": "style benchmark facts unavailable"},
@@ -54,3 +71,35 @@ class CalculateMarketRegimeService:
             confidence=min(coverage, len(returns) / expected_count if expected_count else 0.0),
             stale=not usable or any(item.stale for item in features),
         )
+
+    @staticmethod
+    def _index_states(index_benchmark: IndexBenchmarkReturnResult | None) -> dict:
+        if index_benchmark is None:
+            return {
+                "status": "UNKNOWN",
+                "reason": "index benchmark not bound to this feature run",
+            }
+        if index_benchmark.return_20d is None:
+            return {
+                "status": "UNKNOWN",
+                "reason": index_benchmark.reason or "NO_REVISION",
+                "benchmark_code": index_benchmark.benchmark_code,
+                "calculation_version": index_benchmark.calculation_version,
+            }
+        if index_benchmark.return_20d >= INDEX_STATE_UP_THRESHOLD:
+            status = "UP"
+        elif index_benchmark.return_20d <= INDEX_STATE_DOWN_THRESHOLD:
+            status = "DOWN"
+        else:
+            status = "RANGE"
+        return {
+            "status": status,
+            "benchmark_code": index_benchmark.benchmark_code,
+            "return_20d": index_benchmark.return_20d,
+            "known_at": (
+                index_benchmark.known_at.isoformat()
+                if index_benchmark.known_at is not None else None
+            ),
+            "source": index_benchmark.source,
+            "calculation_version": index_benchmark.calculation_version,
+        }

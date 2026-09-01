@@ -67,6 +67,7 @@ def test_market_regime_contains_facts_and_explicit_unknowns() -> None:
         expected_count=1,
     )
     assert result.breadth["observed"] == 1
+    assert result.turnover["coverage"] == 1.0
     assert result.index_states["status"] == "UNKNOWN"
     assert "score" not in result.risk_appetite_facts
 
@@ -130,3 +131,80 @@ def test_weekly_trend_state_unknown_when_weekly_history_insufficient() -> None:
         weekly_revision=weekly_revision([10.0 + index * 0.1 for index in range(20)]),
     )
     assert result.features["weekly_trend_state"] == "UNKNOWN"
+
+
+def test_market_regime_binds_index_state_from_benchmark() -> None:
+    from app.v3.application.calculate_index_benchmark_return import (
+        CalculateIndexBenchmarkReturn,
+    )
+    from app.v3.domain.index_benchmark import (
+        IndexBenchmarkBar,
+        IndexBenchmarkRevision,
+        IndexBenchmarkRevisionContent,
+    )
+
+    def index(closes: list[float]) -> IndexBenchmarkRevision:
+        return IndexBenchmarkRevision.build(IndexBenchmarkRevisionContent(
+            revision_id=uuid4(), benchmark_code="HS300", source="fixture",
+            upstream_source="fixture", fetch_time=NOW, known_at=NOW,
+            bars=tuple(
+                IndexBenchmarkBar(
+                    bar_time=NOW - timedelta(days=len(closes) - i),
+                    close=c, amount=1e11,
+                )
+                for i, c in enumerate(closes)
+            ),
+        ))
+
+    run_id = uuid4()
+    feature_row = CalculateSecurityFeatureService().execute(
+        feature_run_id=run_id, revision=revision(), as_of=NOW,
+    )
+    service = CalculateMarketRegimeService()
+
+    rising = CalculateIndexBenchmarkReturn().execute(
+        revision=index([3800 + i * 8 for i in range(30)]), as_of=NOW,
+    )
+    up = service.execute(
+        feature_run_id=run_id, features=(feature_row,), as_of=NOW, known_at=NOW,
+        expected_count=1, index_benchmark=rising,
+    )
+    assert up.index_states["status"] == "UP"
+    assert up.index_states["benchmark_code"] == "HS300"
+    assert up.index_states["calculation_version"] == "index-return-20d-v1"
+    assert up.index_states["known_at"] == rising.known_at.isoformat()
+
+    flat = CalculateIndexBenchmarkReturn().execute(
+        revision=index([3800 + (i % 3) for i in range(30)]), as_of=NOW,
+    )
+    ranging = service.execute(
+        feature_run_id=run_id, features=(feature_row,), as_of=NOW, known_at=NOW,
+        expected_count=1, index_benchmark=flat,
+    )
+    assert ranging.index_states["status"] == "RANGE"
+
+    down = CalculateIndexBenchmarkReturn().execute(
+        revision=index([4100 - i * 8 for i in range(30)]), as_of=NOW,
+    )
+    falling = service.execute(
+        feature_run_id=run_id, features=(feature_row,), as_of=NOW, known_at=NOW,
+        expected_count=1, index_benchmark=down,
+    )
+    assert falling.index_states["status"] == "DOWN"
+
+    missing = service.execute(
+        feature_run_id=run_id, features=(feature_row,), as_of=NOW, known_at=NOW,
+        expected_count=1, index_benchmark=None,
+    )
+    assert missing.index_states["status"] == "UNKNOWN"
+    assert "reason" in missing.index_states
+
+    insufficient = CalculateIndexBenchmarkReturn().execute(
+        revision=index([3800 + i for i in range(10)]), as_of=NOW,
+    )
+    unknown = service.execute(
+        feature_run_id=run_id, features=(feature_row,), as_of=NOW, known_at=NOW,
+        expected_count=1, index_benchmark=insufficient,
+    )
+    assert unknown.index_states["status"] == "UNKNOWN"
+    assert unknown.index_states["reason"] == "INSUFFICIENT_HISTORY"

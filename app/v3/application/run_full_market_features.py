@@ -142,6 +142,7 @@ class RunFullMarketFeaturesService:
             as_of=as_of,
             known_at=completed_at,
             expected_count=expected,
+            index_benchmark=index_return,
         )
         async with self._uow_factory() as uow:
             inserted = await uow.features.publish(run, tuple(features), regime)
