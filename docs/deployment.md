@@ -136,9 +136,22 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 
 公网入口：`http://106.13.171.166/v3/dashboard`。页面只读取 PostgreSQL 中最新 Published Feature Run 与 Market Regime，不调用 Provider、不生成统一评分。2026-09-01 生产数据为 Universe `5,553/5,553`、Feature `5,551/5,553`，覆盖率 99.96%；两只三源均无历史数据的证券显式保留为 `UNAVAILABLE`。
 
-当前应用与 Worker 镜像：`gpt-market:main-31fffa9`。公网烟测 Health、V1 Quote、V2 Dashboard、V3 Dashboard、V3 Feature 和 Market Regime 均为 HTTP 200；切换前容器保留为停止态，可用于回滚。
+当前应用与 Worker 镜像：`gpt-market:main-0d090da`。公网烟测 Health、V1 Quote、V2 Dashboard、V3 Dashboard、V3 Feature 和 Market Regime 均为 HTTP 200；上一镜像 `gpt-market:main-31fffa9` 保留用于回滚。
 
 当前服务器的 `V3_PHASE2_CONCURRENCY=4`。首次使用 16 并发回填时出现 PostgreSQL 连接池争用和公网超时，生产环境不得恢复为默认 16，除非先完成容量测试；修改前 `.env` 已保留备份。
+
+### V3 安全边界
+
+2026-09-01 已完成 RC-01 生产部署：
+
+- `V3_PUBLIC_MARKET_READ=true`，只读市场事实和 `/v3/dashboard` 保持公网可读；
+- Portfolio READ 与普通 V3 WRITE 使用独立 Bearer Token；
+- Strategy Activate/Rollback 使用另一个独立管理员 Bearer Token；
+- `actor_id/actor_type/confirmed_by` 由服务端认证 Principal 覆盖；
+- Secret 只保存于 `/opt/gpt-market/.env`，权限 `0600 root:root`，不得写入文档、日志或 Git；
+- Nginx 继续透传 `Authorization`，`nginx -t` 已通过；
+- 公网安全矩阵已验证 401/403/200，Strategy Admin 空请求只进入 422 校验且未改变 Release State；
+- Strategy Release State 仍为 `mode=V2`。
 
 ## 2026-09-01 生产部署记录
 
