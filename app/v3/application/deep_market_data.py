@@ -79,7 +79,7 @@ class DeepMarketDataService:
         elif recent / prior - 1 < -0.001:
             trend = "DOWN"
         else:
-            trend = "RANGE"
+            trend = "SIDEWAYS"
         return {
             "trend": trend,
             "support": min(float(bar.low) for bar in bars),

@@ -137,3 +137,28 @@ async def test_sixty_minute_structure_returns_trend_support_resistance() -> None
     assert short["structure"]["trend"] == "UNKNOWN"
     assert short["structure"]["support"] is None
     assert short["structure"]["resistance"] is None
+
+
+@pytest.mark.asyncio
+async def test_flat_structure_is_sideways_per_unified_vocabulary() -> None:
+    """RT-02：词表统一——横盘一律 SIDEWAYS（实时方案 §4.4），不再用 RANGE。"""
+
+    class FlatProvider:
+        async def get_kline(self, code, period, limit, adjust="qfq"):
+            return type("Result", (), {
+                "klines": [
+                    type("Bar", (), {
+                        "timestamp": NOW - timedelta(minutes=5 * i),
+                        "open": 10.0, "high": 10.01, "low": 9.99,
+                        "close": 10.0, "volume": 1, "amount": 1.0,
+                        "provisional": False,
+                    })
+                    for i in range(12)
+                ],
+                "stale": False, "source": "tencent",
+            })()
+
+    structure = await make_service(FlatProvider()).get_intraday_structure(
+        "600000", as_of=NOW,
+    )
+    assert structure.periods["60m"]["structure"]["trend"] == "SIDEWAYS"

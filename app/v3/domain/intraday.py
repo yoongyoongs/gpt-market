@@ -104,3 +104,42 @@ class IntradayBarsResult(V3Contract):
     @classmethod
     def _check_aware(cls, values):
         return _require_aware_fields(values, ("as_of", "known_at"))
+
+
+class PeriodStructure(V3Contract):
+    """单周期结构事实（RT-02 / §4.4）：趋势 + 支撑/压力，确定性推导。"""
+
+    trend: Literal["UP", "DOWN", "SIDEWAYS", "UNKNOWN"]
+    support: float | None = None
+    resistance: float | None = None
+    # 周/日未收盘 K 线显式 PROVISIONAL；UNKNOWN 周期无此字段
+    bar_status: BarStatus | None = None
+    bar_count: int = 0
+    reason: str | None = None
+    stale: bool | None = None
+
+
+class IntradayStructureSnapshot(V3Contract):
+    """多周期结构快照（§4.4）：周/日/60/15/5 + 反转状态 + 周日冲突显式表达。
+
+    reversal_state 只是确定性事实标记（POSSIBLE=下降趋势中的反弹候选），
+    CONFIRMED 必须由可解释证据（AI/Evidence）给出，服务器绝不自行确认。
+    """
+
+    code: str
+    as_of: datetime
+    known_at: datetime
+    source: str
+    latest_price: float | None = None
+    weekly: PeriodStructure
+    daily: PeriodStructure
+    reversal_state: Literal["NONE", "POSSIBLE", "UNKNOWN"] = "UNKNOWN"
+    conflict: str | None = None
+    conflict_rule: str | None = None
+    periods: dict[str, PeriodStructure] = {}
+    stale: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _check_aware(cls, values):
+        return _require_aware_fields(values, ("as_of", "known_at"))

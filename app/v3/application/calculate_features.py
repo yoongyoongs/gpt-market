@@ -228,7 +228,7 @@ class CalculateSecurityFeatureService:
             return "UP"
         if ma20 < ma60 and (values.get("ma20_slope") or 0) < 0:
             return "DOWN"
-        return "RANGE"
+        return "SIDEWAYS"
 
     @classmethod
     def _weekly_trend_state(
@@ -268,7 +268,7 @@ class CalculateSecurityFeatureService:
             return "DOWN"
         if abs(ratio) <= 0.01:
             return "BASE"
-        return "RANGE"
+        return "SIDEWAYS"
 
     @staticmethod
     def _liquidity_quality(amount: float | None) -> str:

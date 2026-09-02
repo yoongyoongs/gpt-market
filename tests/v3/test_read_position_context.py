@@ -74,7 +74,7 @@ def _feature():
         feature_run_id=uuid4(), security_id=uuid4(), series_revision_id=uuid4(),
         as_of=NOW - timedelta(hours=2), close=11.0, atr_pct=0.03,
         coverage=1.0, stale=False,
-        features={"weekly_trend_state": "UP", "daily_trend_state": "RANGE"},
+        features={"weekly_trend_state": "UP", "daily_trend_state": "SIDEWAYS"},
         input_hash="a" * 64, source_content_hash="b" * 64,
     )
 
@@ -196,9 +196,9 @@ async def test_full_position_context_payload_assembles_all_sections():
     # §14.1：失效条件随计划透出；计划缺失时诚实 UNKNOWN
     assert payload["levels"]["invalidation"] == "跌破 9.5 且周线未转 BASE 则计划失效"
     assert payload["multi_timeframe"]["weekly"]["state"] == "UP"
-    assert payload["multi_timeframe"]["daily"]["state"] == "RANGE"
+    assert payload["multi_timeframe"]["daily"]["state"] == "SIDEWAYS"
     # §14.2：合成事实随特征透出（确定性规则，非 Final Score）
-    assert payload["multi_timeframe"]["state"] == "WEEKLY_UP_DAILY_RANGE"
+    assert payload["multi_timeframe"]["state"] == "WEEKLY_UP_DAILY_SIDEWAYS"
     assert payload["multi_timeframe"]["rule"] is None
     assert payload["multi_timeframe"]["5m"]["status"] == "AVAILABLE"
     assert payload["multi_timeframe"]["5m"]["precision"] == "LIMITED"

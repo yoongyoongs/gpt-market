@@ -148,3 +148,167 @@ async def test_intraday_bars_unknown_when_no_bars_known_at_as_of() -> None:
     five = result.periods["5m"]
     assert five.status == "UNKNOWN"
     assert five.reason == "NO_BARS_KNOWN_AT_AS_OF"
+
+
+def _falling_bars(count: int, start: float = 40.0) -> list[Kline]:
+    bars = []
+    for i in range(count):
+        close = start - i * 0.5
+        bars.append(Kline(
+            timestamp=NOW - timedelta(weeks=count - i),
+            open=close + 0.2, high=close + 0.3, low=close - 0.3, close=close,
+            volume=1_000, amount=40_000.0,
+        ))
+    return bars
+
+
+def _rising_bars(count: int, start: float = 10.0) -> list[Kline]:
+    bars = []
+    for i in range(count):
+        close = start + i * 0.1
+        bars.append(Kline(
+            timestamp=NOW - timedelta(days=count - i),
+            open=close - 0.05, high=close + 0.05, low=close - 0.1, close=close,
+            volume=1_000, amount=10_000.0,
+        ))
+    return bars
+
+
+class _FakeBarsService:
+    def __init__(self, periods: dict[str, tuple[str, list[Kline]]]):
+        # period -> (status, klines)；status=UNKNOWN 时模拟该周期故障
+        self._periods = periods
+
+    async def get_intraday_bars(self, code, periods=("1m",), *, as_of):
+        from app.v3.domain.intraday import IntradayBarSeries
+
+        series = {}
+        for period in periods:
+            if period not in self._periods:
+                series[period] = IntradayBarSeries(
+                    period=period, status="UNKNOWN", reason="NO_FIXTURE",
+                    precision="UNKNOWN",
+                )
+                continue
+            status, klines = self._periods[period]
+            if status == "UNKNOWN":
+                series[period] = IntradayBarSeries(
+                    period=period, status="UNKNOWN",
+                    reason="RuntimeError: up down", precision="UNKNOWN",
+                )
+                continue
+            provisional = any(bar.provisional for bar in klines)
+            series[period] = IntradayBarSeries(
+                period=period, status="AVAILABLE",
+                bars=tuple(
+                    __import__("app.v3.domain.intraday", fromlist=["IntradayBar"]).IntradayBar(
+                        bar_time=bar.timestamp, open=bar.open, high=bar.high,
+                        low=bar.low, close=bar.close, volume=bar.volume,
+                        amount=bar.amount,
+                        bar_status="PROVISIONAL" if bar.provisional else "CLOSED",
+                    ) for bar in klines
+                ),
+                bar_count=len(klines), provisional=provisional,
+                stale=False, precision="LIMITED",
+                first_bar_time=klines[0].timestamp,
+                last_bar_time=klines[-1].timestamp,
+            )
+        from app.v3.domain.intraday import IntradayBarsResult as _R
+        return _R(code=code, as_of=as_of, known_at=as_of,
+                  source="fixture", periods=series)
+
+
+@pytest.mark.asyncio
+async def test_structure_snapshot_weekly_down_daily_up_is_bounce() -> None:
+    from app.v3.application.intraday_structure_snapshot import (
+        IntradayStructureSnapshotService,
+    )
+
+    bars = _FakeBarsService({
+        "week": ("AVAILABLE", _falling_bars(12)),
+        "day": ("AVAILABLE", _rising_bars(12)),
+        "60m": ("AVAILABLE", _rising_bars(12)),
+        "15m": ("AVAILABLE", _rising_bars(12)),
+        "5m": ("AVAILABLE", _rising_bars(12)),
+    })
+    service = IntradayStructureSnapshotService(bars)
+    snapshot = await service.get_snapshot("000001", as_of=NOW)
+
+    assert snapshot.weekly.trend == "DOWN"
+    assert snapshot.daily.trend == "UP"
+    # §4.5：周降日涨必须显式表达为"下降趋势中的反弹候选"，绝不静默
+    assert snapshot.reversal_state == "POSSIBLE"
+    assert snapshot.conflict == "WEEKLY_DOWN_DAILY_BOUNCE"
+    assert snapshot.conflict_rule == "下降趋势中的反弹"
+    # 60m 结构可用：趋势 + 支撑 + 压力
+    assert snapshot.periods["60m"].trend == "UP"
+    assert snapshot.periods["60m"].support is not None
+    assert snapshot.periods["60m"].resistance is not None
+    assert snapshot.stale is False
+
+
+@pytest.mark.asyncio
+async def test_structure_snapshot_marks_provisional_and_unknown() -> None:
+    from app.v3.application.intraday_structure_snapshot import (
+        IntradayStructureSnapshotService,
+    )
+
+    daily = _rising_bars(11) + [
+        Kline(timestamp=NOW, open=11.0, high=11.1, low=10.9, close=11.05,
+              volume=1, amount=1.0, provisional=True)
+    ]
+    bars = _FakeBarsService({
+        "week": ("AVAILABLE", _falling_bars(3)),  # 不足 8 根 → UNKNOWN
+        "day": ("AVAILABLE", daily),
+        "60m": ("UNKNOWN", []),
+        "15m": ("AVAILABLE", _rising_bars(12)),
+        "5m": ("AVAILABLE", _rising_bars(12)),
+    })
+    service = IntradayStructureSnapshotService(bars)
+    snapshot = await service.get_snapshot("000001", as_of=NOW)
+
+    # 周线数据不足：UNKNOWN + INSUFFICIENT_BARS，绝不给伪支撑压力
+    assert snapshot.weekly.trend == "UNKNOWN"
+    assert snapshot.weekly.support is None and snapshot.weekly.resistance is None
+    assert snapshot.weekly.reason == "INSUFFICIENT_BARS"
+    # 反转状态随关键周期缺失 → UNKNOWN
+    assert snapshot.reversal_state == "UNKNOWN"
+    assert snapshot.conflict == "UNKNOWN"
+    # 盘中日 K provisional 显式透传
+    assert snapshot.daily.bar_status == "PROVISIONAL"
+    # 60m 故障隔离：不拖垮其它周期
+    assert snapshot.periods["60m"].trend == "UNKNOWN"
+    assert snapshot.periods["15m"].trend == "UP"
+
+
+@pytest.mark.asyncio
+async def test_structure_snapshot_latest_price_from_quote_is_optional() -> None:
+    from app.v3.application.intraday_structure_snapshot import (
+        IntradayStructureSnapshotService,
+    )
+
+    bars = _FakeBarsService({
+        "week": ("AVAILABLE", _falling_bars(12)),
+        "day": ("AVAILABLE", _rising_bars(12)),
+        "60m": ("AVAILABLE", _rising_bars(12)),
+        "15m": ("AVAILABLE", _rising_bars(12)),
+        "5m": ("AVAILABLE", _rising_bars(12)),
+    })
+
+    class _QuoteService:
+        async def get_quote_snapshot(self, code, *, as_of):
+            return await IntradayMarketDataService(_QuoteProvider()).get_quote_snapshot(
+                code, as_of=as_of
+            )
+
+    class _QuoteProvider:
+        async def get_quote(self, code):
+            return _quote()
+
+    with_price = IntradayStructureSnapshotService(bars, quote_service=_QuoteService())
+    snapshot = await with_price.get_snapshot("000001", as_of=NOW)
+    assert snapshot.latest_price == 9.32
+
+    without_price = IntradayStructureSnapshotService(bars)
+    snapshot2 = await without_price.get_snapshot("000001", as_of=NOW)
+    assert snapshot2.latest_price is None
