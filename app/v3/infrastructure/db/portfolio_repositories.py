@@ -118,6 +118,79 @@ class SQLAlchemyPortfolioRepository:
         draft.confirmed_at = datetime.now(timezone.utc)
         return opening_id
 
+    async def get_trade_draft(self, draft_id: UUID) -> dict[str, Any] | None:
+        draft = await self._session.get(TradeDraftModel, draft_id)
+        if draft is None:
+            return None
+        return await self._draft_preview(draft)
+
+    async def get_position_draft(self, draft_id: UUID) -> dict[str, Any] | None:
+        draft = await self._session.get(PositionSnapshotDraftModel, draft_id)
+        if draft is None:
+            return None
+        return await self._draft_preview(draft)
+
+    async def _draft_preview(self, draft) -> dict[str, Any]:
+        image = (
+            await self._session.get(ImageImportModel, draft.image_import_id)
+            if draft.image_import_id else None
+        )
+        return {
+            "draft_id": draft.draft_id, "status": draft.status,
+            "account_id": draft.account_id, "security_id": draft.security_id,
+            "payload": draft.payload, "field_confidence": draft.field_confidence,
+            "user_corrections": draft.payload.get("user_corrections", []),
+            "image_import": None if image is None else {
+                "image_import_id": image.image_import_id,
+                "provider": image.ocr_payload.get("provider"),
+                "fields": image.ocr_payload.get("fields", []),
+                "field_regions": image.field_regions,
+            },
+        }
+
+    async def correct_trade_draft(
+        self, draft_id: UUID, corrected_fields: dict[str, Any], corrected_by: str,
+    ) -> dict[str, Any] | None:
+        draft = await self._session.get(TradeDraftModel, draft_id, with_for_update=True)
+        if draft is None:
+            return None
+        if draft.status != "DRAFT":
+            raise RepositoryConflictError("draft is no longer correctable")
+        return self._apply_draft_correction(draft, corrected_fields, corrected_by)
+
+    async def correct_position_draft(
+        self, draft_id: UUID, corrected_fields: dict[str, Any], corrected_by: str,
+    ) -> dict[str, Any] | None:
+        draft = await self._session.get(
+            PositionSnapshotDraftModel, draft_id, with_for_update=True
+        )
+        if draft is None:
+            return None
+        if draft.status != "DRAFT":
+            raise RepositoryConflictError("draft is no longer correctable")
+        return self._apply_draft_correction(draft, corrected_fields, corrected_by)
+
+    @staticmethod
+    def _apply_draft_correction(draft, corrected_fields, corrected_by) -> dict[str, Any]:
+        payload = dict(draft.payload)
+        corrections = list(payload.get("user_corrections", []))
+        corrections.append({
+            "fields": corrected_fields, "corrected_by": corrected_by,
+            "corrected_at": datetime.now(timezone.utc).isoformat(),
+        })
+        payload["user_corrections"] = corrections
+        payload.update(corrected_fields)
+        confidence = dict(draft.field_confidence)
+        for key in corrected_fields:
+            confidence[key] = 1.0
+        draft.payload = payload
+        draft.field_confidence = confidence
+        return {
+            "draft_id": draft.draft_id, "status": draft.status,
+            "payload": payload, "field_confidence": confidence,
+            "user_corrections": corrections,
+        }
+
     async def confirm_trade(self, draft_id: UUID, command: TradeConfirm) -> UUID:
         existing = await self._session.scalar(select(TradeLedgerModel).where(
             TradeLedgerModel.idempotency_key == command.idempotency_key

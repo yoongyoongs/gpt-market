@@ -26,3 +26,11 @@ def test_v3_openapi_exposes_feature_and_regime_reads() -> None:
 def test_v3_openapi_exposes_ocr_image_upload() -> None:
     paths = api.openapi()["paths"]
     assert "/api/v3/portfolio/images" in paths
+
+
+def test_v3_openapi_exposes_draft_confirmation_endpoints() -> None:
+    paths = api.openapi()["paths"]
+    assert "/api/v3/portfolio/trade-drafts/{draft_id}" in paths
+    assert "/api/v3/portfolio/trade-drafts/{draft_id}/corrections" in paths
+    assert "/api/v3/portfolio/position-drafts/{draft_id}" in paths
+    assert "/api/v3/portfolio/position-drafts/{draft_id}/corrections" in paths

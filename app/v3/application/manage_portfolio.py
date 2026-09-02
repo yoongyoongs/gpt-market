@@ -8,6 +8,9 @@ from pydantic import Field
 from app.v3.application.audit_helper import AuditRecorder
 from app.v3.application.read_position_context import ReadPositionContextService
 from app.v3.contracts.base import V3Contract
+from app.v3.repositories.errors import (
+    RepositoryNotFoundError,
+)
 from app.v3.domain.portfolio import (
     AccountCreate,
     OpeningPositionCreate,
@@ -33,6 +36,44 @@ class ImageDraftImport(V3Contract):
 
 class DraftConfirmation(V3Contract):
     confirmed_by: str = Field(min_length=1, max_length=128)
+
+
+class DraftFieldCorrection(V3Contract):
+    """用户对 OCR Draft 字段的人工修正（PG-002）。"""
+
+    corrected_fields: dict[str, Any]
+    corrected_by: str = Field(min_length=1, max_length=128)
+
+
+_TRADE_DRAFT_FIELDS = {"side", "price", "quantity", "fee", "trade_time"}
+_POSITION_DRAFT_FIELDS = {"quantity", "average_cost", "as_of"}
+
+
+def _validate_draft_correction(corrected_fields: dict[str, Any], allowed: set[str]) -> None:
+    unknown = sorted(set(corrected_fields) - allowed)
+    if unknown:
+        raise ValueError(f"unsupported draft fields: {', '.join(unknown)}")
+    from datetime import datetime as _dt
+    from decimal import Decimal as _Decimal, InvalidOperation as _Invalid
+
+    if "side" in corrected_fields and corrected_fields["side"] not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    for key in ("price", "quantity", "fee", "average_cost"):
+        if key not in corrected_fields:
+            continue
+        try:
+            value = _Decimal(str(corrected_fields[key]))
+        except _Invalid as exc:
+            raise ValueError(f"{key} is not a valid number") from exc
+        if value < 0:
+            raise ValueError(f"{key} must be non-negative")
+    for key in ("trade_time", "as_of"):
+        if key not in corrected_fields:
+            continue
+        try:
+            _dt.fromisoformat(str(corrected_fields[key]).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"{key} is not a valid ISO datetime") from exc
 
 
 def _actor_id(command) -> str | None:
@@ -87,6 +128,56 @@ class PortfolioWriteService:
             "status": "DRAFT_ONLY",
             "requires_manual_confirmation": True,
         }
+
+    async def trade_draft_preview(self, draft_id: UUID):
+        async with self._uow_factory() as uow:
+            preview = await uow.portfolios.get_trade_draft(draft_id)
+        if preview is None:
+            raise RepositoryNotFoundError("trade draft not found")
+        return preview
+
+    async def position_draft_preview(self, draft_id: UUID):
+        async with self._uow_factory() as uow:
+            preview = await uow.portfolios.get_position_draft(draft_id)
+        if preview is None:
+            raise RepositoryNotFoundError("position snapshot draft not found")
+        return preview
+
+    async def correct_trade_draft(self, draft_id: UUID, command: DraftFieldCorrection,
+                                  *, request_id: str | None = None):
+        _validate_draft_correction(command.corrected_fields, _TRADE_DRAFT_FIELDS)
+        async with self._uow_factory() as uow:
+            report = await uow.portfolios.correct_trade_draft(
+                draft_id, command.corrected_fields, command.corrected_by
+            )
+            if report is None:
+                raise RepositoryNotFoundError("trade draft not found")
+            await self._recorder(uow).record(
+                action="TRADE_DRAFT_CORRECTED", object_type="TRADE_DRAFT",
+                object_id=str(draft_id), actor_id=command.corrected_by,
+                request_id=request_id, after=command,
+                metadata={"corrected_fields": sorted(command.corrected_fields)},
+            )
+            await uow.commit()
+        return report
+
+    async def correct_position_draft(self, draft_id: UUID, command: DraftFieldCorrection,
+                                     *, request_id: str | None = None):
+        _validate_draft_correction(command.corrected_fields, _POSITION_DRAFT_FIELDS)
+        async with self._uow_factory() as uow:
+            report = await uow.portfolios.correct_position_draft(
+                draft_id, command.corrected_fields, command.corrected_by
+            )
+            if report is None:
+                raise RepositoryNotFoundError("position snapshot draft not found")
+            await self._recorder(uow).record(
+                action="POSITION_DRAFT_CORRECTED", object_type="POSITION_SNAPSHOT_DRAFT",
+                object_id=str(draft_id), actor_id=command.corrected_by,
+                request_id=request_id, after=command,
+                metadata={"corrected_fields": sorted(command.corrected_fields)},
+            )
+            await uow.commit()
+        return report
 
     async def confirm_trade(self, draft_id: UUID, command: TradeConfirm,
                             *, request_id: str | None = None):

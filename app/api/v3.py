@@ -31,6 +31,7 @@ from app.v3.application.manage_portfolio import (
     DraftConfirmation,
     ImageDraftImport,
     PortfolioWriteService,
+    DraftFieldCorrection,
 )
 from app.v3.application.manage_actions import ActionWriteService
 from app.v3.application.manage_performance import (
@@ -451,6 +452,50 @@ async def upload_portfolio_image(command: ImageUploadCommand, request: Request):
         raise HTTPException(
             status_code=503, detail=f"OCR provider unavailable: {exc.reason}"
         ) from exc
+
+
+@router.get("/portfolio/trade-drafts/{draft_id}")
+async def read_trade_draft_preview(draft_id: UUID):
+    try:
+        return await PortfolioWriteService(_uow).trade_draft_preview(draft_id)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/trade-drafts/{draft_id}/corrections")
+async def correct_trade_draft_fields(
+    draft_id: UUID, command: DraftFieldCorrection, request: Request,
+):
+    command = _bind_principal(command, request)
+    try:
+        return await PortfolioWriteService(_uow).correct_trade_draft(draft_id, command)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/portfolio/position-drafts/{draft_id}")
+async def read_position_draft_preview(draft_id: UUID):
+    try:
+        return await PortfolioWriteService(_uow).position_draft_preview(draft_id)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/portfolio/position-drafts/{draft_id}/corrections")
+async def correct_position_draft_fields(
+    draft_id: UUID, command: DraftFieldCorrection, request: Request,
+):
+    command = _bind_principal(command, request)
+    try:
+        return await PortfolioWriteService(_uow).correct_position_draft(
+            draft_id, command
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/portfolio/trade-drafts")

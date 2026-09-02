@@ -314,10 +314,12 @@ class DraftAssembler:
         average_cost = _parse_decimal(str(values.get("average_cost", "")))
         if average_cost is None:
             missing.append("average_cost")
-        as_of = (
-            _parse_datetime(str(values["trade_time"]))
-            if values.get("trade_time") else None
-        )
+        as_of = None
+        for time_key in ("as_of", "trade_time"):
+            if values.get(time_key):
+                as_of = _parse_datetime(str(values[time_key]))
+                if as_of is not None:
+                    break
         if as_of is None:
             missing.append("as_of")
         draft = None
