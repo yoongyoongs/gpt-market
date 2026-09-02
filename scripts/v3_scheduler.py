@@ -260,7 +260,7 @@ async def run_scheduler(args: argparse.Namespace) -> int:
             await asyncio.sleep(seconds_until_next_run(datetime.now(SHANGHAI), args.at))
         try:
             report = await run_once(args.output)
-            print(json.dumps(report, ensure_ascii=False), flush=True)
+            print(json.dumps(report, ensure_ascii=False, default=_json_default), flush=True)
         except Exception as exc:
             error = str(exc)
             database_url = os.getenv("V3_DATABASE_URL")

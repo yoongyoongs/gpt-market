@@ -73,8 +73,18 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(module, "build_orchestrators", _fake_build)
     monkeypatch.setenv("V3_DATABASE_URL", "postgresql+asyncpg://fake")
     output = tmp_path / "report.json"
-    report = asyncio.run(module.run_once(output))
-    assert report["status"] == "COMPLETED"
+    args = module.build_parser().parse_args(
+        ["--once", "--output", str(output)]
+    )
+    import contextlib
+    import io
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = asyncio.run(module.run_scheduler(args))
+    # stdout 摘要与落盘文件都必须序列化成功（print 路径曾是第二个崩溃点）
+    printed = json.loads(stdout.getvalue())
+    assert printed["status"] == "COMPLETED"
+    assert exit_code == 0
     loaded = json.loads(output.read_text(encoding="utf-8"))
     assert loaded["status"] == "COMPLETED"
     assert "resolved_at" in loaded["release_resolution"]
