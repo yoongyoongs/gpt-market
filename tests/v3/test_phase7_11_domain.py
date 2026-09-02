@@ -438,8 +438,16 @@ async def test_phase7_twenty_nine_of_thirty_groups_are_partial_and_isolated() ->
 
     imports = Imports()
 
+    class Audits:
+        def __init__(self):
+            self.events = []
+
+        async def add(self, event):
+            self.events.append(event)
+
     class Uow:
         ai_imports = imports
+        audits = Audits()
 
         async def __aenter__(self):
             return self
