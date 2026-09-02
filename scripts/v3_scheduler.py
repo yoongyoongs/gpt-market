@@ -198,6 +198,15 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
     return main, maintenance, database
 
 
+
+def _json_default(value):
+    """报表里混有 datetime（如 release_resolution.resolved_at）——
+    序列化时统一 isoformat，绝不让每日任务因报表落盘而 FAILED。"""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"not JSON serializable: {type(value)!r}")
+
+
 async def run_once(output: Path) -> dict:
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
@@ -240,7 +249,7 @@ async def run_once(output: Path) -> dict:
     await database.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=_json_default) + "\n", encoding="utf-8")
     temporary.replace(output)
     return report
 
