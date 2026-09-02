@@ -5,7 +5,6 @@ import json
 import logging
 import math
 from collections import Counter
-from datetime import datetime
 from time import perf_counter
 
 from app.cache import AsyncTTLCache

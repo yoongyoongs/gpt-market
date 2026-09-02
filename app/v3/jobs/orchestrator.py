@@ -261,7 +261,14 @@ class Orchestrator:
             (report for report in reports if report.job_id == dependency), None
         )
         if this_run is not None:
-            return this_run.status == "SUCCEEDED"
+            if this_run.status == "SUCCEEDED":
+                return True
+            # 幂等去重跳过（历史同键成功）视为依赖已满足，
+            # 否则下游被 DEPENDENCY_FAILED 永久卡死
+            return (
+                this_run.status == "SKIPPED"
+                and this_run.error_type == "ALREADY_SUCCEEDED"
+            )
         # 依赖 Job 本次未执行：历史幂等成功视为已满足
         return await self._has_succeeded(dependency, key)
 

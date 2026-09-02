@@ -96,6 +96,7 @@ async def test_orchestrator_records_runs_and_passes_artifacts() -> None:
     assert report["status"] == "COMPLETED"
     assert trace == ["job-a", "job-b", "job-c"]
     by_job = {item["job_id"]: item for item in report["jobs"]}
+    # artifacts 预加载包含全部幂等成功的上游（job-a 与 job-c）
     assert by_job["job-b"]["metrics"]["upstream"] == ["job-a"]
     rows = await _run_rows(sessions, _trade_date(1).isoformat())
     assert len(rows) == 3
@@ -315,3 +316,34 @@ async def test_feature_pipeline_published_and_second_run_zero_duplicate() -> Non
             )
         )
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_downstream_reruns_after_upstream_deduped_success() -> None:
+    """生产缺陷回归：上游以 ALREADY_SUCCEEDED 幂等去重（本次 SKIPPED）时，
+    下游绝不能被判 DEPENDENCY_FAILED 卡死 —— 真实生产曾把 index-benchmarks
+    永久卡在 attempt 5。场景：首跑 job-a 成功、job-b 失败；重跑 job-a 被
+    去重跳过，job-b 必须被允许重试。"""
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    trace: list[str] = []
+    jobs = _jobs_with_trace(trace, fail={"job-b"})
+    orchestrator = Orchestrator(lambda: SQLAlchemyUnitOfWork(sessions), jobs)
+    first = await orchestrator.execute(trade_date=_trade_date(5), as_of=NOW)
+    assert first["status"] == "PARTIAL"
+    assert trace == ["job-a", "job-b", "job-c"]
+
+    trace.clear()
+    jobs_ok = _jobs_with_trace(trace)
+    orchestrator_ok = Orchestrator(
+        lambda: SQLAlchemyUnitOfWork(sessions), jobs_ok
+    )
+    second = await orchestrator_ok.execute(trade_date=_trade_date(5), as_of=NOW)
+    await engine.dispose()
+    assert second["status"] == "COMPLETED"
+    by_job = {item["job_id"]: item for item in second["jobs"]}
+    # job-a 幂等去重；job-b 必须真执行成功而不是 DEPENDENCY_FAILED
+    assert by_job["job-a"]["error_type"] == "ALREADY_SUCCEEDED"
+    assert by_job["job-b"]["status"] == "SUCCEEDED"
+    # artifacts 预加载包含全部幂等成功的上游（job-a 与 job-c）
+    assert by_job["job-b"]["metrics"]["upstream"] == ["job-a", "job-c"]

@@ -7,7 +7,7 @@ import httpx
 
 from app.api import routes
 from app.main import api
-from app.models import Kline, KlineResult, OpportunityScanResult, Quote
+from app.models import Kline, KlineResult, Quote
 from app.services.data_quality import DataQualityService
 from app.services.opportunity_scoring import build_candidate_pool, build_opportunity_candidate
 from app.services.scanner import ScannerService

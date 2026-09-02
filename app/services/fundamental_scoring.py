@@ -42,7 +42,6 @@ def score_fundamental(snapshot: FundamentalSnapshot | None) -> tuple[ScoreCompon
     revenue_qoq = _value(snapshot, "revenue_qoq")
     profit_yoy = _value(snapshot, "net_profit_yoy")
     profit_qoq = _value(snapshot, "net_profit_qoq")
-    deducted_yoy = _value(snapshot, "deducted_net_profit")
     latest_profit = _value(snapshot, "net_profit")
     latest_deducted = _value(snapshot, "deducted_net_profit")
     revenue = _value(snapshot, "revenue")

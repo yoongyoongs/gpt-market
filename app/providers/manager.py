@@ -12,7 +12,6 @@ from app.providers.base import (
     AllProvidersFailedError,
     MarketDataProvider,
     ProviderEmptyDataError,
-    ProviderError,
     ProviderTimeoutError,
     ProviderUnsupportedError,
     provider_error_category,
