@@ -1,7 +1,14 @@
 # 分层生产镜像：基于上一个已验收镜像，只叠加代码层（依赖未变时使用）。
+# RC-09 起叠加 OCR 依赖层（本地 tesseract + 中文语言包，零新增 Python 依赖）。
 # 用法（在服务器 /opt/gpt-market 下）：
 #   docker build -f Dockerfile.layered -t gpt-market:main-<sha> .
 FROM gpt-market:main-780a9be
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr tesseract-ocr-chi-sim \
+    && rm -rf /var/lib/apt/lists/*
+USER appuser
 WORKDIR /app
 COPY alembic.ini ./
 COPY app ./app
