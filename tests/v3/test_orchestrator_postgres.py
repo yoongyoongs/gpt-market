@@ -347,3 +347,34 @@ async def test_downstream_reruns_after_upstream_deduped_success() -> None:
     assert by_job["job-b"]["status"] == "SUCCEEDED"
     # artifacts 预加载包含全部幂等成功的上游（job-a 与 job-c）
     assert by_job["job-b"]["metrics"]["upstream"] == ["job-a", "job-c"]
+
+
+@pytest.mark.asyncio
+async def test_latest_succeeded_idempotency_key_returns_terminal_key() -> None:
+    """RT-05 catch-up：按 Job 取最近一次成功运行的幂等键（交易日）。
+
+    使用专属 job_id，避免与其它测试共享的 job-a/b/c 幂等记录相互污染。
+    """
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def handler(context) -> dict:
+        return {"ok": True}
+
+    jobs = (
+        JobDefinition(job_id="catchup-probe", handler=handler),
+    )
+    orchestrator = Orchestrator(lambda: SQLAlchemyUnitOfWork(sessions), jobs)
+    # 先成功跑 8/28，再成功跑 8/29
+    await orchestrator.execute(trade_date=_trade_date(0), as_of=NOW)
+    await orchestrator.execute(trade_date=_trade_date(1), as_of=NOW)
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        latest = await uow.orchestrator.latest_succeeded_idempotency_key(
+            "catchup-probe"
+        )
+        missing = await uow.orchestrator.latest_succeeded_idempotency_key(
+            "no-such-job"
+        )
+    await engine.dispose()
+    assert latest == _trade_date(1).isoformat()
+    assert missing is None

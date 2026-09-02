@@ -35,6 +35,9 @@ class JobDefinition:
     job_id: str
     handler: JobHandler
     depends_on: tuple[str, ...] = ()
+    max_attempts: int = 1
+    fallback: JobHandler | None = None
+    retry_delay_seconds: float = 0.0
 
 
 @dataclass
@@ -193,24 +196,13 @@ class Orchestrator:
                 trade_date=trade_date, as_of=as_of,
                 uow_factory=self._uow_factory, artifacts=dict(artifacts),
             )
-            started_at = self._clock()
-            try:
-                metrics = await job.handler(context)
-            except Exception as exc:  # noqa: BLE001 - 失败必须落库为 Run 记录
-                reports.append(await self._record(
-                    orchestrator_run_id, job.job_id, key,
-                    status="FAILED", known_at=known_at, as_of=as_of,
-                    started_at=started_at,
-                    error_type=type(exc).__name__,
-                    error_summary=str(exc)[:1000],
-                ))
-                continue
-            artifacts[job.job_id] = dict(metrics or {})
-            reports.append(await self._record(
-                orchestrator_run_id, job.job_id, key,
-                status="SUCCEEDED", known_at=known_at, as_of=as_of,
-                started_at=started_at, metrics=dict(metrics or {}),
-            ))
+            outcome = await self._run_with_retry(
+                orchestrator_run_id, job, context, key,
+                known_at=known_at, as_of=as_of,
+            )
+            if outcome.status == "SUCCEEDED":
+                artifacts[job.job_id] = dict(outcome.metrics or {})
+            reports.append(outcome)
         statuses = {report.status for report in reports}
         if "FAILED" in statuses:
             overall = "PARTIAL" if "SUCCEEDED" in statuses else "FAILED"
@@ -235,6 +227,83 @@ class Orchestrator:
                 for report in reports
             ],
         }
+
+    async def _run_with_retry(
+        self,
+        orchestrator_run_id: UUID,
+        job: JobDefinition,
+        context: JobContext,
+        key: str,
+        *,
+        known_at: datetime,
+        as_of: datetime,
+    ) -> JobRunReport:
+        """RT-05：按 max_attempts 重试主 handler；耗尽后可选 fallback。
+
+        每次尝试都落库为独立 Run 记录；fallback 成功 → SUCCEEDED
+        （metrics 带 fallback_used，并保留主失败原因），绝不静默换源。
+        """
+        import asyncio
+
+        primary_error: str | None = None
+        primary_error_type: str | None = None
+        attempts = max(1, job.max_attempts)
+        last_failure: JobRunReport | None = None
+        for attempt in range(1, attempts + 1):
+            started_at = self._clock()
+            try:
+                metrics = await job.handler(context)
+            except Exception as exc:  # noqa: BLE001 - 失败必须落库为 Run 记录
+                primary_error_type = type(exc).__name__
+                primary_error = str(exc)[:1000]
+                # attempt 一律由 DB next_attempt 分配（跨运行唯一）
+                last_failure = await self._record(
+                    orchestrator_run_id, job.job_id, key,
+                    status="FAILED", known_at=known_at, as_of=as_of,
+                    started_at=started_at,
+                    error_type=primary_error_type,
+                    error_summary=primary_error,
+                )
+                if attempt < attempts:
+                    if job.retry_delay_seconds > 0:
+                        await asyncio.sleep(job.retry_delay_seconds)
+                    continue
+                break
+            return await self._record(
+                orchestrator_run_id, job.job_id, key,
+                status="SUCCEEDED", known_at=known_at, as_of=as_of,
+                started_at=started_at,
+                metrics=dict(metrics or {}),
+            )
+        if job.fallback is None:
+            assert last_failure is not None
+            return last_failure
+        started_at = self._clock()
+        try:
+            metrics = await job.fallback(context)
+        except Exception as exc:  # noqa: BLE001
+            return await self._record(
+                orchestrator_run_id, job.job_id, key,
+                status="FAILED", known_at=known_at, as_of=as_of,
+                started_at=started_at,
+                error_type=type(exc).__name__,
+                error_summary=(
+                    f"primary failed after {attempts} attempt(s): "
+                    f"{primary_error}; fallback failed: {str(exc)[:500]}"
+                ),
+            )
+        fallback_metrics = dict(metrics or {})
+        fallback_metrics["fallback_used"] = True
+        summary = (
+            f"primary failed after {attempts} attempt(s): {primary_error}; "
+            "recovered by fallback"
+        )
+        return await self._record(
+            orchestrator_run_id, job.job_id, key,
+            status="SUCCEEDED", known_at=known_at, as_of=as_of,
+            started_at=started_at,
+            error_summary=summary, metrics=fallback_metrics,
+        )
 
     def _select_jobs(self, job_ids: tuple[str, ...] | None) -> set[str]:
         if job_ids is None:
@@ -290,6 +359,7 @@ class Orchestrator:
         known_at: datetime,
         as_of: datetime | None,
         started_at: datetime | None = None,
+        attempt: int | None = None,
         error_type: str | None = None,
         error_summary: str | None = None,
         metrics: dict | None = None,
@@ -298,7 +368,10 @@ class Orchestrator:
         async with self._uow_factory() as uow:
             # 同 Job 写入互斥：事务级 advisory lock（按 job_id 派生）
             await uow.orchestrator.job_lock(job_id)
-            attempt = await uow.orchestrator.next_attempt(job_id, idempotency_key)
+            if attempt is None:
+                attempt = await uow.orchestrator.next_attempt(
+                    job_id, idempotency_key
+                )
             job_run_id = await uow.orchestrator.record(
                 orchestrator_run_id=orchestrator_run_id,
                 job_id=job_id, idempotency_key=idempotency_key,

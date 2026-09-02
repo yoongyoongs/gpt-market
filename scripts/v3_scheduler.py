@@ -19,7 +19,7 @@ import argparse
 import asyncio
 import json
 import os
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from app.config import Settings
@@ -37,7 +37,7 @@ from app.providers.eastmoney import EastmoneyProvider
 from app.v3.infrastructure.providers.exchange_calendar import (
     ExchangeCalendarsAShareCalendar,
 )
-from app.v3.jobs.market_data import latest_completed_session
+from app.v3.jobs.market_data import catchup_trade_dates, latest_completed_session
 from app.v3.jobs.orchestrator import JobDefinition, Orchestrator
 from scripts.v3_phase2_market_job import build_parser as build_job_parser
 from scripts.v3_phase2_market_job import execute as execute_market_job
@@ -199,6 +199,12 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
 
 
 
+async def _latest_main_success_key(database) -> str | None:
+    """主链终端 Job（features）最近一次成功运行的幂等键（交易日）。"""
+    async with SQLAlchemyUnitOfWork(database.sessions) as uow:
+        return await uow.orchestrator.latest_succeeded_idempotency_key("features")
+
+
 def _json_default(value):
     """报表里混有 datetime（如 release_resolution.resolved_at）——
     序列化时统一 isoformat，绝不让每日任务因报表落盘而 FAILED。"""
@@ -232,15 +238,33 @@ async def run_once(output: Path) -> dict:
     ).resolve("production")
     if report["trading_day"]:
         trade_date = latest_completed_session(calendar, now)
-        report["main"] = await main.execute(trade_date=trade_date, as_of=now)
+        # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
+        # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全
+        last_key = await _latest_main_success_key(database)
+        last_completed = date.fromisoformat(last_key) if last_key else None
+        pending = catchup_trade_dates(
+            calendar.is_trading_day,
+            last_completed=last_completed, today=trade_date,
+        )
+        report["catchup"] = [day.isoformat() for day in pending]
+        report["main"] = [
+            await main.execute(trade_date=pending_date, as_of=now)
+            for pending_date in pending
+        ]
     # 维护链每个自然日独立执行（幂等键 = 本地日期）
     report["maintenance"] = await maintenance.execute(
         trade_date=local.date(), as_of=now
     )
+    def _run_statuses(part_report):
+        if isinstance(part_report, list):
+            return [run["status"] for run in part_report]
+        return [part_report["status"]]
+
     statuses = [
-        report[part]["status"]
+        status
         for part in ("main", "maintenance")
         if part in report
+        for status in _run_statuses(report[part])
     ]
     report["status"] = (
         "COMPLETED" if all(status == "COMPLETED" for status in statuses) else "PARTIAL"

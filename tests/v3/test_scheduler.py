@@ -61,8 +61,21 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
         async def execute(self, **kwargs):
             return {"status": "COMPLETED", "jobs": {}}
 
+    class _FakeSession:
+        # UoW 内的真实 repo 会执行 scalar 查询：桩定返回主链最近成功日
+        async def scalar(self, stmt):
+            from datetime import date
+
+            return date.today().isoformat()
+
+        async def rollback(self):
+            pass
+
+        async def close(self):
+            pass
+
     class _FakeDatabase:
-        sessions = None
+        sessions = staticmethod(lambda: _FakeSession())
 
         async def close(self):
             pass
@@ -88,3 +101,6 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     loaded = json.loads(output.read_text(encoding="utf-8"))
     assert loaded["status"] == "COMPLETED"
     assert "resolved_at" in loaded["release_resolution"]
+    # RT-05：报表必须显式暴露 catch-up 结果（补跑了哪些交易日）
+    assert "catchup" in loaded
+    assert isinstance(loaded["main"], list)

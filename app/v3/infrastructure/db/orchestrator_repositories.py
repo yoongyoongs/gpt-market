@@ -50,6 +50,19 @@ class SQLAlchemyOrchestratorJobRunRepository:
         # rollback 会 expire ORM 对象：在会话内复制为普通 dict
         return dict(row.metrics or {})
 
+    async def latest_succeeded_idempotency_key(self, job_id: str) -> str | None:
+        """RT-05 catch-up：该 Job 最近一次成功运行对应的幂等键（即交易日）。"""
+        row = await self._session.scalar(
+            select(OrchestratorJobRunModel.idempotency_key)
+            .where(
+                OrchestratorJobRunModel.job_id == job_id,
+                OrchestratorJobRunModel.status == "SUCCEEDED",
+            )
+            .order_by(OrchestratorJobRunModel.idempotency_key.desc())
+            .limit(1)
+        )
+        return row
+
     async def has_succeeded(self, job_id: str, idempotency_key: str) -> bool:
         existing = await self._session.scalar(
             select(OrchestratorJobRunModel.job_run_id).where(
