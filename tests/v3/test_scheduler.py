@@ -43,10 +43,10 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     assert main.execution_order() == (
         "market-data", "index-benchmarks", "features",
     )
-    assert maintenance.execution_order() == (
-        "corporate-action-match",
-        "projection-verify",
-    )
+    assert set(maintenance.execution_order()) == {
+        "corporate-action-match", "projection-verify",
+        "performance-mature", "recall-observation-mature",
+    }
 
 
 def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:

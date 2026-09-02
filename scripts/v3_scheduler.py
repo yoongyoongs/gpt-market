@@ -10,7 +10,8 @@ Orchestrator 落库到 v3.orchestrator_job_runs；按交易日幂等，重复执
 自动跳过；全局 advisory lock 防止并发重复调度。
 Recall/Evidence/Expected Registry 链路维持既有脚本（v3_phase4/5/6），
 待其 Provider 生产化后在同一 Orchestrator 注册；Recall Observation
-Mature 需要 Outcome Provider，随 RC-06 接入。
+Mature 的 Outcome Provider 已生产化（已落库日 K + 指数基准 Revision），
+随 RT-10 进入维护链。
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ from pathlib import Path
 from app.config import Settings
 from app.utils.time import SHANGHAI
 from app.v3.application.ingest_index_benchmarks import IngestIndexBenchmarksService
+from app.v3.application.mature_performance import MaturePerformanceService
+from app.v3.application.mature_recall_observations import (
+    MatureRecallObservationsService,
+    RecallMissThreshold,
+)
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
@@ -37,6 +43,7 @@ from app.providers.eastmoney import EastmoneyProvider
 from app.v3.infrastructure.providers.exchange_calendar import (
     ExchangeCalendarsAShareCalendar,
 )
+from app.v3.providers.bars_outcome import BarsOutcomeProvider
 from app.v3.jobs.market_data import catchup_trade_dates, latest_completed_session
 from app.v3.jobs.orchestrator import JobDefinition, Orchestrator
 from scripts.v3_phase2_market_job import build_parser as build_job_parser
@@ -169,6 +176,31 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             "events_written": report.events_written,
         }
 
+    async def performance_mature_handler(context) -> dict:
+        service = MaturePerformanceService(
+            context.uow_factory, clock=lambda: context.as_of,
+        )
+        return await service.execute(as_of=context.as_of)
+
+    async def recall_observation_mature_handler(context) -> dict:
+        service = MatureRecallObservationsService(
+            context.uow_factory,
+            BarsOutcomeProvider(context.uow_factory),
+            threshold=RecallMissThreshold(
+                version="scheduler-v1", raw_return_gte=0.15,
+            ),
+            clock=lambda: context.as_of,
+        )
+        result = await service.execute()
+        return {
+            "requested_count": result.requested_count,
+            "matured_count": result.matured_count,
+            "unavailable_count": result.unavailable_count,
+            "evaluation_count": result.evaluation_count,
+            "miss_count": result.miss_count,
+            "inserted_count": result.inserted_count,
+        }
+
     main = Orchestrator(
         uow_factory,
         (
@@ -192,6 +224,15 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
                 handler=corporate_action_match_handler,
             ),
             JobDefinition(job_id="projection-verify", handler=projection_verify_handler),
+            # RT-10：Performance Mature 自动计算（正式绩效事实由系统生成）
+            JobDefinition(
+                job_id="performance-mature", handler=performance_mature_handler,
+            ),
+            # RT-10：Recall Observation Mature（Outcome Provider = 已落库日 K）
+            JobDefinition(
+                job_id="recall-observation-mature",
+                handler=recall_observation_mature_handler,
+            ),
         ),
         advisory_lock_key="v3-scheduler-maintenance",
     )
