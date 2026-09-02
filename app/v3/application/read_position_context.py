@@ -19,6 +19,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.v3.application.calculate_features import CalculateSecurityFeatureService
 from app.v3.domain.evidence import EvidenceReadQuery
 
 SUPPORT_RESISTANCE_VERSION = "support-resistance-20d-v1"
@@ -251,11 +252,17 @@ class ReadPositionContextService:
             plan_values["take_profit"] if "take_profit" in plan_values
             else _unknown("PLAN_HAS_NO_STOP_TARGET")
         )
+        # §14.1：失效条件随计划透出，计划缺失时诚实 UNKNOWN
+        invalidation = (
+            plan_values["invalidation"] if "invalidation" in plan_values
+            else _unknown("PLAN_HAS_NO_INVALIDATION")
+        )
         return {
             "support": support,
             "resistance": resistance,
             "stop": stop,
             "target": target,
+            "invalidation": invalidation,
             "calculation_version": SUPPORT_RESISTANCE_VERSION,
         }
 
@@ -264,6 +271,8 @@ class ReadPositionContextService:
     ) -> dict:
         if feature is None:
             weekly = daily = _unknown("NO_FEATURE")
+            state: Any = _unknown("NO_FEATURE")
+            rule: Any = None
         else:
             states = feature.features or {}
             weekly = {
@@ -274,7 +283,13 @@ class ReadPositionContextService:
                 "state": states.get("daily_trend_state") or "UNKNOWN",
                 "known_at": _iso(feature.as_of),
             }
-        section: dict[str, Any] = {"weekly": weekly, "daily": daily}
+            # §14.2：与特征计算共用同一条确定性合成规则（"下降趋势中的反弹"等）
+            state, rule = CalculateSecurityFeatureService._multi_timeframe(
+                daily["state"], weekly["state"]
+            )
+        section: dict[str, Any] = {
+            "weekly": weekly, "daily": daily, "state": state, "rule": rule,
+        }
         for period in ("60m", "15m", "5m"):
             if self._deep is None:
                 section[period] = _unknown("DEEP_MARKET_DATA_NOT_BOUND")

@@ -208,3 +208,70 @@ def test_market_regime_binds_index_state_from_benchmark() -> None:
     )
     assert unknown.index_states["status"] == "UNKNOWN"
     assert unknown.index_states["reason"] == "INSUFFICIENT_HISTORY"
+
+
+def declining_revision(count: int = 260) -> BarSeriesRevision:
+    bars = tuple(
+        MarketBar(
+            bar_time=NOW - timedelta(days=count - index),
+            open=40 - index / 10,
+            high=40.5 - index / 10,
+            low=39.5 - index / 10,
+            close=39.8 - index / 10,
+            volume=1000 + index * 10,
+            amount=1_000_000 + index * 1000,
+            fetch_time=NOW,
+        )
+        for index in range(count)
+    )
+    return BarSeriesRevision.build(BarSeriesRevisionContent(
+        revision_id=uuid4(), security_id=uuid4(), period=BarPeriod.DAY,
+        adjust_type=AdjustType.QFQ, source="fixture", upstream_source="fixture",
+        raw_bar_available=True, factor_revision_id=uuid4(),
+        point_in_time_precision=PointInTimePrecision.FULL, known_at=NOW, bars=bars,
+    ))
+
+
+def test_multi_timeframe_weekly_down_daily_up_is_bounce_not_reversal() -> None:
+    """§14.2 强制规则：weekly=DOWN 且日线/盘中上涨 → 默认描述为
+    "下降趋势中的反弹"，绝不偷换成反转；作为 Context 事实/AI 判断约束。"""
+    service = CalculateSecurityFeatureService()
+    falling = [40 - index * 0.2 - (index % 3) * 0.05 for index in range(40)]
+    result = service.execute(
+        feature_run_id=uuid4(), revision=revision(), as_of=NOW,
+        weekly_revision=weekly_revision(falling),
+    )
+    assert result.features["daily_trend_state"] == "UP"
+    assert result.features["weekly_trend_state"] == "DOWN"
+    assert result.features["multi_timeframe_state"] == "WEEKLY_DOWN_DAILY_BOUNCE"
+    assert result.features["multi_timeframe_rule"] == "下降趋势中的反弹"
+
+
+def test_multi_timeframe_aligned_states_are_explicit() -> None:
+    service = CalculateSecurityFeatureService()
+    falling = [40 - index * 0.2 - (index % 3) * 0.05 for index in range(40)]
+    both_down = service.execute(
+        feature_run_id=uuid4(), revision=declining_revision(), as_of=NOW,
+        weekly_revision=weekly_revision(falling),
+    )
+    assert both_down.features["daily_trend_state"] == "DOWN"
+    assert both_down.features["multi_timeframe_state"] == "WEEKLY_DOWN_DAILY_DOWN"
+    assert both_down.features["multi_timeframe_rule"] is None
+
+
+def test_multi_timeframe_unknown_when_any_key_period_insufficient() -> None:
+    """§14.3：任一关键周期 stale/missing → UNKNOWN，不给伪精确判断。"""
+    service = CalculateSecurityFeatureService()
+    # 无周 K → 周期状态 UNKNOWN
+    no_weekly = service.execute(
+        feature_run_id=uuid4(), revision=revision(), as_of=NOW,
+    )
+    assert no_weekly.features["weekly_trend_state"] == "UNKNOWN"
+    assert no_weekly.features["multi_timeframe_state"] == "UNKNOWN"
+    # 日线历史不足 → 日线状态 UNKNOWN（MA 缺失）
+    short_daily = service.execute(
+        feature_run_id=uuid4(), revision=revision(30), as_of=NOW,
+        weekly_revision=weekly_revision([10.0 + index * 0.1 for index in range(40)]),
+    )
+    assert short_daily.features["daily_trend_state"] == "UNKNOWN"
+    assert short_daily.features["multi_timeframe_state"] == "UNKNOWN"

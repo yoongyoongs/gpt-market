@@ -72,7 +72,9 @@ def _feature(
         quality={"point_in_time_precision": "FULL"},
         features={
             "daily_trend_state": "UP",
-            "weekly_trend_state": "UP",
+            "weekly_trend_state": "DOWN",
+            "multi_timeframe_state": "WEEKLY_DOWN_DAILY_BOUNCE",
+            "multi_timeframe_rule": "下降趋势中的反弹",
             "liquidity_quality": "GOOD",
         },
         input_hash=canonical_hash({"index": index}),
@@ -180,6 +182,10 @@ async def test_builds_compact_ordered_pack_and_replays_by_hash() -> None:
     assert [member.candidate_order for member in first.members] == list(range(1, 21))
     assert first.coverage == 0.9
     assert first.members[0].recall_summary["channels"] == ["trend"]
+    # §14.2：多周期合成事实必须随候选包下发（周 DOWN + 日 UP → 反弹描述）
+    trend = first.members[0].trend_summary
+    assert trend["multi_timeframe_state"] == "WEEKLY_DOWN_DAILY_BOUNCE"
+    assert trend["multi_timeframe_rule"] == "下降趋势中的反弹"
     serialized = first.model_dump(mode="json")
     assert "final_total_score" not in str(serialized)
     assert first.trim_summary["omitted"] == [

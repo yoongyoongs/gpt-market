@@ -238,6 +238,8 @@ class BuildCandidateComparisonService:
                 "relative_industry_strength": feature.relative_industry_strength,
                 "daily_trend_state": feature.features.get("daily_trend_state"),
                 "weekly_trend_state": feature.features.get("weekly_trend_state"),
+                "multi_timeframe_state": feature.features.get("multi_timeframe_state"),
+                "multi_timeframe_rule": feature.features.get("multi_timeframe_rule"),
                 "latest_bar_time": feature.features.get("latest_bar_time"),
             },
             position_summary={

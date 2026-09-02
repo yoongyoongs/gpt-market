@@ -101,11 +101,16 @@ class CalculateSecurityFeatureService:
             }
         )
         available = self.feature_fields - len(set(missing))
+        daily_trend = self._trend_state(values)
+        weekly_trend = self._weekly_trend_state(weekly_revision, as_of)
+        multi_state, multi_rule = self._multi_timeframe(daily_trend, weekly_trend)
         extras = {
             "bar_count": len(bars),
             "latest_bar_time": latest_time,
-            "daily_trend_state": self._trend_state(values),
-            "weekly_trend_state": self._weekly_trend_state(weekly_revision, as_of),
+            "daily_trend_state": daily_trend,
+            "weekly_trend_state": weekly_trend,
+            "multi_timeframe_state": multi_state,
+            "multi_timeframe_rule": multi_rule,
             "overheated": bool(values["position_60d"] is not None and values["position_60d"] >= 0.9),
             "liquidity_quality": self._liquidity_quality(bars[-1].amount),
         }
@@ -199,6 +204,20 @@ class CalculateSecurityFeatureService:
             return None
         baseline = statistics.fmean(item.volume for item in bars[-window - 1:-1])
         return None if baseline <= 0 else bars[-1].volume / baseline
+
+    @staticmethod
+    def _multi_timeframe(daily: str, weekly: str) -> tuple[str, str | None]:
+        """§14.2 多周期合成事实（确定性规则，非 Final Score）。
+
+        weekly=DOWN 且日线上涨 → 默认描述"下降趋势中的反弹"，
+        反转必须有明确可解释证据；任一关键周期 UNKNOWN → UNKNOWN，
+        绝不用别的周期数据冒充（§14.3）。
+        """
+        if daily == "UNKNOWN" or weekly == "UNKNOWN":
+            return "UNKNOWN", None
+        if weekly == "DOWN" and daily == "UP":
+            return "WEEKLY_DOWN_DAILY_BOUNCE", "下降趋势中的反弹"
+        return f"WEEKLY_{weekly}_DAILY_{daily}", None
 
     @staticmethod
     def _trend_state(values: dict[str, object]) -> str:

@@ -64,7 +64,9 @@ async def run(database_url: str, repetitions: int) -> dict:
         pool_size=settings.v3_database_pool_size,
         max_overflow=settings.v3_database_max_overflow,
     )
-    uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)
+    def uow_factory():
+        return SQLAlchemyUnitOfWork(database.sessions)
+
     now = datetime.now(timezone.utc)
     async with uow_factory() as uow:
         page = await uow.features.query(FeatureQuery(

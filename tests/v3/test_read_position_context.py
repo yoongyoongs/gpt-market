@@ -31,6 +31,7 @@ def _plan(version: int, *, plan_id=None, supersedes=None, horizon="D3_10"):
     if version == 2:
         plan["stop_loss"] = "9.5"
         plan["take_profit"] = "12"
+        plan["invalidation"] = "跌破 9.5 且周线未转 BASE 则计划失效"
     return {
         "entry_plan_id": str(plan_id or uuid4()),
         "version": version,
@@ -192,8 +193,13 @@ async def test_full_position_context_payload_assembles_all_sections():
     assert payload["levels"]["resistance"] == pytest.approx(10.6 + 24 * 0.04)
     assert payload["levels"]["stop"] == "9.5"
     assert payload["levels"]["target"] == "12"
+    # §14.1：失效条件随计划透出；计划缺失时诚实 UNKNOWN
+    assert payload["levels"]["invalidation"] == "跌破 9.5 且周线未转 BASE 则计划失效"
     assert payload["multi_timeframe"]["weekly"]["state"] == "UP"
     assert payload["multi_timeframe"]["daily"]["state"] == "RANGE"
+    # §14.2：合成事实随特征透出（确定性规则，非 Final Score）
+    assert payload["multi_timeframe"]["state"] == "WEEKLY_UP_DAILY_RANGE"
+    assert payload["multi_timeframe"]["rule"] is None
     assert payload["multi_timeframe"]["5m"]["status"] == "AVAILABLE"
     assert payload["multi_timeframe"]["5m"]["precision"] == "LIMITED"
     assert payload["fundamental"] == {"status": "NOT_AVAILABLE",
@@ -208,6 +214,7 @@ async def test_missing_pieces_degrade_explicitly_without_fabrication():
     facts = _facts(plan_v1, _plan(2, supersedes=plan_v1["entry_plan_id"]))
     facts["entry_plans"][1]["plan"].pop("stop_loss")
     facts["entry_plans"][1]["plan"].pop("take_profit")
+    facts["entry_plans"][1]["plan"].pop("invalidation")
     payload = await _service(facts, None, None, calendar=False, deep=False).execute(
         uuid4(), "600300", "SH", as_of=NOW,
     )
@@ -219,8 +226,14 @@ async def test_missing_pieces_degrade_explicitly_without_fabrication():
     assert payload["levels"]["support"]["reason"] == "NO_DAILY_BARS"
     assert payload["levels"]["stop"]["status"] == "UNKNOWN"
     assert payload["levels"]["stop"]["reason"] == "PLAN_HAS_NO_STOP_TARGET"
+    # §14.1：计划未写失效条件 → 诚实 UNKNOWN，绝不编造
+    assert payload["levels"]["invalidation"]["status"] == "UNKNOWN"
+    assert payload["levels"]["invalidation"]["reason"] == "PLAN_HAS_NO_INVALIDATION"
     for period in ("5m", "15m", "60m"):
         assert payload["multi_timeframe"][period]["status"] == "UNKNOWN"
         assert payload["multi_timeframe"][period]["reason"] == "DEEP_MARKET_DATA_NOT_BOUND"
     assert payload["multi_timeframe"]["weekly"]["status"] == "UNKNOWN"
     assert payload["multi_timeframe"]["weekly"]["reason"] == "NO_FEATURE"
+    # 特征缺失 → 合成事实诚实 UNKNOWN
+    assert payload["multi_timeframe"]["state"]["status"] == "UNKNOWN"
+    assert payload["multi_timeframe"]["state"]["reason"] == "NO_FEATURE"

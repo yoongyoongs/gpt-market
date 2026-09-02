@@ -97,3 +97,43 @@ async def test_provider_failure_is_isolated_per_period() -> None:
     assert structure.periods["15m"]["status"] == "UNKNOWN"
     assert "RuntimeError" in structure.periods["15m"]["reason"]
     assert structure.periods["5m"]["status"] == "AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_sixty_minute_structure_returns_trend_support_resistance() -> None:
+    """§14.1：60m 必须给出结构/支撑/压力/趋势；数据不足显式 UNKNOWN。"""
+
+    class RisingProvider:
+        async def get_kline(self, code, period, limit, adjust="qfq"):
+            count = 12
+            bars = [
+                type("Bar", (), {
+                    "timestamp": NOW - timedelta(minutes=(count - i) * 60),
+                    "open": 10.0 + i * 0.1, "high": 10.3 + i * 0.1,
+                    "low": 9.8 + i * 0.1, "close": 10.1 + i * 0.1,
+                    "volume": 1000, "amount": 1_000_000.0,
+                    "provisional": False,
+                })()
+                for i in range(count)
+            ]
+            return type("Result", (), {"klines": bars, "stale": False})()
+
+    structure = await make_service(RisingProvider()).get_intraday_structure(
+        "000001", as_of=NOW,
+    )
+    sixty = structure.periods["60m"]
+    assert sixty["status"] == "AVAILABLE"
+    structure_60m = sixty["structure"]
+    assert structure_60m["trend"] == "UP"
+    assert structure_60m["support"] == pytest.approx(min(9.8 + i * 0.1 for i in range(12)))
+    assert structure_60m["resistance"] == pytest.approx(max(10.3 + i * 0.1 for i in range(12)))
+
+    # 数据不足：结构显式 UNKNOWN，绝不给伪支撑/压力
+    structure_short = await make_service(FakeMinuteProvider({
+        "5m": 3, "15m": 0, "60m": 0,
+    })).get_intraday_structure("000001", as_of=NOW)
+    short = structure_short.periods["5m"]
+    assert short["status"] == "AVAILABLE"
+    assert short["structure"]["trend"] == "UNKNOWN"
+    assert short["structure"]["support"] is None
+    assert short["structure"]["resistance"] is None
