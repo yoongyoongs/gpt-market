@@ -378,3 +378,36 @@ async def test_latest_succeeded_idempotency_key_returns_terminal_key() -> None:
     await engine.dispose()
     assert latest == _trade_date(1).isoformat()
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_latest_runs_returns_recent_runs() -> None:
+    """RT-08：流水线状态聚合依赖 latest_runs（known_at 降序，含 metrics）。"""
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    known_a = datetime.now(timezone.utc) - timedelta(seconds=2)
+    known_b = datetime.now(timezone.utc)
+    nonce = uuid4().hex[:8]  # 共享 DB：幂等键每次运行唯一，避免残留行冲突
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        await uow.orchestrator.record(
+            orchestrator_run_id=uuid4(), job_id="eod-latest-probe",
+            idempotency_key=f"rt08-{nonce}-1", attempt=1, status="SUCCEEDED",
+            known_at=known_a, as_of=known_a, started_at=known_a,
+            completed_at=known_a, error_type=None, error_summary=None,
+            metrics={"n": 1},
+        )
+        await uow.orchestrator.record(
+            orchestrator_run_id=uuid4(), job_id="eod-latest-probe",
+            idempotency_key=f"rt08-{nonce}-2", attempt=1, status="FAILED",
+            known_at=known_b, as_of=known_b, started_at=known_b,
+            completed_at=known_b, error_type="ValueError", error_summary="boom",
+            metrics={"n": 2},
+        )
+        await uow.commit()
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        runs = await uow.orchestrator.latest_runs(limit=200)
+    probe = [r for r in runs if r["idempotency_key"].startswith(f"rt08-{nonce}")]
+    assert len(probe) == 2
+    assert probe[0]["idempotency_key"] == f"rt08-{nonce}-2"  # known_at 降序
+    assert probe[0]["error_summary"] == "boom"
+    assert probe[1]["metrics"] == {"n": 1}

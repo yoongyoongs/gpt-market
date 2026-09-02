@@ -50,6 +50,27 @@ class SQLAlchemyOrchestratorJobRunRepository:
         # rollback 会 expire ORM 对象：在会话内复制为普通 dict
         return dict(row.metrics or {})
 
+    async def latest_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """RT-08：最近 limit 次运行（按 known_at 降序），供流水线状态聚合。"""
+        rows = await self._session.execute(
+            select(OrchestratorJobRunModel)
+            .order_by(OrchestratorJobRunModel.known_at.desc())
+            .limit(limit)
+        )
+        result = []
+        for row in rows.scalars():
+            result.append({
+                "job_run_id": str(row.job_run_id),
+                "job_id": row.job_id,
+                "idempotency_key": row.idempotency_key,
+                "status": row.status,
+                "attempt": row.attempt,
+                "metrics": dict(row.metrics or {}),
+                "error_summary": row.error_summary,
+                "known_at": row.known_at,
+            })
+        return result
+
     async def latest_succeeded_idempotency_key(self, job_id: str) -> str | None:
         """RT-05 catch-up：该 Job 最近一次成功运行对应的幂等键（即交易日）。"""
         row = await self._session.scalar(

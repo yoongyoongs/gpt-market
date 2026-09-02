@@ -20,6 +20,12 @@ from app.v3.application.read_position_context import ReadPositionContextService
 from app.v3.application.read_position_decision_context import (
     ReadPositionDecisionContextService,
 )
+from app.v3.application.read_attention import ReadAttentionEventsService
+from app.v3.application.market_intraday_status import MarketIntradayStatusService
+from app.v3.application.pipeline_eod_latest import PipelineEodLatestService
+from app.v3.infrastructure.providers.exchange_calendar import (
+    ExchangeCalendarsAShareCalendar,
+)
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -817,6 +823,55 @@ async def read_market_reviews(limit: int = 100):
 async def read_performance(limit: int = 100):
     """RC-08B READ：绩效 attribution/summary 事实（只读）。"""
     return await ReadOperationsService(_uow).performance(limit)
+
+
+@router.get("/intraday/attention")
+async def read_attention_events(
+    codes: str | None = Query(default=None),
+    event_types: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """RT-08：Attention 事件只读聚合（OPEN 状态，§18.4 点时字段）。"""
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    service = ReadAttentionEventsService(_uow, clock=lambda: datetime.now(timezone.utc))
+    return await service.execute(
+        codes=codes.split(",") if codes else None,
+        event_types=event_types.split(",") if event_types else None,
+        limit=limit,
+    )
+
+
+@router.get("/market/intraday-status")
+async def read_market_intraday_status():
+    """RT-08：市场盘中状态（交易时段判定，确定性规则）。"""
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    calendar = ExchangeCalendarsAShareCalendar()
+
+    def _trading_day(value):
+        try:
+            return bool(calendar.is_trading_day(value))
+        except Exception:
+            return False
+
+    service = MarketIntradayStatusService(
+        clock=lambda: datetime.now(timezone.utc), is_trading_day=_trading_day,
+    )
+    return await service.execute()
+
+
+@router.get("/pipeline/eod/latest")
+async def read_pipeline_eod_latest(
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """RT-08：EOD 流水线最近一次各 job 运行状态（按 job 聚合）。"""
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    service = PipelineEodLatestService(
+        _uow, clock=lambda: datetime.now(timezone.utc),
+    )
+    return await service.execute(limit=limit)
 
 
 @router.get("/health/data-quality")

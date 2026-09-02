@@ -6,6 +6,7 @@ from typing import Any, TypeVar
 from fastmcp import FastMCP
 
 from app.container import container
+from app.mcp.v3_tools import register_v3_tools
 from app.models import ErrorResponse
 from app.serialization import serialize_business
 from app.utils.time import now_shanghai
@@ -100,3 +101,7 @@ async def scan_mainboard_ab(top_n: int = 30) -> dict[str, Any]:
 async def get_scan_coverage() -> dict[str, Any]:
     """Report quote-list coverage and freshness for the latest main-board scan."""
     return await _safe(container.scanner.get_scan_coverage())
+
+
+# RT-08：V3 只读工具（§19）——V3 启用时追加注册，未启用则不注册
+_v3_registered_tools = register_v3_tools(mcp, container)
