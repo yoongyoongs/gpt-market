@@ -96,6 +96,9 @@ class _FakePerformanceRepo:
         from app.v3.domain.performance import content_hash
         return any(content_hash(item) == value for item in self.written)
 
+    async def attribution_id_exists(self, attribution_id):
+        return any(item.attribution_id == attribution_id for item in self.written)
+
     async def add_attribution(self, command):
         self.written.append(command)
         return command.attribution_id

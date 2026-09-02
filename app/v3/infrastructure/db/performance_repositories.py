@@ -113,6 +113,13 @@ class SQLAlchemyPerformanceRepository:
             for row in rows
         ]
 
+    async def attribution_id_exists(self, attribution_id: UUID) -> bool:
+        """按确定性 attribution_id 兜底判重：known_at 变化会改变内容哈希，
+        但 uuid5 主键不变 —— 重跑必须以主键存在性为准（幂等 skip）。"""
+        return await self._session.get(
+            PerformanceAttributionModel, attribution_id
+        ) is not None
+
     async def attribution_exists(self, content_hash_value: str) -> bool:
         return (
             await self._session.scalar(

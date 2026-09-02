@@ -96,9 +96,15 @@ class MaturePerformanceService:
                         decision, baseline, window, horizon,
                         benchmark, trades, matures_at, known_at,
                     )
-                    if await uow.performance.attribution_exists(
-                        content_hash(attribution)
-                    ):
+                    already_exists = (
+                        await uow.performance.attribution_exists(
+                            content_hash(attribution)
+                        )
+                        or await uow.performance.attribution_id_exists(
+                            attribution.attribution_id
+                        )
+                    )
+                    if already_exists:
                         skipped += 1
                         continue
                     await uow.performance.add_attribution(attribution)

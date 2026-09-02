@@ -96,6 +96,7 @@ class SQLAlchemyAIResultImportRepository:
             preview_payload=preview.model_dump(mode="json"),
             created_at=preview.created_at,
         ))
+        await self._session.flush()
         self._session.add(AIResultBundleModel(
             bundle_id=preview.bundle.bundle_id,
             import_id=preview.import_id,
@@ -104,6 +105,9 @@ class SQLAlchemyAIResultImportRepository:
             produced_at=preview.bundle.produced_at,
             bundle_hash=preview.bundle.bundle_hash,
         ))
+        # 这三张表未声明 ORM relationship，SQLAlchemy 不保证跨表插入顺序；
+        # 显式 flush 保证 imports -> bundles -> groups 的外键依赖次序。
+        await self._session.flush()
         validity = {item.group_id: item.valid for item in preview.groups}
         now = datetime.now(timezone.utc)
         for group in preview.bundle.atomic_groups:
