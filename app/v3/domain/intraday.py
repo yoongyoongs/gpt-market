@@ -143,3 +143,70 @@ class IntradayStructureSnapshot(V3Contract):
     @classmethod
     def _check_aware(cls, values):
         return _require_aware_fields(values, ("as_of", "known_at"))
+
+
+class IntradayOverlayFeature(V3Contract):
+    """L1 全市场 Intraday Overlay（§4.1）：EOD 特征 × 实时 Quote 轻量叠加。
+
+    特征或 Levels 缺失的派生字段一律 None（诚实），绝不编造。
+    """
+
+    code: str
+    market: str
+    as_of: datetime
+    known_at: datetime
+    source: str
+    latest_price: float | None = None
+    prev_close: float | None = None
+    intraday_return: float | None = None
+    intraday_range_pct: float | None = None
+    intraday_volume_ratio: float | None = None
+    intraday_turnover: float | None = None
+    vs_ma5: float | None = None
+    vs_ma10: float | None = None
+    vs_ma20: float | None = None
+    vs_ma60: float | None = None
+    vs_prev_high_20d: float | None = None
+    vs_prev_low_20d: float | None = None
+    breakout_now: bool | None = None
+    pullback_now: bool | None = None
+    failed_breakout: bool | None = None
+    near_support: bool | None = None
+    near_resistance: bool | None = None
+    relative_index_return: float | None = None
+    stale: bool = False
+    feature_as_of: datetime | None = None
+    feature_available: bool = False
+    ma_available: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _check_aware(cls, values):
+        return _require_aware_fields(values, ("as_of", "known_at"))
+
+
+class IntradayAttentionCandidate(V3Contract):
+    """§5.2 盘中轻量异常扫描输出：只是事实与原因，不是买入名单。"""
+
+    code: str
+    market: str
+    as_of: datetime
+    known_at: datetime
+    source: str
+    reasons: tuple[str, ...]
+    latest_price: float | None = None
+    intraday_return: float | None = None
+    volume_ratio: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _check_aware(cls, values):
+        return _require_aware_fields(values, ("as_of", "known_at"))
+
+
+class ActivePoolEntry(V3Contract):
+    """§5.3 Active Intraday Universe 成员：代码 + 来源溯源。"""
+
+    market: str
+    code: str
+    sources: list[str] = []
