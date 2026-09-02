@@ -12,7 +12,11 @@ docker run -d --name "$DRILL" -e POSTGRES_PASSWORD=drill-only \
   -e POSTGRES_USER=gpt_market -e POSTGRES_DB=gpt_market \
   postgres:17-bookworm >/dev/null
 trap 'docker rm -f "$DRILL" >/dev/null 2>&1 || true' EXIT
-until docker exec "$DRILL" pg_isready -U gpt_market >/dev/null 2>&1; do sleep 1; done
+# pg_isready 在 initdb 临时引导期也会成功，socket 会随后消失——
+# 必须以真实查询就绪为准（真服务器已重启完成）
+until docker exec "$DRILL" psql -U gpt_market -d gpt_market -tAc "SELECT 1" >/dev/null 2>&1; do
+  sleep 1
+done
 
 docker exec -i "$DRILL" pg_restore -U gpt_market -d gpt_market --no-owner --role=gpt_market < "$DUMP"
 
