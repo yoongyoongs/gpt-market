@@ -314,6 +314,15 @@ class IngestionRunRepository(Protocol):
     async def save(self, run: MarketDataIngestionRun, *, expected_version: int) -> bool: ...
 
 
+class AttentionEventRepository(Protocol):
+    """RT-04：AttentionEvent 仓储协议（触发事实，append-only）。"""
+
+    async def save(self, event) -> object: ...
+    async def last_known_at(self, dedupe_key: str) -> "datetime | None": ...
+    async def open_events(self, **kwargs) -> list: ...
+    async def update_status(self, attention_event_id, status) -> bool: ...
+
+
 class UnitOfWork(Protocol):
     tasks: AgentTaskRepository
     audits: AuditRepository
@@ -327,6 +336,7 @@ class UnitOfWork(Protocol):
     candidate_comparisons: CandidateComparisonRepository
     context_packs: ContextPackRepository
     task_registry: TaskRegistryRepository
+    attention: AttentionEventRepository
 
     async def __aenter__(self) -> "UnitOfWork": ...
 

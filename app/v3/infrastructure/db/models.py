@@ -2262,3 +2262,32 @@ class OperationalHealthEventModel(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     metadata_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class AttentionEventModel(Base):
+    """RT-04：AttentionEvent（实时方案 §10.3）——触发事实，不是交易信号。"""
+
+    __tablename__ = "attention_events"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_attention_events_hash"),
+        Index("ix_attention_events_dedupe_time", "dedupe_key", "known_at"),
+        Index("ix_attention_events_status_time", "status", "known_at"),
+        {"schema": V3_SCHEMA},
+    )
+    attention_event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    security_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    code: Mapped[str | None] = mapped_column(String(16))
+    market: Mapped[str | None] = mapped_column(String(8))
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    entry_plan_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    position_review_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    facts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_snapshot_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

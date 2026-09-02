@@ -18,6 +18,9 @@ from app.v3.infrastructure.db.repositories import (
     SQLAlchemyRecallRepository,
     SQLAlchemyUniverseRepository,
 )
+from app.v3.infrastructure.db.attention_repositories import (
+    SQLAlchemyAttentionRepository,
+)
 from app.v3.infrastructure.db.decision_repositories import (
     SQLAlchemyAIResultImportRepository,
 )
@@ -61,6 +64,7 @@ class SQLAlchemyUnitOfWork:
         self.orchestrator = SQLAlchemyOrchestratorJobRunRepository(self._session)
         self.index_benchmarks = SQLAlchemyIndexBenchmarkRepository(self._session)
         self.reads = SQLAlchemyReadRepository(self._session)
+        self.attention = SQLAlchemyAttentionRepository(self._session)
         return self
 
     async def __aexit__(
