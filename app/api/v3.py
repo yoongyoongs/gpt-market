@@ -9,6 +9,13 @@ from app.container import container
 from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
 from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.read_operations import ReadOperationsService
+from app.v3.application.intraday_market_data import IntradayMarketDataService
+from app.v3.application.intraday_structure_snapshot import (
+    IntradayStructureSnapshotService,
+)
+from app.v3.application.read_entry_decision_context import (
+    ReadEntryDecisionContextService,
+)
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -588,6 +595,30 @@ async def portfolio_position(account_id: UUID, security_id: UUID):
     if position is None:
         raise HTTPException(status_code=404, detail="position not found")
     return position
+
+
+@router.get("/stocks/{code}/decision-context")
+async def entry_decision_context(
+    code: str,
+    market: str = Query(default="SZ"),
+    as_of: datetime | None = Query(default=None),
+):
+    """RT-06：Entry Decision Context——回答"现在能买吗"。
+
+    聚合最新 Decision/EntryPlan + 实时 Quote + 分钟结构；
+    Trigger/Cancel 只做客观评估；缺关键实时数据绝不 READY。
+    """
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    bars_service = IntradayMarketDataService(container.eastmoney)
+    service = ReadEntryDecisionContextService(
+        _uow,
+        bars_service,
+        IntradayStructureSnapshotService(bars_service),
+    )
+    return await service.execute(
+        code, market, as_of=as_of or datetime.now(timezone.utc),
+    )
 
 
 @router.get("/portfolio/intraday/{code}")

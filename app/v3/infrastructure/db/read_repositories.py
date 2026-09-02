@@ -35,6 +35,15 @@ class SQLAlchemyReadRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def security_id_by_code(self, market: str, code: str):
+        """RT-06：按 (market, code) 查 securities 主键。"""
+        return await self._session.scalar(
+            select(SecurityModel.security_id).where(
+                SecurityModel.market == market,
+                SecurityModel.code == code,
+            )
+        )
+
     async def portfolio_overview(self, limit: int) -> dict:
         accounts = (await self._session.scalars(
             select(AccountModel).order_by(AccountModel.created_at).limit(limit)
