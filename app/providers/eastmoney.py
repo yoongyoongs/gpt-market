@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from math import ceil
 from datetime import datetime
 from typing import Any
@@ -26,7 +27,16 @@ LIST_FIELDS = "f12,f14,f2,f18,f17,f15,f16,f3,f4,f5,f6,f8,f10,f7,f13,f124"
 SECTOR_FIELDS = "f12,f14,f3,f6,f104,f105,f124"
 QUOTE_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 LIST_UT = "bd1d9ddb04089700cf9c27f6f7426281"
-PERIOD_MAP = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "day": 101, "week": 102, "month": 103}
+PERIOD_MAP = {
+    "1m": 1,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "60m": 60,
+    "day": 101,
+    "week": 102,
+    "month": 103,
+}
 MAINBOARD_PREFIXES = ("000", "001", "002", "003", "600", "601", "603", "605")
 
 
@@ -84,9 +94,13 @@ def parse_quote(
     turnover = scale_raw(data.get("f168", data.get("f8")), divisor)
     volume_ratio = scale_raw(data.get("f50", data.get("f10")), divisor)
     amplitude = scale_raw(data.get("f171", data.get("f7")), divisor)
-    ts, timestamp_source = _timestamp(data.get("f86", data.get("f124")), fetch_timestamp)
+    ts, timestamp_source = _timestamp(
+        data.get("f86", data.get("f124")), fetch_timestamp
+    )
     volume_lots = _integer(data.get("f47", data.get("f5")))
-    complete = all(value is not None for value in (price, prev_close, open_price, high, low))
+    complete = all(
+        value is not None for value in (price, prev_close, open_price, high, low)
+    )
     return Quote(
         code=code,
         name=str(data.get("f58") or data.get("f14") or ""),
@@ -104,7 +118,12 @@ def parse_quote(
         volume_ratio=volume_ratio,
         amplitude=amplitude,
         suspended=price is None or volume_lots in (None, 0),
-        **quality_service.assess(ts, timestamp_source=timestamp_source, complete=complete, server_timestamp=fetch_timestamp),
+        **quality_service.assess(
+            ts,
+            timestamp_source=timestamp_source,
+            complete=complete,
+            server_timestamp=fetch_timestamp,
+        ),
     )
 
 
@@ -112,7 +131,9 @@ def parse_kline_row(row: str) -> Kline:
     values = row.split(",")
     if len(values) < 7:
         raise ProviderError("eastmoney kline row has fewer than 7 fields")
-    timestamp = datetime.strptime(values[0], "%Y-%m-%d %H:%M" if " " in values[0] else "%Y-%m-%d").replace(tzinfo=SHANGHAI)
+    timestamp = datetime.strptime(
+        values[0], "%Y-%m-%d %H:%M" if " " in values[0] else "%Y-%m-%d"
+    ).replace(tzinfo=SHANGHAI)
     return Kline(
         timestamp=timestamp,
         open=float(values[1]),
@@ -152,7 +173,9 @@ class EastmoneyProvider(MarketDataProvider):
         self.settings = settings
         self.cache = cache or AsyncTTLCache()
         self.quality_service = quality_service or DataQualityService(
-            settings.stale_after_seconds, settings.old_after_seconds, settings.unavailable_after_seconds
+            settings.stale_after_seconds,
+            settings.old_after_seconds,
+            settings.unavailable_after_seconds,
         )
         self._client: httpx.AsyncClient | None = None
         self._sync_proxy_client: httpx.Client | None = None
@@ -174,7 +197,9 @@ class EastmoneyProvider(MarketDataProvider):
             if self.settings.eastmoney_proxy:
                 self._sync_proxy_client = httpx.Client(
                     timeout=httpx.Timeout(self.settings.eastmoney_timeout),
-                    limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
+                    limits=httpx.Limits(
+                        max_connections=40, max_keepalive_connections=20
+                    ),
                     headers=dict(self._client.headers),
                     follow_redirects=True,
                     proxy=self.settings.eastmoney_proxy,
@@ -200,15 +225,25 @@ class EastmoneyProvider(MarketDataProvider):
         assert self._client is not None
         last_error: Exception | None = None
         if "push2his.eastmoney.com" in url:
-            urls = [url, url.replace("push2his.", "push2."), url.replace("push2his.", "push2delay.")]
+            urls = [
+                url,
+                url.replace("push2his.", "push2."),
+                url.replace("push2his.", "push2delay."),
+            ]
         else:
-            urls = [url, url.replace("push2.", "push2delay."), url.replace("push2.", "push2his.")]
+            urls = [
+                url,
+                url.replace("push2.", "push2delay."),
+                url.replace("push2.", "push2his."),
+            ]
         attempt_count = attempts or self.settings.eastmoney_retries
         for attempt in range(attempt_count):
             try:
                 request_url = urls[min(attempt, len(urls) - 1)]
                 if self._sync_proxy_client is not None:
-                    response = await asyncio.to_thread(self._sync_proxy_client.get, request_url, params=params)
+                    response = await asyncio.to_thread(
+                        self._sync_proxy_client.get, request_url, params=params
+                    )
                 else:
                     response = await self._client.get(request_url, params=params)
                 response.raise_for_status()
@@ -216,12 +251,21 @@ class EastmoneyProvider(MarketDataProvider):
                 if payload.get("rc") != 0 or payload.get("data") is None:
                     raise ProviderError(f"eastmoney returned rc={payload.get('rc')}")
                 if require_key and not payload["data"].get(require_key):
-                    raise ProviderEmptyDataError(f"eastmoney returned empty {require_key}")
+                    raise ProviderEmptyDataError(
+                        f"eastmoney returned empty {require_key}"
+                    )
                 return payload
             except (httpx.HTTPError, ValueError, ProviderError) as exc:
                 last_error = exc
                 if attempt + 1 < attempt_count:
-                    await asyncio.sleep(0.2 * (2**attempt))
+                    # 指数退避 + 抖动：应对东财对云 IP 的间歇性连接层限流
+                    # （0.2s 级退避对分钟级限流窗口毫无意义）
+                    backoff = self.settings.eastmoney_backoff_base * (2**attempt)
+                    backoff = min(
+                        backoff * (1 + random.random() * 0.5),
+                        self.settings.eastmoney_backoff_cap,
+                    )
+                    await asyncio.sleep(backoff)
         detail = str(last_error) if last_error else "unknown error"
         if isinstance(last_error, httpx.TimeoutException):
             error_type = ProviderTimeoutError
@@ -229,7 +273,9 @@ class EastmoneyProvider(MarketDataProvider):
             error_type = ProviderEmptyDataError
         else:
             error_type = ProviderError
-        raise error_type(f"eastmoney request failed after {attempt_count} attempts: {detail}")
+        raise error_type(
+            f"eastmoney request failed after {attempt_count} attempts: {detail}"
+        )
 
     async def get_quote(self, code: str) -> Quote:
         code = validate_code(code)
@@ -237,10 +283,18 @@ class EastmoneyProvider(MarketDataProvider):
         async def load() -> Quote:
             payload = await self._request(
                 self.quote_url,
-                {"ut": QUOTE_UT, "secid": to_eastmoney_secid(code), "fltt": 2, "invt": 2, "fields": QUOTE_FIELDS},
+                {
+                    "ut": QUOTE_UT,
+                    "secid": to_eastmoney_secid(code),
+                    "fltt": 2,
+                    "invt": 2,
+                    "fields": QUOTE_FIELDS,
+                },
                 attempts=1,
             )
-            return parse_quote(payload["data"], fltt=2, quality_service=self.quality_service)
+            return parse_quote(
+                payload["data"], fltt=2, quality_service=self.quality_service
+            )
 
         return await self.cache.get_or_set(f"quote:{code}", 3, load)
 
@@ -253,10 +307,18 @@ class EastmoneyProvider(MarketDataProvider):
             secid = f"{1 if market == 'SH' else 0}.{code}"
             payload = await self._request(
                 self.quote_url,
-                {"ut": QUOTE_UT, "secid": secid, "fltt": 2, "invt": 2, "fields": QUOTE_FIELDS},
+                {
+                    "ut": QUOTE_UT,
+                    "secid": secid,
+                    "fltt": 2,
+                    "invt": 2,
+                    "fields": QUOTE_FIELDS,
+                },
                 attempts=1,
             )
-            return parse_quote(payload["data"], fltt=2, quality_service=self.quality_service)
+            return parse_quote(
+                payload["data"], fltt=2, quality_service=self.quality_service
+            )
 
         return await self.cache.get_or_set(f"index:{market}:{code}", 3, load)
 
@@ -290,7 +352,8 @@ class EastmoneyProvider(MarketDataProvider):
                     "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 },
                 require_key="klines",
-                attempts=self.settings.eastmoney_retries,
+                # 指数基准摄取跑在收盘后 Job，多试几次换成功率（RT-10 收口）
+                attempts=max(self.settings.eastmoney_retries, 5),
             )
             klines = parse_kline_rows(payload["data"].get("klines"))
             if not klines:
@@ -298,25 +361,39 @@ class EastmoneyProvider(MarketDataProvider):
                     f"eastmoney returned no {period} index kline for {code}"
                 )
             return KlineResult(
-                code=code, period=period, klines=klines,
+                code=code,
+                period=period,
+                klines=klines,
                 **self.quality_service.assess(klines[-1].timestamp),
             )
 
-        return await self.cache.get_or_set(f"index-kline:{market}:{code}:{period}", 60, load)
+        return await self.cache.get_or_set(
+            f"index-kline:{market}:{code}:{period}", 60, load
+        )
 
     async def get_quotes(self, codes: list[str]) -> list[Quote]:
         unique = list(dict.fromkeys(validate_code(code) for code in codes))
         if len(unique) > 100:
             raise ValueError("at most 100 codes are allowed")
-        results = await asyncio.gather(*(self.get_quote(code) for code in unique), return_exceptions=True)
+        results = await asyncio.gather(
+            *(self.get_quote(code) for code in unique), return_exceptions=True
+        )
         quotes = [item for item in results if isinstance(item, Quote)]
         if not quotes and results:
-            first_error = next((item for item in results if isinstance(item, Exception)), None)
+            first_error = next(
+                (item for item in results if isinstance(item, Exception)), None
+            )
             raise ProviderError(f"all quote requests failed: {first_error}")
         return quotes
 
     async def get_kline(
-        self, code: str, period: str, limit: int, adjust: str = "qfq", *, quote: Quote | None = None
+        self,
+        code: str,
+        period: str,
+        limit: int,
+        adjust: str = "qfq",
+        *,
+        quote: Quote | None = None,
     ) -> KlineResult:
         code = validate_code(code)
         if period not in PERIOD_MAP:
@@ -341,37 +418,50 @@ class EastmoneyProvider(MarketDataProvider):
                     "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
                 },
                 require_key="klines",
+                # 指数基准摄取跑在收盘后 Job，多试几次换成功率（RT-10 收口）
                 attempts=self.settings.eastmoney_retries,
             )
             klines = parse_kline_rows(payload["data"].get("klines"))
             if not klines:
-                raise ProviderEmptyDataError(f"eastmoney returned no {period} kline for {code}")
+                raise ProviderEmptyDataError(
+                    f"eastmoney returned no {period} kline for {code}"
+                )
             data_ts = klines[-1].timestamp
-            if period in {"day", "week", "month"} and data_ts.date() == now_shanghai().date():
+            if (
+                period in {"day", "week", "month"}
+                and data_ts.date() == now_shanghai().date()
+            ):
                 try:
                     data_ts = (await self.get_quote(code)).data_timestamp
                 except ProviderError:
                     pass
-            return KlineResult(code=code, period=period, klines=klines, **self.quality_service.assess(data_ts))
+            return KlineResult(
+                code=code,
+                period=period,
+                klines=klines,
+                **self.quality_service.assess(data_ts),
+            )
 
-        return await self.cache.get_or_set(f"kline:{code}:{period}:{adjust}:{limit}", ttl, load)
+        return await self.cache.get_or_set(
+            f"kline:{code}:{period}:{adjust}:{limit}", ttl, load
+        )
 
     async def get_all_a_shares(self) -> tuple[int, list[Quote]]:
         async def load() -> tuple[int, list[Quote]]:
             common = {
-                    "pn": 1,
-                    "pz": 100,
-                    "po": 1,
-                    "np": 1,
-                    "ut": LIST_UT,
-                    "fltt": 2,
-                    "invt": 2,
-                    # A mutable f3 sort lets symbols move between pages while the
-                    # snapshot is loading, producing duplicates and omissions.
-                    # Code order is stable for the duration of a paginated read.
-                    "fid": "f12",
-                    "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
-                    "fields": LIST_FIELDS,
+                "pn": 1,
+                "pz": 100,
+                "po": 1,
+                "np": 1,
+                "ut": LIST_UT,
+                "fltt": 2,
+                "invt": 2,
+                # A mutable f3 sort lets symbols move between pages while the
+                # snapshot is loading, producing duplicates and omissions.
+                # Code order is stable for the duration of a paginated read.
+                "fid": "f12",
+                "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
+                "fields": LIST_FIELDS,
             }
 
             async def fetch_page(page: int) -> dict[str, Any]:
@@ -394,20 +484,31 @@ class EastmoneyProvider(MarketDataProvider):
                 except Exception as exc:
                     return exc
 
-            remaining = await asyncio.gather(*(guarded(page) for page in range(2, page_count + 1)))
-            payloads = [payload, *(item for item in remaining if isinstance(item, dict))]
-            raw_rows = [row for item in payloads for row in (item["data"].get("diff") or [])]
+            remaining = await asyncio.gather(
+                *(guarded(page) for page in range(2, page_count + 1))
+            )
+            payloads = [
+                payload,
+                *(item for item in remaining if isinstance(item, dict)),
+            ]
+            raw_rows = [
+                row for item in payloads for row in (item["data"].get("diff") or [])
+            ]
             quotes_by_code: dict[str, Quote] = {}
             for row in raw_rows:
                 try:
-                    quote = parse_quote(row, fltt=2, quality_service=self.quality_service)
+                    quote = parse_quote(
+                        row, fltt=2, quality_service=self.quality_service
+                    )
                     quotes_by_code[quote.code] = quote
                 except (ValueError, ProviderError):
                     continue
             quotes = list(quotes_by_code.values())
             # The full-market snapshot seeds the canonical quote cache.  A following
             # stock request therefore reuses the exact normalized Quote object.
-            self.cache.set_many({f"quote:{quote.code}": quote for quote in quotes}, ttl=3)
+            self.cache.set_many(
+                {f"quote:{quote.code}": quote for quote in quotes}, ttl=3
+            )
             return total or len(raw_rows), quotes
 
         return await self.cache.get_or_set("market:all-a-shares", 3, load)
@@ -421,15 +522,15 @@ class EastmoneyProvider(MarketDataProvider):
         async def load() -> SectorRanking:
             fetched_at = now_shanghai()
             common = {
-                    "pz": 100,
-                    "po": 1,
-                    "np": 1,
-                    "ut": LIST_UT,
-                    "fltt": 2,
-                    "invt": 2,
-                    "fid": "f3",
-                    "fs": "m:90+t:2" if sector_type == "industry" else "m:90+t:3",
-                    "fields": SECTOR_FIELDS,
+                "pz": 100,
+                "po": 1,
+                "np": 1,
+                "ut": LIST_UT,
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": "m:90+t:2" if sector_type == "industry" else "m:90+t:3",
+                "fields": SECTOR_FIELDS,
             }
 
             async def fetch_page(page: int) -> dict[str, Any]:
@@ -446,7 +547,10 @@ class EastmoneyProvider(MarketDataProvider):
                 *(fetch_page(page) for page in range(2, page_count + 1)),
                 return_exceptions=True,
             )
-            payloads = [payload, *(item for item in remaining if isinstance(item, dict))]
+            payloads = [
+                payload,
+                *(item for item in remaining if isinstance(item, dict)),
+            ]
             rows_by_code = {
                 str(row.get("f12") or ""): row
                 for item in payloads
@@ -456,22 +560,33 @@ class EastmoneyProvider(MarketDataProvider):
             rows = list(rows_by_code.values())
             raw_items = [
                 SectorItem(
-                    name=str(row.get("f14") or ""), code=str(row.get("f12") or ""),
-                    pct_change=_number(row.get("f3")), amount=_number(row.get("f6")),
-                    up_count=_integer(row.get("f104")), down_count=_integer(row.get("f105")), rank=1,
+                    name=str(row.get("f14") or ""),
+                    code=str(row.get("f12") or ""),
+                    pct_change=_number(row.get("f3")),
+                    amount=_number(row.get("f6")),
+                    up_count=_integer(row.get("f104")),
+                    down_count=_integer(row.get("f105")),
+                    rank=1,
                 )
                 for row in rows
             ]
             ordered = sorted(
                 raw_items,
-                key=lambda item: float("-inf") if item.pct_change is None else item.pct_change,
+                key=lambda item: float("-inf")
+                if item.pct_change is None
+                else item.pct_change,
                 reverse=True,
             )
-            parsed_items = [item.model_copy(update={"rank": index}) for index, item in enumerate(ordered, 1)]
+            parsed_items = [
+                item.model_copy(update={"rank": index})
+                for index, item in enumerate(ordered, 1)
+            ]
             total_count = total_count or len(parsed_items)
             success_count = len(parsed_items)
             timestamps = [_timestamp(row.get("f124"), fetched_at) for row in rows]
-            timestamp, timestamp_source = max(timestamps, key=lambda item: item[0], default=(fetched_at, "fetch_time"))
+            timestamp, timestamp_source = max(
+                timestamps, key=lambda item: item[0], default=(fetched_at, "fetch_time")
+            )
             return SectorRanking(
                 sector_type=sector_type,
                 items=parsed_items[:limit],
@@ -479,7 +594,10 @@ class EastmoneyProvider(MarketDataProvider):
                 success_count=success_count,
                 failed_count=max(0, total_count - success_count),
                 **self.quality_service.assess(
-                    timestamp, timestamp_source=timestamp_source, complete=bool(rows), server_timestamp=fetched_at
+                    timestamp,
+                    timestamp_source=timestamp_source,
+                    complete=bool(rows),
+                    server_timestamp=fetched_at,
                 ),
             )
 

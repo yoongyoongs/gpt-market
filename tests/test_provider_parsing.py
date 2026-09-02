@@ -124,4 +124,4 @@ async def test_kline_uses_configured_retries_so_alternate_hosts_are_reached() ->
     result = await provider.get_kline("600000", "day", 1, "qfq")
 
     assert result.klines[0].close == 9.8
-    assert observed_attempts == 3
+    assert observed_attempts == 3  # 股票行情保持原重试数（指数 K 线才加固到 5）
