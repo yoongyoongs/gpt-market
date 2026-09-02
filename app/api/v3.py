@@ -16,6 +16,10 @@ from app.v3.application.intraday_structure_snapshot import (
 from app.v3.application.read_entry_decision_context import (
     ReadEntryDecisionContextService,
 )
+from app.v3.application.read_position_context import ReadPositionContextService
+from app.v3.application.read_position_decision_context import (
+    ReadPositionDecisionContextService,
+)
 from app.v3.application.build_candidate_comparison import (
     BuildCandidateComparisonService,
     CandidateComparisonQuery,
@@ -665,6 +669,26 @@ async def position_review_history(
 ):
     return await ActionWriteService(_uow).read_position_reviews(
         account_id, security_id, limit
+    )
+
+
+@router.get("/portfolio/{code}/decision-context")
+async def portfolio_position_decision_context(
+    code: str, account_id: UUID,
+    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+    as_of: datetime | None = Query(default=None),
+):
+    """RT-07：Position Decision Context——回答"现在卖不卖"。
+
+    完整 Position Context + objective_sell_facts（stop/target 客观事实，
+    只陈述、绝无建议）；卖出决策由 AI/人做，成交必须走 Trade Draft。
+    """
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    context_service = ReadPositionContextService(_uow)
+    service = ReadPositionDecisionContextService(context_service)
+    return await service.execute(
+        account_id, code, market, as_of=as_of or datetime.now(timezone.utc),
     )
 
 

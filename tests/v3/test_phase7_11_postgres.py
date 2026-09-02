@@ -347,6 +347,7 @@ async def test_phase9_manual_holding_review_needs_no_decision_and_creates_no_tra
                 "security_id": str(security_id),
                 "position_projection_hash": position["input_hash"],
                 "recommended_action": "REDUCE",
+                "reduce_ratio": 0.5,
                 "reason": "manual holding review acceptance",
             },
         }

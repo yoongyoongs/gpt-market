@@ -45,6 +45,7 @@ from app.v3.infrastructure.db.models import (
     WatchlistModel,
 )
 from app.v3.repositories.errors import RepositoryConflictError, RepositoryNotFoundError
+from app.v3.domain.position_review import PositionReviewPayload
 
 
 class SQLAlchemyAIResultImportRepository:
@@ -317,6 +318,13 @@ class SQLAlchemyAIResultImportRepository:
             expected_hash = payload.get("position_projection_hash")
             if expected_hash and expected_hash != projection.input_hash:
                 raise RepositoryConflictError("position projection changed after AI context")
+            # RT-07：动作枚举冻结 + SELL→EXIT 兼容映射；非法动作拒绝落库
+            try:
+                review_payload = PositionReviewPayload.from_payload(payload)
+            except ValueError as exc:
+                raise RepositoryConflictError(
+                    f"invalid position review payload: {exc}"
+                ) from exc
             object_id = UUID(str(payload.get("position_review_id", uuid4())))
             self._session.add(PositionReviewModel(
                 position_review_id=object_id, account_id=account_id,
@@ -343,7 +351,7 @@ class SQLAlchemyAIResultImportRepository:
                 changed_facts=payload.get("changed_facts", {}),
                 new_risks=payload.get("new_risks", []),
                 time_efficiency=str(payload.get("time_efficiency", "UNKNOWN")),
-                recommended_action=str(payload.get("recommended_action", "HOLD")),
+                recommended_action=str(review_payload.recommended_action),
                 reason=str(payload.get("reason", "No reason supplied")),
                 payload=payload,
                 content_hash=canonical_hash({"source": envelope.content_hash, "payload": payload, "projection": projection.input_hash}),
