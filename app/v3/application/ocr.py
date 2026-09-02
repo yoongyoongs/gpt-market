@@ -120,19 +120,32 @@ def _compact(text: str) -> str:
     return text.replace(" ", "")
 
 
+_ALL_LABELS = tuple(
+    label for labels in _FIELD_LABELS.values() for label in labels
+)
+
+
 def _find_value_partner(lines: list[dict[str, Any]], label_line: dict[str, Any]):
-    """标签列与数值列常分属不同 block：在同一视觉行右侧找值行。"""
+    """标签列与数值列常分属不同 block：在同一视觉行右侧找值行。
+
+    约束：值行必须整体位于标签行右缘之后（标签列自匹配排除）、
+    行顶端落在标签行纵向范围内、且不是另一条标签行。
+    """
     region = label_line["region"]
+    right_edge = region["x"] + region["w"]
     best = None
     for candidate in lines:
         if candidate is label_line:
             continue
+        compacted = _compact(candidate["text"])
+        if compacted.startswith(_ALL_LABELS):
+            continue
         other = candidate["region"]
-        if other["x"] <= region["x"]:
+        if other["x"] < right_edge:
             continue
-        if other["y"] < region["y"] - 4:
+        if other["y"] < region["y"] - 8:
             continue
-        if other["y"] > region["y"] + region["h"] + 4:
+        if other["y"] > region["y"] + region["h"]:
             continue
         if best is None or other["x"] < best["region"]["x"]:
             best = candidate
@@ -241,8 +254,7 @@ def _parse_decimal(value: str) -> Decimal | None:
         return None
 
 
-def _parse_datetime(value: str) -> datetime | None:
-    text = value.strip().replace("T", " ")
+def _try_strptime(text: str) -> datetime | None:
     for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
                 "%Y/%m/%d %H:%M:%S", "%Y-%m-%d"):
         try:
@@ -253,6 +265,19 @@ def _parse_datetime(value: str) -> datetime | None:
             # 券商截图为本地市场时间，V3 合约要求 aware——按东八区落位
             from datetime import timedelta, timezone as _tz
             return parsed.replace(tzinfo=_tz(timedelta(hours=8)))
+        return parsed
+    return None
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    text = value.strip().replace("T", " ")
+    parsed = _try_strptime(text)
+    if parsed is None:
+        # tesseract 偶发截断尾随冒号（"09:31:"）——去除尾随标点后重试
+        trimmed = text.rstrip(":：. ")
+        if trimmed != text:
+            parsed = _try_strptime(trimmed)
+    if parsed is not None:
         return parsed
     try:
         return datetime.fromisoformat(value.strip())

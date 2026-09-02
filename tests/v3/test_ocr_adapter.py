@@ -94,6 +94,52 @@ def test_parse_tesseract_tsv_maps_two_column_fields() -> None:
     assert by_key["price"].region is not None
 
 
+REAL_TSV = (
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop"
+    "\twidth\theight\tconf\ttext\n"
+    "1\t1\t0\t0\t0\t0\t0\t0\t520\t220\t-1\t\n"
+    "5\t1\t1\t1\t1\t1\t31\t22\t117\t27\t93.166489\t证\n"
+    "5\t1\t1\t1\t1\t2\t76\t18\t28\t44\t91.840111\t券\n"
+    "5\t1\t1\t1\t1\t3\t104\t18\t25\t44\t93.094757\t代\n"
+    "5\t1\t1\t1\t1\t4\t128\t18\t23\t44\t91.227348\t码\n"
+    "5\t1\t1\t1\t2\t1\t32\t66\t117\t28\t93.097519\t成\n"
+    "5\t1\t1\t1\t2\t2\t74\t62\t26\t46\t93.111992\t交\n"
+    "5\t1\t1\t1\t2\t3\t99\t66\t30\t28\t93.223434\t价\n"
+    "5\t1\t1\t1\t2\t4\t128\t62\t24\t46\t93.232262\t格\n"
+    "5\t1\t1\t1\t3\t1\t32\t156\t115\t28\t93.257156\t成\n"
+    "5\t1\t1\t1\t3\t2\t72\t152\t27\t45\t92.802277\t交\n"
+    "5\t1\t1\t1\t3\t3\t98\t152\t26\t45\t91.952026\t时\n"
+    "5\t1\t1\t1\t3\t4\t123\t152\t26\t45\t91.845032\t间\n"
+    "5\t1\t2\t1\t1\t1\t282\t22\t96\t23\t96.868874\t600519\n"
+    "5\t1\t2\t1\t2\t1\t284\t67\t103\t23\t92.967751\t1700.50\n"
+    "5\t1\t2\t1\t3\t1\t281\t111\t48\t24\t96.993881\t200\n"
+    "5\t1\t2\t1\t4\t1\t281\t156\t145\t24\t96.614807\t2026-09-01\n"
+    "5\t1\t2\t1\t4\t2\t441\t157\t79\t23\t92.760262\t09:31:\n"
+)
+
+
+def test_parse_real_broker_screenshot_tsv() -> None:
+    """生产真实 tesseract 输出：标签列逐字、值列分 block、部分标签漏识别。"""
+    from app.v3.application.ocr import map_fields
+
+    lines = parse_tesseract_tsv(REAL_TSV)
+    fields = map_fields(lines)
+    by_key = {f.key: f for f in fields}
+    assert by_key["security_code"].value == "600519"
+    assert by_key["price"].value == "1700.50"
+    assert by_key["trade_time"].value == "2026-09-01 09:31:"
+    # 成交数量标签整行未被识别：200 是孤儿值，诚实缺失、绝不硬配
+    assert "quantity" not in by_key
+
+
+def test_parse_datetime_tolerates_trailing_colon() -> None:
+    from app.v3.application.ocr import _parse_datetime
+    from datetime import timedelta, timezone as _tz
+
+    parsed = _parse_datetime("2026-09-01 09:31:")
+    assert parsed == datetime(2026, 9, 1, 9, 31, tzinfo=_tz(timedelta(hours=8)))
+
+
 def test_parse_tesseract_tsv_maps_same_line_label_value() -> None:
     # 同行标签+值（label 后紧跟值的版式）
     words = list(WORDS) + [(3, 1, 1, 10, 20, 100, 24, 90.0, "手续费"), (3, 1, 2, 110, 20, 60, 24, 90.0, "5")]
