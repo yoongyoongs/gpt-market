@@ -82,7 +82,8 @@ def parse_tesseract_tsv(tsv_text: str) -> list[dict[str, Any]]:
     header: list[str] = []
     for line in tsv_text.splitlines():
         parts = line.split("\t")
-        if header and parts[0] == "1" and len(parts) >= 12:
+        # 真实 tesseract TSV：level=5 为词行（level=1..4 是页/块/段/行容器）
+        if header and parts[0] == "5" and len(parts) >= 12:
             rows.append({
                 "block": int(parts[2]), "par": int(parts[3]), "line": int(parts[4]),
                 "left": int(parts[6]), "top": int(parts[7]),
@@ -114,31 +115,39 @@ def parse_tesseract_tsv(tsv_text: str) -> list[dict[str, Any]]:
     return lines
 
 
+def _compact(text: str) -> str:
+    """中文标签常被逐字识别（'证 券 代 码'），匹配时先去空格。"""
+    return text.replace(" ", "")
+
+
+def _find_value_partner(lines: list[dict[str, Any]], label_line: dict[str, Any]):
+    """标签列与数值列常分属不同 block：在同一视觉行右侧找值行。"""
+    region = label_line["region"]
+    best = None
+    for candidate in lines:
+        if candidate is label_line:
+            continue
+        other = candidate["region"]
+        if other["x"] <= region["x"]:
+            continue
+        if other["y"] < region["y"] - 4:
+            continue
+        if other["y"] > region["y"] + region["h"] + 4:
+            continue
+        if best is None or other["x"] < best["region"]["x"]:
+            best = candidate
+    return best
+
+
 def map_fields(lines: list[dict[str, Any]]) -> tuple[OcrField, ...]:
     """把识别行按标签映射成标准字段；side 通过买卖词直接判定。"""
     fields: list[OcrField] = []
     claimed: set[str] = set()
     for line in lines:
-        for key, labels in _FIELD_LABELS.items():
-            if key in claimed:
-                continue
-            for label in labels:
-                if line["text"].startswith(label):
-                    remainder = line["text"][len(label):].strip()
-                    if not remainder:
-                        continue
-                    if key in _VALUE_FIRST_TOKEN:
-                        remainder = remainder.split()[0]
-                    fields.append(OcrField(
-                        key=key, value=remainder,
-                        confidence=round(line["confidence"], 4),
-                        region=line["region"],
-                    ))
-                    claimed.add(key)
-                    break
+        compacted = _compact(line["text"])
         if "side" not in claimed:
             for side, words in _SIDE_WORDS.items():
-                if any(word in line["text"] for word in words):
+                if any(word in compacted for word in words):
                     fields.append(OcrField(
                         key="side", value=side,
                         confidence=round(line["confidence"], 4),
@@ -146,6 +155,28 @@ def map_fields(lines: list[dict[str, Any]]) -> tuple[OcrField, ...]:
                     ))
                     claimed.add("side")
                     break
+        for key, labels in _FIELD_LABELS.items():
+            if key in claimed:
+                continue
+            label = next((item for item in labels if compacted.startswith(item)), None)
+            if label is None:
+                continue
+            claimed.add(key)
+            value = compacted[len(label):]
+            if not value:
+                partner = _find_value_partner(lines, line)
+                value = partner["text"] if partner else ""
+            if not value:
+                continue
+            if key in _VALUE_FIRST_TOKEN:
+                tokens = value.split()
+                value = tokens[0] if tokens else value
+            fields.append(OcrField(
+                key=key, value=value,
+                confidence=round(line["confidence"], 4),
+                region=line["region"],
+            ))
+            break
     return tuple(fields)
 
 
