@@ -189,3 +189,54 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     # RT-05：报表必须显式暴露 catch-up 结果（补跑了哪些交易日）
     assert "catchup" in loaded
     assert isinstance(loaded["main"], list)
+
+
+def test_catchup_terminal_marker_uses_full_recall(monkeypatch) -> None:
+    """NEW-OPS-002：追平完成标记必须取主链终端 Job（full-recall），
+    features 成功而 evidence/full-recall 失败时不得误判已追平。"""
+    import asyncio
+
+    module = _scheduler_module()
+    seen: dict = {}
+
+    class _FakeOrchRepo:
+        async def latest_succeeded_idempotency_key(self, job_id):
+            seen["job_id"] = job_id
+            return None
+
+    class _FakeUow:
+        orchestrator = _FakeOrchRepo()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeDatabase:
+        sessions = staticmethod(lambda: _FakeUow())
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _FakeUow())
+    assert asyncio.run(module._latest_main_success_key(_FakeDatabase())) is None
+    assert seen["job_id"] == "full-recall"
+
+
+def test_annotate_catchup_runs_marks_historical_dates() -> None:
+    """NEW-OPS-003：历史日期补跑显式标注 operational-catchup，
+    当日运行标注 same-day；不改动 orchestrator 原始报告键。"""
+    from datetime import date
+
+    module = _scheduler_module()
+    trade_date = date(2026, 9, 3)
+    pending = [date(2026, 9, 1), date(2026, 9, 2), trade_date]
+    runs = [{"status": "COMPLETED", "idempotency_key": d.isoformat()}
+            for d in pending]
+    annotated = module._annotate_catchup_runs(trade_date, pending, runs)
+    assert [run["catchup_mode"] for run in annotated] == [
+        "operational-catchup", "operational-catchup", "same-day",
+    ]
+    assert annotated[0]["idempotency_key"] == "2026-09-01"
+    assert runs[0] == {"status": "COMPLETED", "idempotency_key": "2026-09-01"}

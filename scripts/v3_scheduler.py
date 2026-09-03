@@ -73,6 +73,8 @@ from scripts.v3_phase4_evidence import build_registry as build_evidence_registry
 
 CORPORATE_ACTION_LOOKBACK_DAYS = 10
 EVIDENCE_WINDOW = timedelta(days=1)
+# 主链终端 Job：catch-up 追平判断以此为完成标记（NEW-OPS-002）
+TERMINAL_MAIN_JOB = "full-recall"
 
 
 def _evidence_failed_capabilities(report) -> list[str]:
@@ -373,9 +375,16 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
 
 
 async def _latest_main_success_key(database) -> str | None:
-    """主链终端 Job（features）最近一次成功运行的幂等键（交易日）。"""
+    """主链终端 Job（full-recall）最近一次成功运行的幂等键（交易日）。
+
+    NEW-OPS-002：catch-up 完成标记必须是真实终端 Job。主链已扩展为
+    market-data → index-benchmarks → features → evidence-increment → full-recall，
+    若只看 features，后半链（evidence/full-recall）失败会被误判为已追平。
+    """
     async with SQLAlchemyUnitOfWork(database.sessions) as uow:
-        return await uow.orchestrator.latest_succeeded_idempotency_key("features")
+        return await uow.orchestrator.latest_succeeded_idempotency_key(
+            TERMINAL_MAIN_JOB
+        )
 
 
 def _json_default(value):
@@ -384,6 +393,19 @@ def _json_default(value):
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"not JSON serializable: {type(value)!r}")
+
+
+def _annotate_catchup_runs(trade_date, pending_dates, runs: list[dict]) -> list[dict]:
+    """NEW-OPS-003：补跑历史日期的运行显式标注 operational-catchup，
+    防止下游把 as_of=now 的事实误读为该历史日时点快照。"""
+    annotated: list[dict] = []
+    for pending_date, run in zip(pending_dates, runs):
+        run = dict(run)
+        run["catchup_mode"] = (
+            "operational-catchup" if pending_date < trade_date else "same-day"
+        )
+        annotated.append(run)
+    return annotated
 
 
 async def run_once(output: Path) -> dict:
@@ -420,10 +442,18 @@ async def run_once(output: Path) -> dict:
             last_completed=last_completed, today=trade_date,
         )
         report["catchup"] = [day.isoformat() for day in pending]
-        report["main"] = [
-            await main.execute(trade_date=pending_date, as_of=now)
-            for pending_date in pending
-        ]
+        # NEW-OPS-003：scheduler catch-up 是 **operational 补数**——把缺失
+        # 事实按当前可见数据补齐、按 trade_date 幂等防重，绝不声称
+        # historical point-in-time（as_of 统一为本次运行时刻）。历史时点
+        # 重建属于 Deterministic Replay（PF-02）的职责边界。
+        report["catchup_mode"] = (
+            "operational" if any(day < trade_date for day in pending) else "same-day"
+        )
+        report["main"] = _annotate_catchup_runs(
+            trade_date,
+            pending,
+            [await main.execute(trade_date=pending_date, as_of=now) for pending_date in pending],
+        )
     # 维护链每个自然日独立执行（幂等键 = 本地日期）
     report["maintenance"] = await maintenance.execute(
         trade_date=local.date(), as_of=now
