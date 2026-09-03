@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from app.container import container
 from app.utils.time import now_shanghai
+from app.v3.application.market_intraday_status import MarketIntradayStatusService
+from app.v3.application.pipeline_eod_latest import PipelineEodLatestService
 from app.v3.domain.features import FeatureQuery, FeatureSortField
+from app.v3.infrastructure.providers.exchange_calendar import (
+    ExchangeCalendarsAShareCalendar,
+)
 
 
 router = APIRouter(prefix="/v3", tags=["V3 Dashboard"])
@@ -108,7 +114,7 @@ def _document(title: str, body: str, *, refresh_seconds: int | None = None) -> s
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}}
 a{{color:var(--primary);text-decoration:none}}.dashboard{{max-width:1400px;margin:0 auto;padding:20px}}.card{{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 3px 12px rgba(16,24,40,.04)}}
 .hero{{padding:20px;display:flex;gap:18px;align-items:flex-start;justify-content:space-between}}h1,h2,h3{{margin:0;line-height:1.3}}h1{{font-size:28px}}h2{{font-size:21px}}h3{{font-size:16px}}.subtitle,.muted{{color:var(--muted)}}.subtitle{{margin:6px 0 0}}.meta{{font-size:12px;color:var(--muted);text-align:right;word-break:break-all}}
-.badge{{display:inline-flex;padding:3px 9px;border-radius:999px;font-weight:700;font-size:12px;background:#ecfdf3;color:#027a48}}.badge.warn{{background:#fff4e5;color:var(--warn)}}
+.badge{{display:inline-flex;padding:3px 9px;border-radius:999px;font-weight:700;font-size:12px;background:#ecfdf3;color:#027a48}}.badge.warn{{background:#fff4e5;color:var(--warn)}}.badge.bad{{background:#fef3f2;color:#b42318}}.badge.info{{background:#eff8ff;color:#175cd3}}.badge.mute{{background:#f2f4f7;color:#475467}}
 .stats{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:14px}}.stat{{padding:16px}}.stat span{{display:block;color:var(--muted)}}.stat strong{{display:block;margin-top:5px;font-size:24px}}
 .facts{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}}.fact-card{{padding:16px}}.fact-card h3{{margin-bottom:9px}}.fact-card div{{display:flex;justify-content:space-between;gap:12px;border-top:1px dashed var(--line);padding:7px 0}}.fact-card div span{{color:var(--muted)}}.fact-card strong{{text-align:right}}
 .section{{margin-top:14px;padding:18px}}.section-head{{display:flex;gap:16px;justify-content:space-between;align-items:flex-end;margin-bottom:14px}}.controls{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}select,input,button{{border:1px solid #cfd6df;border-radius:8px;background:#fff;padding:8px 10px;font:inherit}}button{{background:var(--primary);border-color:var(--primary);color:#fff;cursor:pointer}}
@@ -131,7 +137,99 @@ def initializing_page(message: str) -> HTMLResponse:
     )
 
 
-def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: bool, market: str | None, limit: int) -> str:
+def _status_badge(status: str) -> str:
+    """Job/事件状态 → 徽章：绿=SUCCEEDED/OPEN 正常、黄=SKIPPED/PARTIAL、红=FAILED。"""
+    value = str(status or "—").upper()
+    if value in ("SUCCEEDED", "COMPLETED"):
+        cls = ""
+    elif value in ("FAILED", "CRITICAL"):
+        cls = " bad"
+    elif value in ("SKIPPED", "PARTIAL", "WARNING"):
+        cls = " warn"
+    elif value == "OPEN":
+        cls = " info"
+    else:
+        cls = " mute"
+    return f'<span class="badge{cls}">{escape(value or "—")}</span>'
+
+
+def _live_status_section(status: dict[str, Any] | None) -> str:
+    """§24 Live Status：确定性盘中状态（交易时段判定），无行情依赖。"""
+    if not status:
+        return ""
+    rows = "".join(
+        f"<div><span>{escape(str(key))}</span><strong>{escape(str(value))}</strong></div>"
+        for key, value in status.items()
+        if key != "source" and value is not None
+    )
+    return (
+        '<section class="card section"><div class="section-head"><div><h2>盘中状态（Live Status）</h2>'
+        '<p class="subtitle">确定性规则判定（交易日历 + 时段），不含实时行情。</p></div></div>'
+        f'<div class="fact-card card">{rows}</div></section>'
+    )
+
+
+def _pipeline_section(pipeline: dict[str, Any] | None) -> str:
+    """§24 EOD Pipeline：orchestrator 各 Job 最近一次运行状态。"""
+    if not pipeline:
+        return ""
+    overall = str(pipeline.get("overall", "—"))
+    jobs = pipeline.get("jobs") or {}
+    rows = []
+    for job_id in sorted(jobs):
+        job = jobs[job_id]
+        error = job.get("error_summary") or "—"
+        rows.append(
+            "<tr>"
+            f"<td>{escape(job_id)}</td><td>{_status_badge(job.get('status'))}</td>"
+            f'<td class="num">{escape(str(job.get("attempt", "—")))}</td>'
+            f"<td>{escape(str(job.get('idempotency_key', '—')))}</td>"
+            f'<td class="missing" title="{escape(str(error))}">{escape(str(error)[:120])}</td>'
+            f"<td>{escape(str(job.get('known_at', '—')))}</td>"
+            "</tr>"
+        )
+    body = (
+        "".join(rows)
+        if rows
+        else '<tr><td colspan="6">orchestrator_job_runs 暂无记录</td></tr>'
+    )
+    return (
+        '<section class="card section"><div class="section-head"><div><h2>EOD 流水线（Pipeline）</h2>'
+        f'<p class="subtitle">各 Job 最近一次运行状态 · 整体 {_status_badge(overall)}</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th>Job</th><th>状态</th><th class="num">Attempt</th>'
+        '<th>交易日</th><th>错误摘要</th><th>known_at</th></tr></thead>'
+        f"<tbody>{body}</tbody></table></div></section>"
+    )
+
+
+def _attention_section(events: list[Any]) -> str:
+    """§24 Attention：OPEN 事件列表（append-only 事实，只读展示）。"""
+    rows = []
+    for event in events[:20]:
+        rows.append(
+            "<tr>"
+            f"<td>{escape(str(getattr(event, 'event_type', '—')))}</td>"
+            f"<td>{_status_badge(getattr(event, 'severity', ''))}</td>"
+            f"<td>{escape(str(getattr(event, 'market', '') or '—'))}</td>"
+            f"<td>{escape(str(getattr(event, 'code', '') or '—'))}</td>"
+            f'<td class="missing">{escape(str(getattr(event, "dedupe_key", "—")))}</td>'
+            f"<td>{escape(str(getattr(event, 'known_at', '—')))}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) if rows else '<tr><td colspan="6">当前无 OPEN Attention 事件</td></tr>'
+    return (
+        '<section class="card section"><div class="section-head"><div><h2>Attention 事件（OPEN）</h2>'
+        '<p class="subtitle">只读展示客观触发事实；处理状态以 API 为准。</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th>类型</th><th>级别</th><th>市场</th><th>代码</th>'
+        '<th>dedupe_key</th><th>known_at</th></tr></thead>'
+        f"<tbody>{body}</tbody></table></div></section>"
+    )
+
+
+def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: bool, market: str | None, limit: int,
+                     intraday_status: dict[str, Any] | None = None,
+                     pipeline: dict[str, Any] | None = None,
+                     attention_events: list[Any] | None = None) -> str:
     quality = page.quality_summary
     coverage = float(quality.get("coverage", 0))
     successful = int(quality.get("successful_count", 0))
@@ -172,12 +270,28 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
         )
     regime_html = ""
     if regime is not None:
+        stale_reason = getattr(regime, "stale_reason", None) or {}
+        cause = stale_reason.get("cause")
+        stale_badge = (
+            '<span class="badge bad">REGIME STALE</span>'
+            if regime.stale
+            else '<span class="badge">REGIME FRESH</span>'
+        )
+        cause_note = (
+            f' · {escape(str(stale_reason.get("stale_count")))}'
+            f'/{escape(str(stale_reason.get("total_count")))} 行 stale'
+            f'（阈值 {escape(str(stale_reason.get("threshold")))}, {escape(str(cause))}）'
+            if stale_reason
+            else ""
+        )
         regime_html = (
+            f'<section class="card section"><div class="section-head"><div><h2>市场状态（Regime）</h2>'
+            f"<p class=\"subtitle\">{stale_badge}{cause_note}</p></div></div>"
             '<div class="facts">'
             + _fact_rows("市场宽度", regime.breadth)
             + _fact_rows("成交与流动性", regime.turnover)
             + _fact_rows("风险偏好事实", regime.risk_appetite_facts)
-            + "</div>"
+            + "</div></section>"
         )
     body = f"""
 <section class="card hero"><div><span class="badge">V3 READ-ONLY</span><h1 style="margin-top:8px">V3 全市场行情特征看板</h1>
@@ -187,6 +301,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
 <section class="card stat"><span>成功</span><strong>{successful:,}</strong></section><section class="card stat"><span>失败</span><strong>{failed:,}</strong></section>
 <section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页陈旧</span><strong>{stale_count}</strong></section></div>
 {regime_html}
+{_live_status_section(intraday_status)}
+{_pipeline_section(pipeline)}
+{_attention_section(attention_events or [])}
 <section class="card section"><div class="section-head"><div><h2>全市场事实特征</h2><p class="subtitle">筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”{'降序' if descending else '升序'}展示，最多读取 100 条。</p></div>
 <form class="controls" method="get"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
 <select name="descending">{direction_options}</select><input name="limit" type="number" min="20" max="100" value="{limit}" aria-label="显示数量"><button type="submit">应用</button></form></div>
@@ -205,6 +322,15 @@ async def v3_dashboard(
 ):
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+    calendar = ExchangeCalendarsAShareCalendar()
+
+    def _trading_day(value):
+        try:
+            return bool(calendar.is_trading_day(value))
+        except Exception:
+            return False
+
+    clock = lambda: datetime.now(timezone.utc)  # noqa: E731
     async with container.v3.uow() as uow:
         page = await uow.features.query(
             FeatureQuery(
@@ -216,6 +342,13 @@ async def v3_dashboard(
             )
         )
         regime = await uow.features.latest_regime()
+        attention_events = await uow.attention.open_events(limit=20)
+    intraday_status = await MarketIntradayStatusService(
+        clock=clock, is_trading_day=_trading_day,
+    ).execute()
+    pipeline = await PipelineEodLatestService(
+        container.v3.uow, clock=clock,
+    ).execute()
     if page is None:
         return initializing_page("生产库尚未发布 Feature Run；后台数据任务完成后即可展示。")
     return HTMLResponse(
@@ -226,6 +359,9 @@ async def v3_dashboard(
             descending=descending,
             market=market,
             limit=limit,
+            intraday_status=intraday_status,
+            pipeline=pipeline,
+            attention_events=attention_events,
         ),
         headers=NO_CACHE_HEADERS,
     )

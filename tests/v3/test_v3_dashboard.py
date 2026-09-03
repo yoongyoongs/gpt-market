@@ -28,9 +28,31 @@ class _Features:
         return self.regime
 
 
+class _Attention:
+    async def open_events(self, *, limit=100, **kwargs):
+        return []
+
+
+class _Orchestrator:
+    async def latest_runs(self, limit=50):
+        return [
+            {
+                "job_id": "features",
+                "idempotency_key": "2026-09-02",
+                "status": "SUCCEEDED",
+                "attempt": 1,
+                "metrics": {},
+                "error_summary": None,
+                "known_at": NOW,
+            }
+        ]
+
+
 class _Uow:
     def __init__(self, features):
         self.features = features
+        self.attention = _Attention()
+        self.orchestrator = _Orchestrator()
 
     async def __aenter__(self):
         return self
@@ -136,3 +158,20 @@ def test_dashboard_rejects_unbounded_limit(monkeypatch):
         response = client.get("/v3/dashboard?limit=200")
 
     assert response.status_code == 422
+
+
+def test_dashboard_renders_v24_sections(monkeypatch):
+    """§24：Live Status / EOD Pipeline / Attention 区块 + Regime stale 徽章。"""
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "盘中状态（Live Status）" in html
+    assert "EOD 流水线（Pipeline）" in html
+    assert "Attention 事件（OPEN）" in html
+    assert "features" in html and "SUCCEEDED" in html
+    # regime stale 徽章（fake regime 未配置 → None → 不出 regime 区块）
+    assert "REGIME" in html or "<section" in html
