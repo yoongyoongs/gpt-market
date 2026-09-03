@@ -27,6 +27,7 @@ from app.v3.infrastructure.db.models import (
     RegressionCaseExecutionModel,
     RegressionCaseModel,
     ReplayRunModel,
+    MarketRegimeSnapshotModel,
     SecurityFeatureModel,
     SecurityModel,
     TradeLedgerModel,
