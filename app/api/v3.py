@@ -915,11 +915,20 @@ async def read_portfolio_adjustments(code: str, limit: int = 100):
     return await ReadOperationsService(_uow).adjustments_by_code(code, limit)
 
 
-@router.get("/portfolio/preferences")
-@router.get("/portfolio-preferences")
+async def _read_portfolio_preferences(limit: int = 100):
+    return await ReadOperationsService(_uow).preferences(limit)
+
+
+@router.get("/portfolio/preferences", name="read_portfolio_preferences")
 async def read_portfolio_preferences(limit: int = 100):
     """RC-08B READ：组合偏好版本（只读）。"""
-    return await ReadOperationsService(_uow).preferences(limit)
+    return await _read_portfolio_preferences(limit)
+
+
+@router.get("/portfolio-preferences", name="read_portfolio_preferences_alias")
+async def read_portfolio_preferences_alias(limit: int = 100):
+    """RC-08B READ：组合偏好版本（只读，兼容别名路径）。"""
+    return await _read_portfolio_preferences(limit)
 
 
 @router.get("/entry-plans/{entry_plan_id}/versions")
