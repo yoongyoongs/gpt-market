@@ -122,7 +122,7 @@ docker compose --profile v3-worker up -d postgres v3-market-worker
 docker compose logs --tail=100 v3-market-worker
 ```
 
-默认按上海时区每日 18:30 执行 Universe、日 K 增量/周月聚合和公司行动同步。可通过 `V3_PHASE2_SCHEDULE_AT`、`V3_PHASE2_CONCURRENCY`、`V3_PHASE2_HISTORY_LIMIT` 和 `V3_PHASE2_LOCK_KEY` 配置；PostgreSQL advisory lock 会拒绝重叠任务。
+默认按上海时区每日 18:45（`V3_SCHEDULE_AT`，可覆盖）执行正式 Orchestrator 主链：Universe/日线增量/公司行动（Phase2 market job 已并入 market-data Job）→ 指数基准（东财失败逐基准降级腾讯）→ 全市场 Feature/Regime → Evidence 增量 → Full Recall + Raw Opportunity Publish；随后独立维护链（公司行动 Match、Projection Verify、Performance Mature、Recall Observation Mature），并以常驻盘中触发循环评估 Attention（间隔 `V3_INTRADAY_INTERVAL_SECONDS`，默认 300 秒）。旧 Phase2 参数 `V3_PHASE2_*` 仅作用于 market-data Job 内部；PostgreSQL advisory lock 拒绝重叠任务。
 
 默认报告写入容器 `/tmp`，用于日志与当次诊断。若改为宿主持久化挂载，目录必须允许非 root 容器用户 UID 10001 写入：
 
@@ -145,9 +145,15 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 2026-09-01 已完成 RC-01 生产部署：
 
 - `V3_PUBLIC_MARKET_READ=true`，只读市场事实和 `/v3/dashboard` 保持公网可读；
+- NEW-SEC-001 整改后：公网匿名 READ 收紧为显式 Market READ Allowlist
+  （universe/market-regime/market-overview/recalls/evidence/context-packs/
+  market-overview 等）；Watchlist/Decision/Task/Strategy/Release/Performance
+  等私有/控制面 GET 需要 Bearer（匿名 401）；
 - Portfolio READ 与普通 V3 WRITE 使用独立 Bearer Token；
 - Strategy Activate/Rollback 使用另一个独立管理员 Bearer Token；
-- `actor_id/actor_type/confirmed_by` 由服务端认证 Principal 覆盖；
+- `actor_id/actor_type/confirmed_by/created_by/corrected_by` 由服务端认证
+  Principal 覆盖（NEW-SEC-002）；audited API 将 request_id 传入 AuditEvent
+  （NEW-AUD-001）；
 - Secret 只保存于 `/opt/gpt-market/.env`，权限 `0600 root:root`，不得写入文档、日志或 Git；
 - Nginx 继续透传 `Authorization`，`nginx -t` 已通过；
 - 公网安全矩阵已验证 401/403/200，Strategy Admin 空请求只进入 422 校验且未改变 Release State；
@@ -158,7 +164,7 @@ install -d -o 10001 -g 10001 -m 750 /opt/gpt-market/data/v3-reports
 - Git 基线：`main@c25f6e4`；Phase 7–11 验收分支已快进合并并推送 `origin/main`。
 - API：`market-mcp`，镜像 `gpt-market:main-c25f6e4`，仅绑定 `127.0.0.1:8000`，Nginx 继续对外提供 80 端口。
 - 数据库：`gpt-market-postgres`，PostgreSQL 17，独立网络 `gpt-market-prod`，持久卷 `gpt-market-postgres-data`；迁移版本为 `0011_strategy_stabilization`。
-- Worker：`gpt-market-v3-worker`，执行 `scripts.v3_phase2_scheduler`；纯后台进程禁用 API HTTP Healthcheck，以进程状态、重启次数和任务日志监控。
+- Worker：`gpt-market-v3-worker`，历史部署记录为 `scripts.v3_phase2_scheduler`（当时现状）；自 NEW-OPS-001 整改后，`docker-compose.yml` 已统一为正式调度器 `python -m scripts.v3_scheduler`（alembic upgrade head 先行），并以 `pgrep -f 'scripts.v3_scheduler'` 进程存活探测作为 healthcheck。下次重建 Worker 镜像/容器时即与仓库 IaC 一致。
 - V3：服务器设置 `V3_ENABLED=true`；V3 API 已可用，策略发布状态仍为 `mode=V2`，没有自动激活策略或自动交易。
 - 回滚备份：`/opt/gpt-market-backups/pre-v3-20260901-074515`；旧镜像标签 `gpt-market:rollback-pre-v3-20260901-074515`，旧 API 容器保留为停止态 `market-mcp-pre-v3-20260901-074515`。
 - 数据保护：原 `/opt/gpt-market/data` 未迁移、未删除；V3 数据库完成 Migration 后已生成独立 `pg_dump`。

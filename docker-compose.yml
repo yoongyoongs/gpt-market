@@ -8,6 +8,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # OCR 图片存储必须落在可写挂载 /data（容器 rootfs 只读）——IaC 固化，NEW-OCR-001
+      V3_IMAGE_STORE_DIR: /data/v3-images
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -55,17 +58,29 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # 正式调度器（scripts.v3_scheduler）；OCR/盘中间隔等 V3_* 变量经 .env 注入
+      V3_IMAGE_STORE_DIR: /data/v3-images
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["sh", "-lc", "alembic upgrade head && python -m scripts.v3_phase2_scheduler"]
+    # NEW-OPS-001：仓库 Source of Truth = 正式 Orchestrator 调度器，
+    # 不再回落旧 v3_phase2_scheduler（Phase2 market job 已并入主链 market-data Job）
+    command: ["sh", "-lc", "alembic upgrade head && python -m scripts.v3_scheduler"]
     healthcheck:
-      disable: true
+      # 常驻进程存活探测（不做 DB 深检，避免误杀）
+      test: ["CMD", "sh", "-lc", "pgrep -f 'scripts.v3_scheduler' >/dev/null"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ./data:/data
 
 volumes:
   postgres_data:
