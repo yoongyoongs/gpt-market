@@ -75,7 +75,10 @@ PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
 )
 PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = (
     "/evidence/",  # /evidence/{subject_type}/{subject_id}
-    "/context-packs/",  # /context-packs/{context_pack_id}
+    # R3-P1-004：/context-packs/{id} 是按 UUID 读任意 ContextPack——Domain
+    # 支持 subject_type=POSITION（含账户/持仓事实），不得作为公开市场
+    # API；该路径回归认证读取（MARKET_READ），公开股票上下文只走
+    # SECURITY-only 的 GET /stocks/{code}/context-pack。
 )
 PUBLIC_MARKET_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
     ("stocks", "*", "evidence"),

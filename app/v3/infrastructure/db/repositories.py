@@ -2668,6 +2668,26 @@ class SQLAlchemyContextPackRepository:
         )
         return None if model is None else await self._pack(model)
 
+    async def latest_for_subject(
+        self, *, subject_type: str, subject_id: str, as_of: datetime,
+    ) -> ContextPack | None:
+        """API-002/R3-P0-003：GET 纯读入口——按主体读 as_of 前最近一次
+        已发布 ContextPack（绝不触发 Build/Publish）。"""
+        model = await self._session.scalar(
+            select(ContextPackModel)
+            .where(
+                ContextPackModel.subject_type == subject_type,
+                ContextPackModel.subject_id == subject_id,
+                ContextPackModel.known_at <= as_of,
+            )
+            .order_by(
+                ContextPackModel.known_at.desc(),
+                ContextPackModel.context_pack_id.desc(),
+            )
+            .limit(1)
+        )
+        return None if model is None else await self._pack(model)
+
     async def load_source(
         self,
         *,

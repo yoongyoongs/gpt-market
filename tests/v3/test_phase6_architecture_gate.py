@@ -16,8 +16,9 @@ def test_phase6_context_budget_ranges_match_architecture():
 
 
 def test_phase6_routes_remain_read_only_after_later_phases_are_added():
-    """API-002：纯读路由保持 get-only；comparison-pack/context-pack 的
-    build 有落库副作用，必须是 post（GET 仅 deprecated 兼容）。"""
+    """API-002/R3-P0-003：纯读路由保持 get-only；comparison-pack/
+    context-pack 双形态——POST=build（落库副作用），GET=纯读（读已有
+    pack，绝不再触发 build）。"""
     app = FastAPI()
     app.include_router(router)
     paths = app.openapi()["paths"]
@@ -42,7 +43,9 @@ def test_phase6_routes_remain_read_only_after_later_phases_are_added():
         assert set(operations) <= allowed | {"parameters"}, path
     for path in build_paths:
         assert "post" in paths[path]
-        assert paths[path]["get"]["deprecated"] is True
+        # GET 是纯读端点（非 deprecated 兼容残留）
+        assert "get" in paths[path]
+        assert paths[path]["get"].get("deprecated") is not True
 
 
 def test_phase6_acceptance_harness_keeps_external_gate_explicit():

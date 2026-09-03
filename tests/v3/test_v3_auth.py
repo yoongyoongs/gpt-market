@@ -113,6 +113,9 @@ PRIVATE_READ_PATHS = (
     "/api/v3/stocks/600000/decision-pipeline",
     "/api/v3/stocks/600000/decision-context",
     "/api/v3/intraday/attention",
+    # R3-P1-004：按 UUID 读任意 ContextPack 可能命中 POSITION 主体
+    # （含账户/持仓事实）——不得匿名，回归 MARKET_READ
+    "/api/v3/context-packs/1",
 )
 
 
@@ -121,12 +124,13 @@ PUBLIC_MARKET_PATHS = (
     "/api/v3/recalls/misses",
     "/api/v3/evidence/SECURITY/1",
     "/api/v3/stocks/600000/evidence",
+    # R3-P0-003：GET 已改纯读（SECURITY-only 主体），保持公开
     "/api/v3/stocks/600000/context-pack",
-    "/api/v3/context-packs/1",
     "/api/v3/market/intraday-status",
     "/api/v3/health/data-quality",
     "/api/v3/raw-opportunities",
     "/api/v3/market-reviews",
+    # R3-P0-003：GET 已改纯读（按 id/candidate_set 读已有 pack）
     "/api/v3/candidates/comparison-pack",
 )
 

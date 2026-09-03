@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.container import container
@@ -290,33 +290,38 @@ async def build_candidate_comparison_pack(
     )
 
 
-@router.get("/candidates/comparison-pack", deprecated=True)
-async def candidate_comparison_pack(
-    response: Response,
+@router.get("/candidates/comparison-pack")
+async def read_candidate_comparison_pack(
+    comparison_pack_id: UUID | None = None,
     candidate_set_id: UUID | None = None,
-    codes: str | None = Query(
-        default=None,
-        description="20-100 comma-separated CODE or MARKET:CODE candidates",
-    ),
-    feature_run_id: UUID | None = None,
-    recall_run_id: UUID | None = None,
     field_profile_version: str = Query(
         default="compact-fields.v1", min_length=1, max_length=64
     ),
     as_of: datetime | None = None,
 ):
-    """Deprecated（API-002）：build 有落库副作用，改用同名 POST。"""
-    response.headers["Deprecation"] = "true"
-    return await _execute_comparison_build(
-        candidate_set_id=candidate_set_id,
-        codes=tuple(item.strip() for item in codes.split(",") if item.strip())
-        if codes
-        else (),
-        feature_run_id=feature_run_id,
-        recall_run_id=recall_run_id,
-        field_profile_version=field_profile_version,
-        as_of=as_of,
-    )
+    """API-002/R3-P0-003：GET 只读已有 pack，绝不触发 Build/Publish 落库
+    （build 走同名 POST）。按 comparison_pack_id 精确读，或按
+    candidate_set_id 读 as_of 前最近一次 pack。"""
+    try:
+        async with _uow() as uow:
+            if comparison_pack_id is not None:
+                pack = await uow.candidate_comparisons.get(comparison_pack_id)
+            elif candidate_set_id is not None:
+                pack = await uow.candidate_comparisons.latest_for_candidate_set(
+                    candidate_set_id,
+                    field_profile_version=field_profile_version,
+                    as_of=as_of or datetime.now(timezone.utc),
+                )
+            else:
+                raise ValueError(
+                    "read requires comparison_pack_id or candidate_set_id; "
+                    "building requires POST"
+                )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if pack is None:
+        raise HTTPException(status_code=404, detail="comparison pack not found")
+    return pack
 
 
 def _enum_values(value: str | None, enum_type):
@@ -384,30 +389,24 @@ async def build_stock_context_pack(
     )
 
 
-@router.get("/stocks/{code}/context-pack", deprecated=True)
-async def stock_context_pack(
-    response: Response,
+@router.get("/stocks/{code}/context-pack")
+async def read_stock_context_pack(
     code: str,
-    profile: str = Query(min_length=1, max_length=64),
-    profile_version: int | None = Query(default=None, ge=1),
     market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
     as_of: datetime | None = None,
-    feature_run_id: UUID | None = None,
-    recall_run_id: UUID | None = None,
-    comparison_pack_id: UUID | None = None,
 ):
-    """Deprecated（API-002）：build 有落库副作用，改用同名 POST。"""
-    response.headers["Deprecation"] = "true"
-    return await _execute_stock_context_build(
-        code=code,
-        profile=profile,
-        profile_version=profile_version,
-        market=market,
-        as_of=as_of,
-        feature_run_id=feature_run_id,
-        recall_run_id=recall_run_id,
-        comparison_pack_id=comparison_pack_id,
-    )
+    """API-002/R3-P0-003：GET 只读该 SECURITY 主体最近一次已发布
+    ContextPack，绝不触发 Build/Publish 落库（build 走同名 POST）。"""
+    subject_id = f"{market}:{code}" if market else code
+    async with _uow() as uow:
+        pack = await uow.context_packs.latest_for_subject(
+            subject_type="SECURITY",
+            subject_id=subject_id,
+            as_of=as_of or datetime.now(timezone.utc),
+        )
+    if pack is None:
+        raise HTTPException(status_code=404, detail="context pack not found")
+    return pack
 
 
 @router.get("/context-packs/{context_pack_id}")
