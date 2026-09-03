@@ -20,6 +20,10 @@ from app.v3.security import (
 )
 
 
+def _ok():
+    return {"ok": True}
+
+
 def _client(*, public_market_read: bool = True) -> TestClient:
     app = FastAPI()
     app.add_middleware(
@@ -36,6 +40,39 @@ def _client(*, public_market_read: bool = True) -> TestClient:
     @app.get("/api/v3/universe/features")
     async def market_read():
         return {"ok": True}
+
+    for path in (
+        "/api/v3/watchlist",
+        "/api/v3/decisions",
+        "/api/v3/performance",
+        "/api/v3/task-runs",
+        "/api/v3/release/resolution",
+        "/api/v3/strategies",
+        "/api/v3/entry-plans/1/versions",
+        "/api/v3/stocks/600000/decision-pipeline",
+        "/api/v3/stocks/600000/decision-context",
+        "/api/v3/intraday/attention",
+    ):
+        app.get(path)(_ok)
+
+    for path in (
+        "/api/v3/market-regime",
+        "/api/v3/recalls/misses",
+        "/api/v3/evidence/SECURITY/1",
+        "/api/v3/stocks/600000/evidence",
+        "/api/v3/stocks/600000/context-pack",
+        "/api/v3/context-packs/1",
+        "/api/v3/market/intraday-status",
+        "/api/v3/health/data-quality",
+        "/api/v3/raw-opportunities",
+        "/api/v3/market-reviews",
+        "/api/v3/candidates/comparison-pack",
+    ):
+        app.get(path)(_ok)
+
+    @app.get("/api/v3/portfolio-preferences")
+    async def portfolio_alias(request: Request):
+        return {"principal_id": request.state.v3_principal.principal_id}
 
     @app.get("/api/v3/portfolio/account")
     async def portfolio_read(request: Request):
@@ -56,6 +93,74 @@ def test_market_read_is_public_by_default() -> None:
     with _client() as client:
         response = client.get("/api/v3/universe/features")
     assert response.status_code == 200
+
+
+PRIVATE_READ_PATHS = (
+    "/api/v3/watchlist",
+    "/api/v3/decisions",
+    "/api/v3/performance",
+    "/api/v3/task-runs",
+    "/api/v3/release/resolution",
+    "/api/v3/strategies",
+    "/api/v3/entry-plans/1/versions",
+    "/api/v3/stocks/600000/decision-pipeline",
+    "/api/v3/stocks/600000/decision-context",
+    "/api/v3/intraday/attention",
+)
+
+
+PUBLIC_MARKET_PATHS = (
+    "/api/v3/market-regime",
+    "/api/v3/recalls/misses",
+    "/api/v3/evidence/SECURITY/1",
+    "/api/v3/stocks/600000/evidence",
+    "/api/v3/stocks/600000/context-pack",
+    "/api/v3/context-packs/1",
+    "/api/v3/market/intraday-status",
+    "/api/v3/health/data-quality",
+    "/api/v3/raw-opportunities",
+    "/api/v3/market-reviews",
+    "/api/v3/candidates/comparison-pack",
+)
+
+
+def test_public_market_read_allowlist_is_anonymous() -> None:
+    """NEW-SEC-001：allowlist 内的市场事实 GET 无 token 可读。"""
+    with _client() as client:
+        for path in PUBLIC_MARKET_PATHS:
+            response = client.get(path)
+            assert response.status_code == 200, path
+
+
+def test_private_reads_require_token_even_when_market_read_is_public() -> None:
+    """NEW-SEC-001：Watchlist/Decision/Task/Release/Strategy 等不再公开。"""
+    with _client() as client:
+        for path in PRIVATE_READ_PATHS:
+            response = client.get(path)
+            assert response.status_code == 401, path
+            assert response.json()["details"]["required_scope"] == "MARKET_READ"
+
+
+def test_any_valid_token_reads_private_paths() -> None:
+    with _client() as client:
+        for path in PRIVATE_READ_PATHS:
+            response = client.get(
+                path, headers={"Authorization": "Bearer write-secret"},
+            )
+            assert response.status_code == 200, path
+
+
+def test_portfolio_preferences_alias_needs_portfolio_scope() -> None:
+    """别名不得绕开 /portfolio 的 PORTFOLIO_READ 边界。"""
+    with _client() as client:
+        anonymous = client.get("/api/v3/portfolio-preferences")
+        authorized = client.get(
+            "/api/v3/portfolio-preferences",
+            headers={"Authorization": "Bearer write-secret"},
+        )
+    assert anonymous.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json() == {"principal_id": "operator-1"}
 
 
 def test_market_read_can_be_protected_by_configuration() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import api
 from app.providers.base import ProviderError
 from app.v3.repositories.errors import (
@@ -20,6 +21,11 @@ from app.v3.repositories.errors import (
 
 def _client() -> TestClient:
     return TestClient(api, raise_server_exceptions=False)
+
+
+def _auth_headers() -> dict[str, str]:
+    # NEW-SEC-001 收紧后，非 allowlist 的 /api/v3 GET 需要认证
+    return {"Authorization": f"Bearer {get_settings().v3_api_token}"}
 
 
 @api.get("/api/v3/_test/not-found")
@@ -60,7 +66,9 @@ async def _legacy():
     ("/api/v3/_test/internal", 500, "V3_INTERNAL", False),
 ])
 def test_v3_errors_use_unified_envelope(path, status, code, retryable) -> None:
-    response = _client().get(path, headers={"X-Request-ID": "req-77"})
+    response = _client().get(
+        path, headers={"X-Request-ID": "req-77", **_auth_headers()},
+    )
     assert response.status_code == status
     body = response.json()
     assert body["code"] == code
@@ -82,7 +90,9 @@ def test_v2_paths_keep_legacy_error_shape() -> None:
 
 def test_v3_validation_error_from_pydantic_body() -> None:
     client = _client()
-    response = client.get("/api/v3/watchlist/changes", params={"limit": "abc"})
+    response = client.get(
+        "/api/v3/watchlist/changes", params={"limit": "abc"}, headers=_auth_headers(),
+    )
     assert response.status_code == 422
     body = response.json()
     assert body["code"] == "V3_VALIDATION"
@@ -98,7 +108,9 @@ async def test_unknown_v3_route_returns_envelope_404() -> None:
 
     transport = ASGITransport(app=api)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v3/definitely-not-a-route")
+        response = await client.get(
+            "/api/v3/definitely-not-a-route", headers=_auth_headers(),
+        )
     assert response.status_code == 404
     body = response.json()
     assert body["code"] == "V3_NOT_FOUND"

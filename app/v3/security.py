@@ -46,6 +46,51 @@ def bind_v3_principal(command: Any, principal: V3Principal):
     return command.model_copy(update=updates) if updates else command
 
 
+# NEW-SEC-001：公开 READ 不再是“除 /portfolio 外全公开”，而是明确的
+# Public Market READ Allowlist —— 只允许纯市场事实匿名读取。
+# Watchlist/Decision/EntryPlan/Task/Strategy/Release/Performance/Context 决策面
+# 等 GET 一律需要认证（有效 token 全部持有 MARKET_READ）。
+PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
+    {
+        "/universe/features",
+        "/universe/query",  # include_in_schema=False 的别名
+        "/market-regime",
+        "/market-overview",
+        "/candidates/comparison-pack",
+        "/recalls",
+        "/recalls/misses",
+        "/raw-opportunities",
+        "/market-reviews",
+        "/market/intraday-status",
+        "/health/data-quality",
+    }
+)
+PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = (
+    "/evidence/",  # /evidence/{subject_type}/{subject_id}
+    "/context-packs/",  # /context-packs/{context_pack_id}
+)
+PUBLIC_MARKET_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
+    ("stocks", "*", "evidence"),
+    ("stocks", "*", "context-pack"),
+)
+
+
+def is_public_market_read(path: str) -> bool:
+    """path 为去掉 /api/v3 前缀后的路由（如 /universe/features）。"""
+    if path in PUBLIC_MARKET_READ_EXACT:
+        return True
+    if path.startswith(PUBLIC_MARKET_READ_PREFIXES):
+        return True
+    segments = tuple(segment for segment in path.split("/") if segment)
+    for template in PUBLIC_MARKET_READ_TEMPLATES:
+        if len(segments) == len(template) and all(
+            part == "*" or part == segment
+            for part, segment in zip(template, segments)
+        ):
+            return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class V3AuthPolicy:
     api_token: str | None
@@ -68,7 +113,13 @@ class V3AuthPolicy:
             return V3Scope.V3_WRITE
         if path == "/api/v3/portfolio" or path.startswith("/api/v3/portfolio/"):
             return V3Scope.PORTFOLIO_READ
-        return None if self.public_market_read else V3Scope.MARKET_READ
+        if path == "/api/v3/portfolio-preferences":
+            # 别名与 /portfolio/preferences 同源，不得绕开 PORTFOLIO_READ
+            return V3Scope.PORTFOLIO_READ
+        relative = path[len("/api/v3"):]
+        if self.public_market_read and is_public_market_read(relative):
+            return None
+        return V3Scope.MARKET_READ
 
     def authenticate(self, supplied: str, request_id: str) -> V3Principal | None:
         if self.strategy_admin_token and hmac.compare_digest(
