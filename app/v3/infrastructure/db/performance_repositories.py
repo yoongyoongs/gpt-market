@@ -133,6 +133,65 @@ class SQLAlchemyPerformanceRepository:
             )
         ) is True
 
+    async def regime_replay_input(self, feature_run_id: UUID) -> dict | None:
+        """PF-002：Regime 重算回放输入 —— immutable Regime 快照 + 该 run
+        全部特征行（重算只用落库事实，不重取外部数据）。"""
+        regime = await self._session.scalar(
+            select(MarketRegimeSnapshotModel).where(
+                MarketRegimeSnapshotModel.feature_run_id == feature_run_id
+            )
+        )
+        if regime is None:
+            return None
+        rows = (
+            await self._session.scalars(
+                select(SecurityFeatureModel).where(
+                    SecurityFeatureModel.feature_run_id == feature_run_id
+                )
+            )
+        ).all()
+        return {
+            "regime": {
+                "breadth": dict(regime.breadth or {}),
+                "turnover": dict(regime.turnover or {}),
+                "risk_appetite_facts": dict(regime.risk_appetite_facts or {}),
+                "stale": regime.stale,
+                "stale_reason": dict(regime.stale_reason or {}),
+            },
+            "features": [
+                {
+                    "stale": row.stale,
+                    "return_3d": None if row.return_3d is None else float(row.return_3d),
+                    "amount": None if row.amount is None else float(row.amount),
+                    "volume_expansion": row.volume_expansion,
+                    "breakout_20d": row.breakout_20d,
+                }
+                for row in rows
+            ],
+        }
+
+    async def context_pack_replay_payloads(self, context_pack_ids) -> list[dict]:
+        """PF-002：Context Pack 证据选择重放输入（immutable payload + 查询键）。"""
+        payloads = []
+        for pack_id in context_pack_ids:
+            pack = await self._session.get(ContextPackModel, pack_id)
+            if pack is None:
+                payloads.append({
+                    "context_pack_id": pack_id, "available": False,
+                    "reason": "MISSING_CONTEXT_PACK",
+                })
+                continue
+            payloads.append({
+                "context_pack_id": pack_id, "available": True,
+                "payload": dict(pack.payload or {}),
+                "as_of": pack.as_of,
+                "subject_type": pack.subject_type,
+                "subject_id": pack.subject_id,
+                "context_level": pack.context_level,
+                "token_budget": pack.token_budget,
+            })
+        return payloads
+
     async def replay_gate(
         self, bar_revision_ids, evidence_ids, context_pack_ids, *, replay_as_of: datetime,
     ) -> tuple[list[dict], dict]:

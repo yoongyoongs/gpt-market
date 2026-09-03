@@ -30,6 +30,73 @@ LEVEL_SETTINGS = {
 }
 
 
+# --- 确定性规则抽为模块级函数（PF-002：Deterministic Replay 重放
+# Context 证据选择阶段时复用同一实现，避免逻辑漂移）---
+
+
+def sanitized(value, text_limit: int):
+    if isinstance(value, str):
+        return value[:text_limit]
+    if isinstance(value, dict):
+        return {
+            str(key)[:128]: sanitized(item, text_limit)
+            for key, item in list(value.items())[:50]
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitized(item, text_limit) for item in value[:50]]
+    return value
+
+
+def evidence_side(view) -> EvidenceSelectionSide:
+    value = str(view.record.normalized_payload.get("side", "NEUTRAL")).upper()
+    return EvidenceSelectionSide(value) if value in EvidenceSelectionSide else EvidenceSelectionSide.NEUTRAL
+
+
+def evidence_retrieval_score(view, as_of) -> float:
+    authority = max(0.0, 1 - min(view.record.source_priority, 1_000) / 1_000)
+    conflict_bonus = 0.05 if view.conflict_status != "NONE" else 0
+    return round(min(1.0, (
+        0.55 * view.record.effective_relevance(as_of)
+        + 0.25 * view.record.confidence
+        + 0.2 * authority
+        + conflict_bonus
+    )), 7)
+
+
+def evidence_ranking_key(view, as_of):
+    side_priority = 0 if evidence_side(view) is EvidenceSelectionSide.CONTRARY else 1
+    return (
+        side_priority,
+        -evidence_retrieval_score(view, as_of),
+        view.record.source_priority,
+        -view.record.known_at.timestamp(),
+        str(view.record.evidence_id),
+    )
+
+
+def evidence_item_payload(view, as_of, text_limit: int) -> dict:
+    record = view.record
+    return {
+        "evidence_id": str(record.evidence_id),
+        "type": record.evidence_type.value,
+        "source_type": record.source_type.value,
+        "source": record.source,
+        "upstream_source": record.upstream_source,
+        "claim_key": record.claim_key,
+        "event_time": None if record.event_time is None else record.event_time.isoformat(),
+        "publish_time": None if record.publish_time is None else record.publish_time.isoformat(),
+        "known_at": record.known_at.isoformat(),
+        "confidence": record.confidence,
+        "effective_relevance": record.effective_relevance(as_of),
+        "conflict_state": view.conflict_status,
+        "data": sanitized(record.normalized_payload, text_limit),
+    }
+
+
+def estimate_tokens(payload) -> int:
+    return max(1, (len(canonical_json(payload).encode("utf-8")) + 3) // 4)
+
+
 class BuildContextPackCommand(V3Contract):
     context_level: ContextLevel
     subject_type: ContextSubjectType
@@ -302,64 +369,17 @@ class BuildContextPackService:
 
     @staticmethod
     def _evidence_payload(view, as_of, text_limit):
-        record = view.record
-        return {
-            "evidence_id": str(record.evidence_id),
-            "type": record.evidence_type.value,
-            "source_type": record.source_type.value,
-            "source": record.source,
-            "upstream_source": record.upstream_source,
-            "claim_key": record.claim_key,
-            "event_time": None if record.event_time is None else record.event_time.isoformat(),
-            "publish_time": None if record.publish_time is None else record.publish_time.isoformat(),
-            "known_at": record.known_at.isoformat(),
-            "confidence": record.confidence,
-            "effective_relevance": record.effective_relevance(as_of),
-            "conflict_state": view.conflict_status,
-            "data": BuildContextPackService._sanitize(
-                record.normalized_payload, text_limit
-            ),
-        }
+        return evidence_item_payload(view, as_of, text_limit)
 
-    @staticmethod
-    def _sanitize(value, text_limit):
-        if isinstance(value, str):
-            return value[:text_limit]
-        if isinstance(value, dict):
-            return {
-                str(key)[:128]: BuildContextPackService._sanitize(item, text_limit)
-                for key, item in list(value.items())[:50]
-            }
-        if isinstance(value, (list, tuple)):
-            return [BuildContextPackService._sanitize(item, text_limit) for item in value[:50]]
-        return value
+    _sanitize = staticmethod(sanitized)
 
-    @staticmethod
-    def _side(view) -> EvidenceSelectionSide:
-        value = str(view.record.normalized_payload.get("side", "NEUTRAL")).upper()
-        return EvidenceSelectionSide(value) if value in EvidenceSelectionSide else EvidenceSelectionSide.NEUTRAL
+    _side = staticmethod(evidence_side)
 
-    @staticmethod
-    def _retrieval_score(view, as_of) -> float:
-        authority = max(0.0, 1 - min(view.record.source_priority, 1_000) / 1_000)
-        conflict_bonus = 0.05 if view.conflict_status != "NONE" else 0
-        return round(min(1.0, (
-            0.55 * view.record.effective_relevance(as_of)
-            + 0.25 * view.record.confidence
-            + 0.2 * authority
-            + conflict_bonus
-        )), 7)
+    _retrieval_score = staticmethod(evidence_retrieval_score)
 
     @classmethod
     def _ranking_key(cls, view, as_of):
-        side_priority = 0 if cls._side(view) is EvidenceSelectionSide.CONTRARY else 1
-        return (
-            side_priority,
-            -cls._retrieval_score(view, as_of),
-            view.record.source_priority,
-            -view.record.known_at.timestamp(),
-            str(view.record.evidence_id),
-        )
+        return evidence_ranking_key(view, as_of)
 
     @staticmethod
     def _selection_reason(view) -> str:
@@ -370,7 +390,7 @@ class BuildContextPackService:
 
     @staticmethod
     def _estimate_tokens(payload) -> int:
-        return max(1, (len(canonical_json(payload).encode("utf-8")) + 3) // 4)
+        return estimate_tokens(payload)
 
     @staticmethod
     def _references(source, comparison):

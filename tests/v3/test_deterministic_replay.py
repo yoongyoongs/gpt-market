@@ -13,6 +13,7 @@ from uuid import uuid4
 
 
 from app.v3.application.calculate_features import CalculateSecurityFeatureService
+from app.v3.application.calculate_market_regime import CalculateMarketRegimeService
 from app.v3.application.deterministic_replay import (
     _COMPARABLE_FIELDS,
     DeterministicReplayService,
@@ -24,6 +25,14 @@ from app.v3.domain.market_data import (
     BarSeriesRevisionContent,
     MarketBar,
     PointInTimePrecision,
+)
+from app.v3.contracts.evidence import EvidenceType
+from app.v3.domain.evidence import (
+    DecayModel,
+    EvidenceMatchType,
+    EvidenceRepositoryView,
+    EvidenceSourceType,
+    NormalizedEvidence,
 )
 from app.v3.domain.performance import ReplayRunCreate
 
@@ -64,11 +73,14 @@ def _stored_feature(revision):
 
 
 class _FakePerformanceRepo:
-    def __init__(self, checks, stored_features, ai_result, targets=()):
+    def __init__(self, checks, stored_features, ai_result, targets=(),
+                 regime_inputs=None, pack_payloads=()):
         self._checks = checks
         self._stored = stored_features
         self._ai_result = ai_result
         self._targets = list(targets)
+        self._regime_inputs = regime_inputs or {}
+        self._pack_payloads = list(pack_payloads)
         self.recorded = []
 
     async def replay_gate(self, bar_revision_ids, evidence_ids, context_pack_ids, *, replay_as_of):
@@ -81,6 +93,13 @@ class _FakePerformanceRepo:
     async def load_run_feature(self, feature_run_id, security_id):
         return self._stored.get((feature_run_id, security_id))
 
+    async def regime_replay_input(self, feature_run_id):
+        return self._regime_inputs.get(feature_run_id)
+
+    async def context_pack_replay_payloads(self, context_pack_ids):
+        wanted = set(context_pack_ids)
+        return [item for item in self._pack_payloads if item["context_pack_id"] in wanted]
+
     async def immutable_ai_result_for_pack(self, context_pack_id):
         return self._ai_result.get(context_pack_id)
 
@@ -89,10 +108,20 @@ class _FakePerformanceRepo:
         return {"replay_run_id": command.replay_run_id, **payload}
 
 
+class _FakeEvidenceRepository:
+    def __init__(self, views):
+        self._views = views
+
+    async def retrieve_view(self, *, query):
+        from app.v3.domain.evidence import EvidenceRepositoryPage
+        return EvidenceRepositoryPage(views=tuple(self._views), coverage_counts={})
+
+
 class _FakeUow:
-    def __init__(self, performance, revisions):
+    def __init__(self, performance, revisions, evidence_views=()):
         self.performance = performance
         self.bars = self
+        self.evidence = _FakeEvidenceRepository(evidence_views)
         self._revisions = revisions
 
     async def load_revisions_by_ids(self, revision_ids, *, as_of):
@@ -108,8 +137,11 @@ class _FakeUow:
         return None
 
 
-def _service(performance, revisions):
-    return DeterministicReplayService(lambda: _FakeUow(performance, revisions), clock=lambda: NOW)
+def _service(performance, revisions, evidence_views=()):
+    return DeterministicReplayService(
+        lambda: _FakeUow(performance, revisions, evidence_views),
+        clock=lambda: NOW,
+    )
 
 
 async def test_gate_blocked_short_circuits_both_layers() -> None:
@@ -212,3 +244,191 @@ async def test_no_immutable_ai_output_records_honest_boundary() -> None:
     assert ai_layer["executed"] is False
     assert ai_layer["immutable_result_replay"]["available"] is False
     assert ai_layer["immutable_result_replay"]["reason"] == "NO_IMMUTABLE_AI_OUTPUT"
+
+
+def _regime_fixture():
+    """PF-002：用同一确定性引擎模拟"落库 Regime 快照 + 特征行"。"""
+    revision = _revision()
+    feature = CalculateSecurityFeatureService().execute(
+        feature_run_id=uuid4(), revision=revision, as_of=NOW,
+    )
+    regime = CalculateMarketRegimeService().execute(
+        feature_run_id=uuid4(), features=(feature,),
+        as_of=NOW, known_at=NOW, expected_count=1, index_benchmark=None,
+    )
+    dump = regime.model_dump(mode="json")
+    stored = {
+        "breadth": dump["breadth"], "turnover": dump["turnover"],
+        "risk_appetite_facts": dump["risk_appetite_facts"],
+        "stale": dump["stale"], "stale_reason": dump["stale_reason"],
+    }
+    rows = [{
+        "stale": feature.stale, "return_3d": feature.return_3d,
+        "amount": feature.amount, "volume_expansion": feature.volume_expansion,
+        "breakout_20d": feature.breakout_20d,
+    }]
+    return stored, rows
+
+
+def _gate_ok():
+    return [{"kind": "bars", "id": str(uuid4()), "passed": True,
+             "reason": None, "known_at": NOW.isoformat(),
+             "replay_as_of": NOW.isoformat()}]
+
+
+async def test_regime_recompute_verifies_from_stored_rows() -> None:
+    """PF-002：Regime 层——从 immutable 落库特征行重算聚合并核验通过；
+    未 pin 输入（index_states 等）显式声明排除。"""
+    stored, rows = _regime_fixture()
+    pack_id, run_id = uuid4(), uuid4()
+    performance = _FakePerformanceRepo(
+        checks=_gate_ok(), stored_features={}, ai_result={},
+        targets=[{"available": True, "context_pack_id": pack_id,
+                  "feature_run_id": run_id, "security_id": uuid4()}],
+        regime_inputs={run_id: {"regime": stored, "features": rows}},
+    )
+    command = ReplayRunCreate(
+        strategy_version="v1", replay_as_of=NOW,
+        bar_revision_ids=(uuid4(),), context_pack_ids=(pack_id,),
+    )
+    report = await _service(performance, []).execute(command)
+    regime_layer = (
+        report["result"]["layers"]["server_deterministic"]["regime_recompute"]
+    )
+    assert regime_layer["executed"] is True
+    assert regime_layer["checked_count"] == 1
+    assert regime_layer["matched_count"] == 1
+    assert regime_layer["mismatched"] == []
+    assert "index_states" in regime_layer["excluded_fields"]
+    assert regime_layer["exclusion_reason"] == (
+        "INDEX_BENCHMARK_AND_EXPECTED_COUNT_INPUTS_NOT_PINNED"
+    )
+
+
+async def test_regime_mismatch_is_recorded_not_swallowed() -> None:
+    """PF-002：Regime 重算与落库快照不一致 → 逐字段记录，不吞掉。"""
+    stored, rows = _regime_fixture()
+    stored["breadth"]["advancing"] += 1  # 注入漂移
+    pack_id, run_id = uuid4(), uuid4()
+    performance = _FakePerformanceRepo(
+        checks=_gate_ok(), stored_features={}, ai_result={},
+        targets=[{"available": True, "context_pack_id": pack_id,
+                  "feature_run_id": run_id, "security_id": uuid4()}],
+        regime_inputs={run_id: {"regime": stored, "features": rows}},
+    )
+    command = ReplayRunCreate(
+        strategy_version="v1", replay_as_of=NOW,
+        bar_revision_ids=(uuid4(),), context_pack_ids=(pack_id,),
+    )
+    report = await _service(performance, []).execute(command)
+    regime_layer = (
+        report["result"]["layers"]["server_deterministic"]["regime_recompute"]
+    )
+    assert regime_layer["matched_count"] == 0
+    assert "breadth.advancing" in [
+        item["field"] for item in regime_layer["mismatched"]
+    ]
+
+
+def _pack_view(index: int, *, contrary: bool = False) -> EvidenceRepositoryView:
+    known_at = NOW - timedelta(seconds=index + 1)
+    record = NormalizedEvidence.build(
+        raw_document_id=uuid4(), evidence_type=EvidenceType.NEWS,
+        source_type=EvidenceSourceType.NEWS, source_priority=50,
+        subject_type="SECURITY", subject_id="SH:600000",
+        claim_key=f"news:{index}", source="fixture", upstream_source="fixture.test",
+        payload={"raw": "never-copy"},
+        normalized_payload={
+            "side": "CONTRARY" if contrary else "SUPPORT",
+            "summary": "x" * 200,
+        },
+        fetch_time=known_at, known_at=known_at, confidence=0.8,
+        relevance=0.9 - index / 100, decay_model=DecayModel.NONE,
+        parser_version="fixture.v1",
+    )
+    return EvidenceRepositoryView(
+        record=record, match_type=EvidenceMatchType.DIRECT,
+        conflict_status="OPEN" if contrary else "NONE",
+    )
+
+
+def _pack_payload(views, candidate_ids):
+    return {
+        "subject": {"type": "SECURITY"},
+        "evidence": {
+            "boundary": "UNTRUSTED_DATA",
+            "candidate_count": len(candidate_ids),
+            "candidate_evidence_ids": candidate_ids,
+            "retrieval_config": {"version": "context-evidence-retrieval.v1"},
+            "items": [{"evidence_id": value} for value in candidate_ids],
+        },
+    }
+
+
+async def test_context_evidence_replay_matches_stored_selection() -> None:
+    """PF-002：Context 层——同一排序 + 预算裁剪规则重导出入选证据序列，
+    与 immutable payload 核验一致。输入顺序 ≠ 排名顺序。"""
+    contrary = _pack_view(0, contrary=True)
+    support = _pack_view(1)
+    views = [support, contrary]  # 故意逆序放入，验证重放排序
+    ranked_ids = [
+        str(contrary.record.evidence_id), str(support.record.evidence_id),
+    ]
+    pack_id = uuid4()
+    performance = _FakePerformanceRepo(
+        checks=_gate_ok(), stored_features={}, ai_result={},
+        pack_payloads=[{
+            "context_pack_id": pack_id, "available": True,
+            "payload": _pack_payload(views, ranked_ids),
+            "as_of": NOW, "subject_type": "SECURITY",
+            "subject_id": "SH:600000", "context_level": "NORMAL",
+            "token_budget": 6500,
+        }],
+    )
+    command = ReplayRunCreate(
+        strategy_version="v1", replay_as_of=NOW,
+        bar_revision_ids=(uuid4(),), context_pack_ids=(pack_id,),
+    )
+    report = await _service(performance, [], evidence_views=views).execute(command)
+    layer = (
+        report["result"]["layers"]["server_deterministic"]
+        ["context_evidence_replay"]
+    )
+    assert layer["executed"] is True
+    assert layer["checked_count"] == 1
+    assert layer["matched_count"] == 1
+    assert layer["mismatched"] == []
+
+
+async def test_context_evidence_replay_detects_ranking_drift() -> None:
+    """PF-002：候选排序漂移 → 逐字段记录，不吞掉。"""
+    contrary = _pack_view(0, contrary=True)
+    support = _pack_view(1)
+    views = [contrary, support]
+    drift_ids = [
+        str(support.record.evidence_id), str(contrary.record.evidence_id),
+    ]
+    pack_id = uuid4()
+    performance = _FakePerformanceRepo(
+        checks=_gate_ok(), stored_features={}, ai_result={},
+        pack_payloads=[{
+            "context_pack_id": pack_id, "available": True,
+            "payload": _pack_payload(views, drift_ids),
+            "as_of": NOW, "subject_type": "SECURITY",
+            "subject_id": "SH:600000", "context_level": "NORMAL",
+            "token_budget": 6500,
+        }],
+    )
+    command = ReplayRunCreate(
+        strategy_version="v1", replay_as_of=NOW,
+        bar_revision_ids=(uuid4(),), context_pack_ids=(pack_id,),
+    )
+    report = await _service(performance, [], evidence_views=views).execute(command)
+    layer = (
+        report["result"]["layers"]["server_deterministic"]
+        ["context_evidence_replay"]
+    )
+    assert layer["matched_count"] == 0
+    assert "candidate_evidence_ids" in [
+        item["field"] for item in layer["mismatched"]
+    ]
