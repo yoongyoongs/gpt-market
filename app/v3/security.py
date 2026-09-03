@@ -25,7 +25,11 @@ class V3Principal:
 
 
 def bind_v3_principal(command: Any, principal: V3Principal):
-    """Replace caller-declared identity fields with the authenticated principal."""
+    """Replace caller-declared identity fields with the authenticated principal.
+
+    NEW-SEC-002：actor_id/actor_type/confirmed_by/created_by/corrected_by
+    全部以服务端 principal 为唯一可信来源，客户端声明一律覆盖。
+    """
     model_fields = getattr(type(command), "model_fields", {})
     updates: dict[str, Any] = {}
     if "actor_id" in model_fields:
@@ -43,6 +47,10 @@ def bind_v3_principal(command: Any, principal: V3Principal):
         status_value = getattr(confirmation_status, "value", confirmation_status)
         if confirmed_by is not None or status_value == "CONFIRMED":
             updates["confirmed_by"] = principal.principal_id
+    if "created_by" in model_fields:
+        updates["created_by"] = principal.principal_id
+    if "corrected_by" in model_fields:
+        updates["corrected_by"] = principal.principal_id
     return command.model_copy(update=updates) if updates else command
 
 

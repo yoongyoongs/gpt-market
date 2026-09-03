@@ -118,6 +118,13 @@ def _bind_principal(command, request: Request):
     return bind_v3_principal(command, principal)
 
 
+def _request_id(request: Request) -> str | None:
+    """NEW-AUD-001：把认证 principal 的 request_id 传入 audited service，
+    落到 AuditEvent.request_id（匿名/未认证请求无 principal → None）。"""
+    principal = getattr(request.state, "v3_principal", None)
+    return principal.request_id if isinstance(principal, V3Principal) else None
+
+
 async def _feature_query(
     feature_run_id: str | None,
     market: str | None,
@@ -441,7 +448,9 @@ async def confirm_ai_result_import(
 ):
     command = _bind_principal(command, request)
     try:
-        return await ConfirmAIResultImportService(_uow).execute(import_id, command)
+        return await ConfirmAIResultImportService(_uow).execute(
+            import_id, command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
@@ -485,7 +494,9 @@ async def correct_trade_draft_fields(
 ):
     command = _bind_principal(command, request)
     try:
-        return await PortfolioWriteService(_uow).correct_trade_draft(draft_id, command)
+        return await PortfolioWriteService(_uow).correct_trade_draft(
+            draft_id, command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
@@ -507,7 +518,7 @@ async def correct_position_draft_fields(
     command = _bind_principal(command, request)
     try:
         return await PortfolioWriteService(_uow).correct_position_draft(
-            draft_id, command
+            draft_id, command, request_id=_request_id(request),
         )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -537,7 +548,9 @@ async def confirm_portfolio_trade(
 ):
     command = _bind_principal(command, request)
     try:
-        return await PortfolioWriteService(_uow).confirm_trade(draft_id, command)
+        return await PortfolioWriteService(_uow).confirm_trade(
+            draft_id, command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
@@ -547,7 +560,9 @@ async def confirm_portfolio_trade(
 @router.post("/portfolio/opening-positions")
 async def create_opening_position(command: OpeningPositionCreate, request: Request):
     command = _bind_principal(command, request)
-    return await PortfolioWriteService(_uow).add_opening(command)
+    return await PortfolioWriteService(_uow).add_opening(
+        command, request_id=_request_id(request),
+    )
 
 
 @router.post("/portfolio/position-drafts/{draft_id}/confirm")
@@ -556,7 +571,9 @@ async def confirm_position_snapshot_draft(
 ):
     command = _bind_principal(command, request)
     try:
-        return await PortfolioWriteService(_uow).confirm_position_draft(draft_id, command)
+        return await PortfolioWriteService(_uow).confirm_position_draft(
+            draft_id, command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
@@ -568,14 +585,18 @@ async def create_portfolio_adjustment(
     command: PortfolioAdjustmentCreate, request: Request,
 ):
     command = _bind_principal(command, request)
-    return await PortfolioWriteService(_uow).add_adjustment(command)
+    return await PortfolioWriteService(_uow).add_adjustment(
+        command, request_id=_request_id(request),
+    )
 
 
 @router.post("/portfolio/trade-corrections")
 async def create_trade_correction(command: TradeCorrectionCreate, request: Request):
     command = _bind_principal(command, request)
     try:
-        return await PortfolioWriteService(_uow).add_trade_correction(command)
+        return await PortfolioWriteService(_uow).add_trade_correction(
+            command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -583,7 +604,9 @@ async def create_trade_correction(command: TradeCorrectionCreate, request: Reque
 @router.post("/portfolio/reconciliations")
 async def create_reconciliation(command: ReconciliationCreate, request: Request):
     command = _bind_principal(command, request)
-    return await PortfolioWriteService(_uow).add_reconciliation(command)
+    return await PortfolioWriteService(_uow).add_reconciliation(
+        command, request_id=_request_id(request),
+    )
 
 
 @router.post("/portfolio/preferences")
@@ -902,7 +925,7 @@ async def transition_watchlist(
     command = _bind_principal(command, request)
     try:
         return await DecisionStateService(_uow).transition_watchlist(
-            security_id, command
+            security_id, command, request_id=_request_id(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -917,18 +940,24 @@ async def read_security_decisions(security_id: UUID):
 
 @router.post("/decisions/{decision_id}/corrections")
 async def create_decision_correction(
-    decision_id: UUID, command: DecisionCorrectionCommand,
+    decision_id: UUID, command: DecisionCorrectionCommand, request: Request,
 ):
+    command = _bind_principal(command, request)
     try:
-        return await DecisionStateService(_uow).add_correction(decision_id, command)
+        return await DecisionStateService(_uow).add_correction(
+            decision_id, command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/strategies/versions")
-async def create_strategy_version(command: StrategyVersionCreate):
+async def create_strategy_version(command: StrategyVersionCreate, request: Request):
+    command = _bind_principal(command, request)
     try:
-        return await StrategyStabilizationService(_uow).add_strategy_version(command)
+        return await StrategyStabilizationService(_uow).add_strategy_version(
+            command, request_id=_request_id(request),
+        )
     except RepositoryConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -942,7 +971,9 @@ async def read_strategy_catalog(limit: int = Query(default=50, ge=1, le=200)):
 async def create_strategy_proposal(command: StrategyProposalCreate, request: Request):
     command = _bind_principal(command, request)
     try:
-        return await StrategyStabilizationService(_uow).add_proposal(command)
+        return await StrategyStabilizationService(_uow).add_proposal(
+            command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:
@@ -950,7 +981,8 @@ async def create_strategy_proposal(command: StrategyProposalCreate, request: Req
 
 
 @router.post("/strategies/guardrails")
-async def create_guardrail_version(command: GuardrailVersionCreate):
+async def create_guardrail_version(command: GuardrailVersionCreate, request: Request):
+    command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).add_guardrail(command)
     except RepositoryConflictError as exc:
@@ -958,9 +990,14 @@ async def create_guardrail_version(command: GuardrailVersionCreate):
 
 
 @router.post("/strategies/experiments")
-async def create_strategy_experiment(command: StrategyExperimentCreate):
+async def create_strategy_experiment(
+    command: StrategyExperimentCreate, request: Request,
+):
+    command = _bind_principal(command, request)
     try:
-        return await StrategyStabilizationService(_uow).add_experiment(command)
+        return await StrategyStabilizationService(_uow).add_experiment(
+            command, request_id=_request_id(request),
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -972,7 +1009,7 @@ async def strategy_experiment_event(
     command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).experiment_event(
-            experiment_id, command
+            experiment_id, command, request_id=_request_id(request),
         )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1027,7 +1064,7 @@ async def activate_strategy(
     command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).activate(
-            environment, command
+            environment, command, request_id=_request_id(request),
         )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1042,7 +1079,7 @@ async def rollback_strategy(
     command = _bind_principal(command, request)
     try:
         return await StrategyStabilizationService(_uow).rollback(
-            environment, command
+            environment, command, request_id=_request_id(request),
         )
     except RepositoryConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

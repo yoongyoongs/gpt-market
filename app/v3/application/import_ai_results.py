@@ -77,6 +77,8 @@ class ConfirmAIResultImportService:
         self,
         import_id: UUID,
         command: AIResultConfirmCommand,
+        *,
+        request_id: str | None = None,
     ) -> AIResultConfirmResult:
         async with self._uow_factory() as uow:
             preview = AIResultImportPreview.model_validate(
@@ -96,6 +98,7 @@ class ConfirmAIResultImportService:
                     object_id=str(import_id),
                     actor_type="HUMAN",
                     actor_id=command.confirmed_by,
+                    request_id=request_id,
                     after={"idempotency_key": command.idempotency_key},
                     metadata={"bundle_hash": command.bundle_hash},
                 )

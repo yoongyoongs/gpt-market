@@ -5,12 +5,13 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.v3.domain.ai_import import AIResultConfirmCommand
+from app.v3.domain.decision import DecisionCorrectionCommand
 from app.v3.domain.portfolio import (
     AdjustmentConfirmation,
     AdjustmentType,
     PortfolioAdjustmentCreate,
 )
-from app.v3.domain.strategy import ActorType, StrategyProposalCreate
+from app.v3.domain.strategy import ActorType, StrategyProposalCreate, StrategyVersionCreate
 from app.v3.security import (
     V3AuthMiddleware,
     V3AuthPolicy,
@@ -250,6 +251,31 @@ def test_actor_identity_is_overwritten_by_authenticated_principal() -> None:
     assert bound.actor_id == "operator-1"
     assert command.actor_type is ActorType.AI
     assert command.actor_id == "forged-agent"
+
+
+def test_created_by_and_corrected_by_are_overwritten_by_principal() -> None:
+    """NEW-SEC-002：created_by / corrected_by 不再信任客户端声明。"""
+    principal = V3Principal(
+        principal_id="operator-1",
+        principal_type="HUMAN",
+        scopes=frozenset({V3Scope.V3_WRITE}),
+        request_id="request-1",
+    )
+    version = StrategyVersionCreate(
+        strategy_code="MOMENTUM",
+        version=1,
+        configuration={"universe": "all-a"},
+        rationale="initial",
+        created_by="forged-user",
+    )
+    correction = DecisionCorrectionCommand(
+        old_values={"status": "ACTIVE"},
+        new_values={"status": "REVIEWED"},
+        reason="fact fix",
+        corrected_by="forged-user",
+    )
+    assert bind_v3_principal(version, principal).created_by == "operator-1"
+    assert bind_v3_principal(correction, principal).corrected_by == "operator-1"
 
 
 def test_pending_adjustment_stays_unconfirmed_but_confirmed_one_gets_principal() -> None:
