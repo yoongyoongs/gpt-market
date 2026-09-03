@@ -76,6 +76,8 @@ from scripts.v3_phase4_evidence import build_registry as build_evidence_registry
 
 
 CORPORATE_ACTION_LOOKBACK_DAYS = 10
+# R3-P0-002：Release Gate 只控制策略链（full-recall）；数据事实链永远运行
+DATA_CHAIN_JOB_IDS = ("market-data", "index-benchmarks", "features", "evidence-increment")
 EVIDENCE_WINDOW = timedelta(days=1)
 # 主链终端 Job：catch-up 追平判断以此为完成标记（NEW-OPS-002）
 TERMINAL_MAIN_JOB = "full-recall"
@@ -156,16 +158,23 @@ def seconds_until_next_run(now: datetime, scheduled: datetime.time) -> float:
     return (target - local).total_seconds()
 
 
-def build_orchestrators(
-    database_url: str, release: dict | None = None,
-) -> tuple[Orchestrator, Orchestrator, V3Database]:
+def build_database(database_url: str) -> V3Database:
+    """R3-P0-001：Database 创建与 Orchestrator 组装解耦——Release 解析
+    需要一个已初始化的 UoW factory，绝不能引用尚未赋值的 database。"""
     settings = Settings(_env_file=None, v3_database_url=database_url)
-    database = V3Database(
+    return V3Database(
         database_url,
         echo=settings.v3_database_echo,
         pool_size=settings.v3_database_pool_size,
         max_overflow=settings.v3_database_max_overflow,
     )
+
+
+def build_orchestrators(
+    database_url: str, release: dict | None = None, database: V3Database | None = None,
+) -> tuple[Orchestrator, Orchestrator, V3Database]:
+    settings = Settings(_env_file=None, v3_database_url=database_url)
+    database = database if database is not None else build_database(database_url)
 
     def uow_factory() -> SQLAlchemyUnitOfWork:
         return SQLAlchemyUnitOfWork(database.sessions)
@@ -523,17 +532,19 @@ def build_orchestrators(
 
 
 
-async def _latest_main_success_key(database) -> str | None:
-    """主链终端 Job（full-recall）最近一次成功运行的幂等键（交易日）。
+async def _latest_main_success_key(
+    database, terminal_job: str = TERMINAL_MAIN_JOB,
+) -> str | None:
+    """主链终端 Job 最近一次成功运行的幂等键（交易日）。
 
     NEW-OPS-002：catch-up 完成标记必须是真实终端 Job。主链已扩展为
     market-data → index-benchmarks → features → evidence-increment → full-recall，
     若只看 features，后半链（evidence/full-recall）失败会被误判为已追平。
+    R3-P0-002：Release Gate 跳过 full-recall（mode=V2）时终端标记退回
+    数据链终端 evidence-increment，否则 catch-up 列表永远追不平。
     """
     async with SQLAlchemyUnitOfWork(database.sessions) as uow:
-        return await uow.orchestrator.latest_succeeded_idempotency_key(
-            TERMINAL_MAIN_JOB
-        )
+        return await uow.orchestrator.latest_succeeded_idempotency_key(terminal_job)
 
 
 def _json_default(value):
@@ -574,6 +585,10 @@ async def run_once(output: Path) -> dict:
             "coverage_end": calendar.metadata.coverage_end.isoformat(),
         },
     }
+    # R3-P0-001：先创建 Database，再解析 Release——ReleaseResolver.resolve()
+    # 会真实消费 UoW factory，绝不能引用尚未赋值的 database（原顺序在
+    # V3_ENABLED=true 时 NameError 崩溃）。
+    database = build_database(database_url)
     # RC-07B：每次生产运行都先解析当前 Release（紧急开关关闭 → V2_FALLBACK）
     v3_enabled = os.getenv("V3_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     report["release_resolution"] = await ReleaseResolver(
@@ -581,23 +596,30 @@ async def run_once(output: Path) -> dict:
     ).resolve("production")
     # STR-002：解析结果接线进 Orchestrator（Recall 策略版本按 configuration 选择）
     main, maintenance, database = build_orchestrators(
-        database_url, release=report["release_resolution"],
+        database_url, release=report["release_resolution"], database=database,
     )
     resolution = report["release_resolution"]
-    # STR-002：Runtime 真消费解析结果——effective_mode 非 V3（紧急开关
-    # 关闭 / 无 Release / 状态不完整 / 版本缺失）时 V3 主链整体跳过，
-    # 绝不照常执行后仅记录；V2 业务路径由 phase2 调度器承担，本进程
-    # 不伪造 V2 执行。维护链是数据运营作业（与策略版本无关）照常运行。
+    # R3-P0-002：Release Gate 只控制 Strategy Runtime（full-recall）。
+    # market-data / index-benchmarks / features / evidence-increment 是
+    # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
+    # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
     effective_v3 = resolution.get("effective_mode") == "V3"
     report["release_gate"] = {
-        "main_chain": "EXECUTED" if effective_v3 else "SKIPPED",
+        "data_chain": "EXECUTED",
+        "strategy_chain": "EXECUTED" if effective_v3 else "SKIPPED",
         "reason": resolution.get("reason"),
     }
     if report["trading_day"]:
         trade_date = latest_completed_session(calendar, now)
         # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
-        # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全
-        last_key = await _latest_main_success_key(database)
+        # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全。
+        # 终端标记：策略链启用时取 full-recall（NEW-OPS-002）；V2 期间
+        # full-recall 被 Gate 跳过，终端标记退回数据链终端 evidence-increment，
+        # 否则 catch-up 列表永远追不平。
+        last_key = await _latest_main_success_key(
+            database,
+            terminal_job="full-recall" if effective_v3 else "evidence-increment",
+        )
         last_completed = date.fromisoformat(last_key) if last_key else None
         pending = catchup_trade_dates(
             calendar.is_trading_day,
@@ -611,13 +633,12 @@ async def run_once(output: Path) -> dict:
         report["catchup_mode"] = (
             "operational" if any(day < trade_date for day in pending) else "same-day"
         )
-        report["main"] = (
-            _annotate_catchup_runs(
-                trade_date,
-                pending,
-                [await main.execute(trade_date=pending_date, as_of=now) for pending_date in pending],
-            )
-            if effective_v3 else []
+        main_job_ids = None if effective_v3 else DATA_CHAIN_JOB_IDS
+        report["main"] = _annotate_catchup_runs(
+            trade_date,
+            pending,
+            [await main.execute(trade_date=d, as_of=now, job_ids=main_job_ids)
+             for d in pending],
         )
     # 维护链每个自然日独立执行（幂等键 = 本地日期）
     report["maintenance"] = await maintenance.execute(

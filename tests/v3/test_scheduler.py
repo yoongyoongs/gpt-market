@@ -166,9 +166,10 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
         async def close(self):
             pass
 
-    def _fake_build(database_url, release=None):
+    def _fake_build(database_url, release=None, database=None):
         return _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
 
+    monkeypatch.setattr(module, "build_database", lambda url: _FakeDatabase())
     monkeypatch.setattr(module, "build_orchestrators", _fake_build)
     monkeypatch.setenv("V3_DATABASE_URL", "postgresql+asyncpg://fake")
     output = tmp_path / "report.json"
@@ -240,7 +241,11 @@ def test_recall_strategy_version_prefers_release_configuration() -> None:
 
 
 def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
-    """STR-002 主链 Gate 的通用测试装置：Release 解析结果由桩注入。"""
+    """STR-002/R3 主链 Gate 的通用测试装置：Release 解析结果由桩注入。
+
+    R3-P0-001 验收要求：Resolver 必须**真消费 uow_factory**（模拟真实
+    ReleaseResolver 查库），否则初始化顺序 bug 会被 stub 漏检。
+    """
     import asyncio
     import contextlib
     import io
@@ -248,12 +253,18 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
     from datetime import datetime as dt
 
     module = _scheduler_module()
+    seen: dict = {"orch_job_ids": [], "terminal_jobs": [], "resolver_database": None,
+                  "build_orchestrator_database": None}
 
     class _FakeResolution:
-        def __init__(self, *, v3_enabled):
-            pass
+        def __init__(self, uow_factory, v3_enabled):
+            self._uow_factory = uow_factory
 
         async def resolve(self, environment):
+            # 真实 ReleaseResolver.resolve() 会 async with uow_factory()
+            async with self._uow_factory() as uow:
+                await uow.orchestrator.latest_succeeded_idempotency_key("release")
+            seen["resolver_database"] = id(self._uow_factory)
             return {
                 "environment": environment, "resolved_at": dt.now(tz.utc),
                 "mode": "V2", "effective_mode": effective_mode,
@@ -275,6 +286,7 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
 
     class _FakeOrchRepo:
         async def latest_succeeded_idempotency_key(self, job_id):
+            seen["terminal_jobs"].append(job_id)
             return None
 
     class _FakeUow:
@@ -288,23 +300,18 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
 
     class _FakeOrchestrator:
         async def execute(self, **kwargs):
+            seen["orch_job_ids"].append(kwargs.get("job_ids"))
             return {"status": "COMPLETED"}
 
-    class _FakeSession:
-        async def scalar(self, stmt):
-            return None
-
-        async def rollback(self):
-            pass
-
-        async def close(self):
-            pass
-
     class _FakeDatabase:
-        sessions = staticmethod(lambda: _FakeSession())
+        sessions = staticmethod(lambda: _FakeUow())
 
         async def close(self):
             pass
+
+    def _fake_build_orchestrators(database_url, release=None, database=None):
+        seen["build_orchestrator_database"] = database
+        return _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
 
     monkeypatch.setattr(module, "ExchangeCalendarsAShareCalendar", _FakeCalendar)
     monkeypatch.setattr(
@@ -312,46 +319,78 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
         lambda calendar, now: date(2026, 9, 2),
     )
     monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _FakeUow())
+    monkeypatch.setattr(module, "build_database", lambda url: _FakeDatabase())
     monkeypatch.setattr(
-        module, "ReleaseResolver",
-        lambda uow_factory, v3_enabled: _FakeResolution(v3_enabled=v3_enabled),
+        module, "ReleaseResolver", _FakeResolution,
     )
     monkeypatch.setattr(
-        module, "build_orchestrators",
-        lambda database_url, release=None: (
-            _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
-        ),
+        module, "build_orchestrators", _fake_build_orchestrators,
     )
     monkeypatch.setenv("V3_DATABASE_URL", "postgresql+asyncpg://fake")
+    monkeypatch.setenv("V3_ENABLED", "true")  # R3-P0-001 场景：Resolver 真查库
     output = tmp_path / "report.json"
     args = module.build_parser().parse_args(["--once", "--output", str(output)])
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         report = asyncio.run(module.run_once(output))
+    report["_seen"] = seen
     return report
 
 
+def test_run_once_builds_database_before_release_resolution(monkeypatch, tmp_path) -> None:
+    """R3-P0-001：V3_ENABLED=true + Resolver 真消费 uow_factory 时，
+    database 必须先于 Release 解析创建（原实现引用未赋值局部变量，
+    Resolver 查库即 NameError 崩溃），并以同一实例传给 build_orchestrators。"""
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+    )
+    seen = report.pop("_seen")
+    # 装置内 resolve() 真实 async with uow_factory()——能走到这里说明
+    # database 在 Release 解析前已存在（旧顺序会 NameError）
+    assert seen["resolver_database"] is not None
+    assert seen["build_orchestrator_database"] is not None
+
+
 def test_run_once_skips_v3_main_chain_when_effective_mode_is_v2(monkeypatch, tmp_path) -> None:
-    """STR-002：effective V2（紧急开关/无 Release/状态不完整）时 V3 主链
-    必须整体跳过并显式记录 Gate，绝不照常执行后仅在报表里记一笔。"""
+    """R3-P0-002：effective V2（紧急开关/无 Release/状态不完整）时
+    Release Gate 只跳过策略链（full-recall）——数据事实链
+    （market-data/index-benchmarks/features/evidence-increment）照常运行，
+    否则 V2 期间 V3 数据冻结，无法"先观察再激活"；catch-up 终端标记
+    退回数据链终端 evidence-increment。"""
+    module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path,
         effective_mode="V2", reason="V3_DISABLED_FLAG",
     )
-    assert report["release_gate"]["main_chain"] == "SKIPPED"
-    assert report["release_gate"]["reason"] == "V3_DISABLED_FLAG"
-    assert report["main"] == []
+    seen = report.pop("_seen")
+    gate = report["release_gate"]
+    assert gate["data_chain"] == "EXECUTED"
+    assert gate["strategy_chain"] == "SKIPPED"
+    assert gate["reason"] == "V3_DISABLED_FLAG"
+    # 数据链照常运行（每次 execute 只选 4 个数据 Job，full-recall 被排除）
+    assert report["main"], "V2 期间数据链不得停止"
+    assert all(run["status"] == "COMPLETED" for run in report["main"])
+    assert seen["orch_job_ids"], "主链 Orchestrator 必须仍被调度"
+    assert set(seen["orch_job_ids"][0]) == set(module.DATA_CHAIN_JOB_IDS)
+    # catch-up 终端标记退回数据链终端
+    assert seen["terminal_jobs"][-1] == "evidence-increment"
     # 维护链（数据运营作业）不受策略版本 Gate 影响，照常执行
     assert report["maintenance"]["status"] == "COMPLETED"
     assert report["status"] == "COMPLETED"
 
 
 def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp_path) -> None:
+    module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path, effective_mode="V3", reason=None,
     )
-    assert report["release_gate"]["main_chain"] == "EXECUTED"
+    seen = report.pop("_seen")
+    assert report["release_gate"]["data_chain"] == "EXECUTED"
+    assert report["release_gate"]["strategy_chain"] == "EXECUTED"
     assert report["release_gate"]["reason"] is None
+    # V3 生效：全主链（含 full-recall）执行，job_ids 不限选
+    assert all(job_ids is None for job_ids in seen["orch_job_ids"])
+    assert seen["terminal_jobs"][-1] == "full-recall"
     assert isinstance(report["main"], list) and report["main"]
     assert all(run["status"] == "COMPLETED" for run in report["main"])
 
