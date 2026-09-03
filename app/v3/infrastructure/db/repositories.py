@@ -3026,6 +3026,24 @@ class SQLAlchemyTaskRegistryRepository:
         )
         return None if model is None else self._profile(model)
 
+    async def enabled_profiles(self) -> tuple[TaskProfile, ...]:
+        """Expected Run Registry：全部启用 Profile（每 code 取最新 version）。"""
+        rows = (
+            await self._session.scalars(
+                select(TaskProfileModel)
+                .where(TaskProfileModel.enabled.is_(True))
+                .order_by(TaskProfileModel.profile_code, TaskProfileModel.version.desc())
+            )
+        ).all()
+        seen: set[str] = set()
+        profiles: list[TaskProfile] = []
+        for row in rows:
+            if row.profile_code in seen:
+                continue
+            seen.add(row.profile_code)
+            profiles.append(self._profile(row))
+        return tuple(profiles)
+
     async def publish_expected_run(self, expected_run: ExpectedRun) -> bool:
         await self._validate_profile(
             expected_run.task_profile_id, expected_run.task_profile_version

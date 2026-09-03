@@ -202,6 +202,7 @@ def test_scheduler_maintenance_chain_runs_mature_jobs() -> None:
         "performance-mature",
         "recall-observation-mature",
         "shadow-observation",  # STR-001：Shadow Runtime 自动观察 Job
+        "expected-run-registry",  # REMAIN-OPS-EXPECTED：Expected Run Registry
     }
     # mature 链不依赖市场数据链，仅维护链内部相对次序有约束
     assert order.index("corporate-action-match") < order.index("projection-verify")

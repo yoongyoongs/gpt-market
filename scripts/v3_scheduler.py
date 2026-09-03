@@ -24,6 +24,7 @@ import os
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.config import Settings
 from app.providers.tencent import TencentProvider
@@ -45,6 +46,7 @@ from app.v3.application.mature_recall_observations import (
     MatureRecallObservationsService,
     RecallMissThreshold,
 )
+from app.v3.application.register_expected_task import RegisterExpectedTaskService
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.run_evidence_ingestion import RunEvidenceIngestionService
@@ -351,6 +353,51 @@ def build_orchestrators(
             "inserted_count": result.inserted_count,
         }
 
+    async def expected_run_registry_handler(context) -> dict:
+        """REMAIN-OPS-EXPECTED：Expected Run Registry 正式进入调度。
+
+        每个启用 Task Profile 按（Profile 时区）当日零点确定性登记
+        Expected Run + PENDING Task Run——identity = profile+version+
+        scheduled_for（uuid5），同 slot 重放零新增，天然幂等；AI 日程
+        闭环不再依赖手工/其它入口。非交易日跳过（AI 日程不排班）。
+        """
+        calendar = ExchangeCalendarsAShareCalendar()
+        local_day = context.as_of.astimezone(SHANGHAI).date()
+        if not calendar.is_trading_day(local_day):
+            return {
+                "trading_day": False, "profile_count": 0, "registered_count": 0,
+            }
+        async with context.uow_factory() as uow:
+            profiles = await uow.task_registry.enabled_profiles()
+        service = RegisterExpectedTaskService(context.uow_factory)
+        registered = 0
+        errors: list[dict[str, str]] = []
+        for profile in profiles:
+            try:
+                scheduled_for = datetime.combine(
+                    local_day, time.min, tzinfo=ZoneInfo(profile.timezone),
+                )
+                await service.execute(
+                    profile_code=profile.profile_code,
+                    profile_version=profile.version,
+                    scheduled_for=scheduled_for,
+                )
+                registered += 1
+            except Exception as exc:  # noqa: BLE001 —— 单 Profile 失败隔离
+                if len(errors) < 20:
+                    errors.append({
+                        "profile_code": profile.profile_code,
+                        "profile_version": str(profile.version),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+        return {
+            "trading_day": True,
+            "profile_count": len(profiles),
+            "registered_count": registered,
+            "error_count": len(errors),
+            "errors": errors,
+        }
+
     async def shadow_observation_handler(context) -> dict:
         """STR-001：生产 Runtime 自动产出 ShadowObservation。
 
@@ -463,6 +510,11 @@ def build_orchestrators(
             JobDefinition(
                 job_id="shadow-observation",
                 handler=shadow_observation_handler,
+            ),
+            # REMAIN-OPS-EXPECTED：Expected Run Registry 正式进调度
+            JobDefinition(
+                job_id="expected-run-registry",
+                handler=expected_run_registry_handler,
             ),
         ),
         advisory_lock_key="v3-scheduler-maintenance",

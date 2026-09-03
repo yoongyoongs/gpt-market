@@ -47,7 +47,7 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     assert set(maintenance.execution_order()) == {
         "corporate-action-match", "projection-verify",
         "performance-mature", "recall-observation-mature",
-        "shadow-observation",
+        "shadow-observation", "expected-run-registry",
     }
 
 
@@ -354,6 +354,156 @@ def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp
     assert report["release_gate"]["reason"] is None
     assert isinstance(report["main"], list) and report["main"]
     assert all(run["status"] == "COMPLETED" for run in report["main"])
+
+
+# --- REMAIN-OPS-EXPECTED：Expected Run Registry Job ---
+
+
+def _task_profile(code: str = "daily-review", version: int = 1):
+    from app.v3.domain.context import ContextLevel
+    from app.v3.domain.task import TaskProfile
+
+    return TaskProfile.build(
+        profile_code=code, version=version, schedule=None, timezone="Asia/Shanghai",
+        trading_calendar_source="fixture", trading_calendar_version="v1",
+        context_level=ContextLevel.NORMAL, comparison_first=False,
+        output_schema={"type": "object"}, expected_group_count=2,
+        grace_seconds=600, strategy_version="multi-recall-v1",
+    )
+
+
+class _FakeTaskRegistry:
+    def __init__(self, profiles, known_versions):
+        self._profiles = profiles
+        self._known = known_versions
+        self.published = []
+        self.created = []
+
+    async def enabled_profiles(self):
+        return tuple(self._profiles)
+
+    async def get_profile_version(self, *, profile_code, version):
+        return self._known.get((profile_code, version))
+
+    async def publish_expected_run(self, expected):
+        self.published.append(expected)
+        return True
+
+    async def create_task_run(self, run):
+        self.created.append(run)
+        return True
+
+
+class _RegistryFakeUow:
+    def __init__(self, registry):
+        self.task_registry = registry
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def commit(self):
+        return None
+
+
+def _expected_run_context(registry, *, as_of):
+    from app.v3.jobs.orchestrator import JobContext
+
+    return JobContext(
+        trade_date=as_of.date(),
+        as_of=as_of,
+        uow_factory=lambda: _RegistryFakeUow(registry),
+        artifacts={},
+    )
+
+
+def _expected_run_handler(monkeypatch, *, trading_day=True):
+    module = _scheduler_module()
+
+    class _FakeCalendar:
+        def is_trading_day(self, value):
+            return trading_day
+
+    monkeypatch.setattr(module, "ExchangeCalendarsAShareCalendar", _FakeCalendar)
+    return module
+
+
+def test_expected_run_registry_registers_enabled_profiles(monkeypatch) -> None:
+    """REMAIN-OPS-EXPECTED：启用 Profile 按当日零点（Profile 时区）确定性
+    登记 Expected Run + PENDING Task Run；uuid5 identity 同 slot 重放零新增。"""
+    import asyncio
+    from datetime import datetime, timezone
+
+    module = _expected_run_handler(monkeypatch)
+    profile = _task_profile("daily-review", 3)
+    registry = _FakeTaskRegistry(
+        [profile], {("daily-review", 3): profile},
+    )
+    as_of = datetime(2026, 9, 2, 10, 45, tzinfo=timezone.utc)
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
+    assert result["trading_day"] is True
+    assert result["profile_count"] == 1
+    assert result["registered_count"] == 1
+    assert result["error_count"] == 0
+    # scheduled_for = Profile 时区当日零点（确定性 → 幂等 identity）
+    assert len(registry.published) == 1 and len(registry.created) == 1
+    expected = registry.published[0]
+    from datetime import time as dtime
+    from zoneinfo import ZoneInfo
+
+    assert expected.scheduled_for == datetime.combine(
+        as_of.astimezone(ZoneInfo("Asia/Shanghai")).date(),
+        dtime.min, tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
+    assert expected.task_profile_id == profile.task_profile_id
+    assert expected.task_profile_version == 3
+
+
+def _maintenance_handler(module, job_id):
+    """从 build_orchestrators 取维护链 handler（闭包内函数，不连真库）。"""
+    main, maintenance, _ = module.build_orchestrators(
+        "postgresql+asyncpg://invalid"
+    )
+    return maintenance._jobs[job_id].handler
+
+
+def test_expected_run_registry_skips_non_trading_day(monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime, timezone
+
+    module = _expected_run_handler(monkeypatch, trading_day=False)
+    registry = _FakeTaskRegistry([], {})
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(
+        registry, as_of=datetime(2026, 9, 5, 10, 0, tzinfo=timezone.utc),
+    )))
+    assert result["trading_day"] is False
+    assert result["registered_count"] == 0
+    assert registry.published == [] and registry.created == []
+
+
+def test_expected_run_registry_isolates_profile_errors(monkeypatch) -> None:
+    """单 Profile 失败（版本消失/禁用）隔离记 errors，不阻断其它 Profile。"""
+    import asyncio
+    from datetime import datetime, timezone
+
+    module = _expected_run_handler(monkeypatch)
+    good = _task_profile("good-profile", 1)
+    registry = _FakeTaskRegistry(
+        [good, _task_profile("ghost-profile", 9)],
+        {("good-profile", 1): good, ("ghost-profile", 9): None},
+    )
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(
+        registry, as_of=datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc),
+    )))
+    assert result["profile_count"] == 2
+    assert result["registered_count"] == 1
+    assert result["error_count"] == 1
+    assert result["errors"][0]["profile_code"] == "ghost-profile"
 
 
 def test_annotate_catchup_runs_marks_historical_dates() -> None:
