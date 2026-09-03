@@ -794,6 +794,15 @@ class SQLAlchemyUniverseRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def security_id_by_key(self, market: str, code: str) -> UUID | None:
+        """STR-001 Executor Registry：subject_key → security_id。"""
+        return await self._session.scalar(
+            select(SecurityModel.security_id).where(
+                SecurityModel.market == market,
+                SecurityModel.code == code,
+            )
+        )
+
     async def latest(self) -> UniverseSnapshot | None:
         row = (
             await self._session.execute(

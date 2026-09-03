@@ -36,6 +36,7 @@ from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
 )
 from app.v3.application.evaluate_recall_channels import feature_recall_channels
+from app.v3.application.executor_registry import build_executor_registry
 from app.v3.application.ingest_evidence import IngestEvidenceBatchService
 from app.v3.application.ingest_index_benchmarks import IngestIndexBenchmarksService
 from app.v3.application.link_evidence_entities import EvidenceEntityMatcher
@@ -53,6 +54,7 @@ from app.v3.application.run_evidence_registry import (
 )
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.run_multi_recall import RunMultiRecallService
+from app.v3.application.shadow_executor import ShadowExecutorService
 from app.v3.application.verify_position_projections import (
     VerifyPositionProjectionsService,
 )
@@ -75,6 +77,24 @@ CORPORATE_ACTION_LOOKBACK_DAYS = 10
 EVIDENCE_WINDOW = timedelta(days=1)
 # 主链终端 Job：catch-up 追平判断以此为完成标记（NEW-OPS-002）
 TERMINAL_MAIN_JOB = "full-recall"
+# STR-001：单轮 Shadow 观察的 subject 上限（当日 Recall 结果页）
+SHADOW_SUBJECT_LIMIT = 200
+# STR-002：Release configuration 未声明 Recall 策略版本时的缺省（既有行为）
+DEFAULT_RECALL_STRATEGY_VERSION = "multi-recall-v1"
+
+
+def _recall_strategy_version(release: dict | None) -> tuple[str, str]:
+    """STR-002：按有效 Release configuration 真选择 Recall 策略版本。
+
+    返回 (strategy_version, source)；configuration 未声明时退回缺省并
+    如实标注 source，不假装那是 release 决定的。
+    """
+    configured = ((release or {}).get("configuration") or {}).get(
+        "recall_strategy_version"
+    )
+    if configured:
+        return str(configured), "release_configuration"
+    return DEFAULT_RECALL_STRATEGY_VERSION, "default"
 
 
 def _evidence_failed_capabilities(report) -> list[str]:
@@ -134,7 +154,9 @@ def seconds_until_next_run(now: datetime, scheduled: datetime.time) -> float:
     return (target - local).total_seconds()
 
 
-def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, V3Database]:
+def build_orchestrators(
+    database_url: str, release: dict | None = None,
+) -> tuple[Orchestrator, Orchestrator, V3Database]:
     settings = Settings(_env_file=None, v3_database_url=database_url)
     database = V3Database(
         database_url,
@@ -240,15 +262,17 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
         （context.artifacts），幂等重跑/追平时退回最新 PUBLISHED run。
         RawOpportunity 与 Recall Observation 由 RunMultiRecallService
         在 publish 内一并落库。
+        STR-002：Recall 策略版本按有效 Release configuration 真选择。
         """
         feature_run_id = await _resolve_feature_run_id(context)
+        strategy_version, version_source = _recall_strategy_version(release)
         service = RunMultiRecallService(
             context.uow_factory,
             ExchangeCalendarsAShareCalendar(),
             channels=(*feature_recall_channels(), *evidence_recall_channels()),
         )
         run = await service.execute(
-            feature_run_id=UUID(feature_run_id), strategy_version="multi-recall-v1",
+            feature_run_id=UUID(feature_run_id), strategy_version=strategy_version,
         )
         if run.status.value != "PUBLISHED":
             raise RuntimeError(f"multi-recall finished with status {run.status.value}")
@@ -256,6 +280,8 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             "recall_run_id": str(run.recall_run_id),
             "feature_run_id": str(run.feature_run_id),
             "status": run.status.value,
+            "strategy_version": strategy_version,
+            "strategy_version_source": version_source,
             "expected_channel_count": run.expected_channel_count,
             "successful_channel_count": run.successful_channel_count,
             "failed_channel_count": run.failed_channel_count,
@@ -325,6 +351,72 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             "inserted_count": result.inserted_count,
         }
 
+    async def shadow_observation_handler(context) -> dict:
+        """STR-001：生产 Runtime 自动产出 ShadowObservation。
+
+        活跃实验（STARTED/RESUMED 且时间窗内）× 当日 Recall 命中 subject，
+        经 Executor Registry（Strategy Version → 确定性机器层执行器）真实
+        执行 control/treatment 并 append ShadowObservation。幂等：同一本地
+        交易日同 experiment×subject 已观察则跳过；单次执行失败隔离记
+        error_count，绝不中断整轮维护链。
+        """
+        registry = await build_executor_registry(context.uow_factory)
+        service = ShadowExecutorService(
+            context.uow_factory, executors=registry["executors"],
+        )
+        async with context.uow_factory() as uow:
+            experiments = await uow.strategies.active_experiments(
+                as_of=context.as_of,
+            )
+        async with context.uow_factory() as uow:
+            read_page = await uow.recalls.read_results(
+                recall_run_id=None, channel_code=None,
+                limit=SHADOW_SUBJECT_LIMIT, cursor=None,
+            )
+        subjects = list(dict.fromkeys(
+            f"{item.market}:{item.code}" for item in (read_page.items if read_page else ())
+        ))
+        local_day = context.as_of.astimezone(SHANGHAI).date()
+        window_start = datetime.combine(local_day, time.min, tzinfo=SHANGHAI)
+        window_end = datetime.combine(local_day, time.max, tzinfo=SHANGHAI)
+        skipped_existing = 0
+        pending: list[tuple[dict, str]] = []
+        async with context.uow_factory() as uow:
+            for experiment in experiments:
+                for subject in subjects:
+                    if await uow.strategies.shadow_observation_exists(
+                        experiment["experiment_id"], subject,
+                        observed_from=window_start, observed_to=window_end,
+                    ):
+                        skipped_existing += 1
+                    else:
+                        pending.append((experiment, subject))
+        observation_count = 0
+        errors: list[dict[str, str]] = []
+        error_count = 0
+        for experiment, subject in pending:
+            try:
+                await service.execute(
+                    experiment["experiment_id"], subject, as_of=context.as_of,
+                )
+                observation_count += 1
+            except Exception as exc:  # noqa: BLE001 —— 失败隔离，事实如实落报表
+                error_count += 1
+                if len(errors) < 20:
+                    errors.append({
+                        "experiment_id": str(experiment["experiment_id"]),
+                        "subject_key": subject,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+        return {
+            "experiment_count": len(experiments),
+            "subject_count": len(subjects),
+            "observation_count": observation_count,
+            "skipped_existing": skipped_existing,
+            "error_count": error_count,
+            "errors": errors,
+        }
+
     main = Orchestrator(
         uow_factory,
         (
@@ -366,6 +458,11 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             JobDefinition(
                 job_id="recall-observation-mature",
                 handler=recall_observation_mature_handler,
+            ),
+            # STR-001：Shadow Runtime 自动观察（Executor Registry 接线）
+            JobDefinition(
+                job_id="shadow-observation",
+                handler=shadow_observation_handler,
             ),
         ),
         advisory_lock_key="v3-scheduler-maintenance",
@@ -412,7 +509,6 @@ async def run_once(output: Path) -> dict:
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
-    main, maintenance, database = build_orchestrators(database_url)
     calendar = ExchangeCalendarsAShareCalendar()
     now = datetime.now(timezone.utc)
     local = now.astimezone(SHANGHAI)
@@ -431,6 +527,20 @@ async def run_once(output: Path) -> dict:
     report["release_resolution"] = await ReleaseResolver(
         lambda: SQLAlchemyUnitOfWork(database.sessions), v3_enabled=v3_enabled,
     ).resolve("production")
+    # STR-002：解析结果接线进 Orchestrator（Recall 策略版本按 configuration 选择）
+    main, maintenance, database = build_orchestrators(
+        database_url, release=report["release_resolution"],
+    )
+    resolution = report["release_resolution"]
+    # STR-002：Runtime 真消费解析结果——effective_mode 非 V3（紧急开关
+    # 关闭 / 无 Release / 状态不完整 / 版本缺失）时 V3 主链整体跳过，
+    # 绝不照常执行后仅记录；V2 业务路径由 phase2 调度器承担，本进程
+    # 不伪造 V2 执行。维护链是数据运营作业（与策略版本无关）照常运行。
+    effective_v3 = resolution.get("effective_mode") == "V3"
+    report["release_gate"] = {
+        "main_chain": "EXECUTED" if effective_v3 else "SKIPPED",
+        "reason": resolution.get("reason"),
+    }
     if report["trading_day"]:
         trade_date = latest_completed_session(calendar, now)
         # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
@@ -449,10 +559,13 @@ async def run_once(output: Path) -> dict:
         report["catchup_mode"] = (
             "operational" if any(day < trade_date for day in pending) else "same-day"
         )
-        report["main"] = _annotate_catchup_runs(
-            trade_date,
-            pending,
-            [await main.execute(trade_date=pending_date, as_of=now) for pending_date in pending],
+        report["main"] = (
+            _annotate_catchup_runs(
+                trade_date,
+                pending,
+                [await main.execute(trade_date=pending_date, as_of=now) for pending_date in pending],
+            )
+            if effective_v3 else []
         )
     # 维护链每个自然日独立执行（幂等键 = 本地日期）
     report["maintenance"] = await maintenance.execute(

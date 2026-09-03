@@ -47,6 +47,7 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     assert set(maintenance.execution_order()) == {
         "corporate-action-match", "projection-verify",
         "performance-mature", "recall-observation-mature",
+        "shadow-observation",
     }
 
 
@@ -165,7 +166,7 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
         async def close(self):
             pass
 
-    def _fake_build(database_url):
+    def _fake_build(database_url, release=None):
         return _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
 
     monkeypatch.setattr(module, "build_orchestrators", _fake_build)
@@ -222,6 +223,137 @@ def test_catchup_terminal_marker_uses_full_recall(monkeypatch) -> None:
     monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _FakeUow())
     assert asyncio.run(module._latest_main_success_key(_FakeDatabase())) is None
     assert seen["job_id"] == "full-recall"
+
+
+def test_recall_strategy_version_prefers_release_configuration() -> None:
+    """STR-002：Release configuration 声明了 recall_strategy_version 时真消费，
+    未声明时退回缺省并如实标注 source=default。"""
+    module = _scheduler_module()
+    assert module._recall_strategy_version(None) == ("multi-recall-v1", "default")
+    assert module._recall_strategy_version({}) == ("multi-recall-v1", "default")
+    assert module._recall_strategy_version({"configuration": {}}) == (
+        "multi-recall-v1", "default",
+    )
+    assert module._recall_strategy_version({
+        "configuration": {"recall_strategy_version": "recall-v9"},
+    }) == ("recall-v9", "release_configuration")
+
+
+def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
+    """STR-002 主链 Gate 的通用测试装置：Release 解析结果由桩注入。"""
+    import asyncio
+    import contextlib
+    import io
+    from datetime import date, timezone as tz
+    from datetime import datetime as dt
+
+    module = _scheduler_module()
+
+    class _FakeResolution:
+        def __init__(self, *, v3_enabled):
+            pass
+
+        async def resolve(self, environment):
+            return {
+                "environment": environment, "resolved_at": dt.now(tz.utc),
+                "mode": "V2", "effective_mode": effective_mode,
+                "reason": reason, "strategy_version_id": None,
+                "guardrail_version_id": None, "configuration": None,
+                "row_version": None,
+            }
+
+    class _FakeCalendarMeta:
+        source = "fixture"
+        calendar_code = "XSHG"
+        coverage_end = date(2026, 12, 31)
+
+    class _FakeCalendar:
+        metadata = _FakeCalendarMeta()
+
+        def is_trading_day(self, value):
+            return True
+
+    class _FakeOrchRepo:
+        async def latest_succeeded_idempotency_key(self, job_id):
+            return None
+
+    class _FakeUow:
+        orchestrator = _FakeOrchRepo()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeOrchestrator:
+        async def execute(self, **kwargs):
+            return {"status": "COMPLETED"}
+
+    class _FakeSession:
+        async def scalar(self, stmt):
+            return None
+
+        async def rollback(self):
+            pass
+
+        async def close(self):
+            pass
+
+    class _FakeDatabase:
+        sessions = staticmethod(lambda: _FakeSession())
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(module, "ExchangeCalendarsAShareCalendar", _FakeCalendar)
+    monkeypatch.setattr(
+        module, "latest_completed_session",
+        lambda calendar, now: date(2026, 9, 2),
+    )
+    monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _FakeUow())
+    monkeypatch.setattr(
+        module, "ReleaseResolver",
+        lambda uow_factory, v3_enabled: _FakeResolution(v3_enabled=v3_enabled),
+    )
+    monkeypatch.setattr(
+        module, "build_orchestrators",
+        lambda database_url, release=None: (
+            _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
+        ),
+    )
+    monkeypatch.setenv("V3_DATABASE_URL", "postgresql+asyncpg://fake")
+    output = tmp_path / "report.json"
+    args = module.build_parser().parse_args(["--once", "--output", str(output)])
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        report = asyncio.run(module.run_once(output))
+    return report
+
+
+def test_run_once_skips_v3_main_chain_when_effective_mode_is_v2(monkeypatch, tmp_path) -> None:
+    """STR-002：effective V2（紧急开关/无 Release/状态不完整）时 V3 主链
+    必须整体跳过并显式记录 Gate，绝不照常执行后仅在报表里记一笔。"""
+    report = _run_once_with_release(
+        monkeypatch, tmp_path,
+        effective_mode="V2", reason="V3_DISABLED_FLAG",
+    )
+    assert report["release_gate"]["main_chain"] == "SKIPPED"
+    assert report["release_gate"]["reason"] == "V3_DISABLED_FLAG"
+    assert report["main"] == []
+    # 维护链（数据运营作业）不受策略版本 Gate 影响，照常执行
+    assert report["maintenance"]["status"] == "COMPLETED"
+    assert report["status"] == "COMPLETED"
+
+
+def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp_path) -> None:
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+    )
+    assert report["release_gate"]["main_chain"] == "EXECUTED"
+    assert report["release_gate"]["reason"] is None
+    assert isinstance(report["main"], list) and report["main"]
+    assert all(run["status"] == "COMPLETED" for run in report["main"])
 
 
 def test_annotate_catchup_runs_marks_historical_dates() -> None:

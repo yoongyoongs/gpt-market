@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.v3.domain.hashing import canonical_hash
@@ -187,6 +187,77 @@ class SQLAlchemyStrategyRepository:
             **command.model_dump(mode="python"), content_hash=content_hash(command)
         ))
         return command.shadow_observation_id
+
+    async def active_experiments(self, *, as_of: datetime) -> list[dict]:
+        """STR-001 Shadow Runtime：当前应被自动观察的实验。
+
+        活跃 = 时间窗内（starts_at <= as_of 且 ends_at 未到）且最新事件为
+        STARTED/RESUMED（与 add_shadow_observation/assign_experiment 的
+        运行校验一致），避免 Scheduler 对已停止实验盲目打冲突。
+        """
+        latest_event = (
+            select(
+                StrategyExperimentEventModel.experiment_id.label("experiment_id"),
+                func.max(StrategyExperimentEventModel.sequence).label("sequence"),
+            )
+            .group_by(StrategyExperimentEventModel.experiment_id)
+            .subquery()
+        )
+        rows = (
+            await self._session.scalars(
+                select(StrategyExperimentModel)
+                .join(
+                    StrategyExperimentEventModel,
+                    and_(
+                        StrategyExperimentEventModel.experiment_id
+                        == StrategyExperimentModel.experiment_id,
+                        StrategyExperimentEventModel.sequence
+                        == latest_event.c.sequence,
+                        StrategyExperimentEventModel.experiment_id
+                        == latest_event.c.experiment_id,
+                    ),
+                )
+                .where(
+                    StrategyExperimentEventModel.event_type.in_(
+                        ("STARTED", "RESUMED")
+                    ),
+                    StrategyExperimentModel.starts_at <= as_of,
+                    or_(
+                        StrategyExperimentModel.ends_at.is_(None),
+                        StrategyExperimentModel.ends_at > as_of,
+                    ),
+                )
+                .order_by(StrategyExperimentModel.starts_at)
+            )
+        ).all()
+        return [
+            {
+                "experiment_id": row.experiment_id,
+                "experiment_type": row.experiment_type,
+                "control_strategy_version_id": row.control_strategy_version_id,
+                "treatment_strategy_version_id": row.treatment_strategy_version_id,
+                "allocation_percent": row.allocation_percent,
+                "starts_at": row.starts_at,
+                "ends_at": row.ends_at,
+            }
+            for row in rows
+        ]
+
+    async def shadow_observation_exists(
+        self, experiment_id: UUID, subject_key: str, *,
+        observed_from: datetime, observed_to: datetime,
+    ) -> bool:
+        """STR-001 Scheduler 幂等：observed_at 窗口内同 experiment×subject 已观察。"""
+        return (
+            await self._session.scalar(
+                select(ShadowObservationModel.shadow_observation_id).where(
+                    ShadowObservationModel.experiment_id == experiment_id,
+                    ShadowObservationModel.subject_key == subject_key,
+                    ShadowObservationModel.observed_at > observed_from,
+                    ShadowObservationModel.observed_at <= observed_to,
+                ).limit(1)
+            )
+        ) is not None
 
     async def assign_experiment(self, experiment_id: UUID, subject_key: str) -> dict:
         experiment = await self._session.get(StrategyExperimentModel, experiment_id)
