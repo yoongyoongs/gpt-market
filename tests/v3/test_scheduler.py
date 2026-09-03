@@ -42,11 +42,96 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     )
     assert main.execution_order() == (
         "market-data", "index-benchmarks", "features",
+        "evidence-increment", "full-recall",
     )
     assert set(maintenance.execution_order()) == {
         "corporate-action-match", "projection-verify",
         "performance-mature", "recall-observation-mature",
     }
+
+
+def test_evidence_failed_capabilities_reports_only_failed() -> None:
+    """Evidence 增量失败策略：部分能力失败不阻断（如实上报），
+    全部失败才让 Job FAILED——与 index-benchmarks 一致。"""
+    from app.v3.application.run_evidence_registry import (
+        CapabilityRunStatus,
+        EvidenceCapabilityRun,
+        EvidenceRegistryRun,
+    )
+    from app.v3.providers.evidence import EvidenceCapability
+
+    module = _scheduler_module()
+
+    def _capability(capability, status):
+        return EvidenceCapabilityRun(capability=capability, status=status)
+
+    report = EvidenceRegistryRun(capabilities=(
+        _capability(EvidenceCapability.NEWS, CapabilityRunStatus.SUCCESS),
+        _capability(EvidenceCapability.POLICY, CapabilityRunStatus.FAILED),
+        _capability(EvidenceCapability.FINANCIAL, CapabilityRunStatus.UNAVAILABLE),
+    ))
+    assert module._evidence_failed_capabilities(report) == ["POLICY", "FINANCIAL"]
+    assert module._evidence_failed_capabilities(
+        EvidenceRegistryRun(capabilities=(
+            _capability(EvidenceCapability.NEWS, CapabilityRunStatus.SUCCESS),
+            _capability(EvidenceCapability.POLICY, CapabilityRunStatus.SUCCESS),
+        ))
+    ) == []
+
+
+def test_resolve_feature_run_id_prefers_artifact_then_latest_run() -> None:
+    """Full Recall 的 Feature Run 解析：同编排 artifacts 优先，
+    追平/重跑退回最新 PUBLISHED run；都没有则报错。"""
+    import asyncio
+    from datetime import date, datetime, timezone
+
+    from app.v3.jobs.orchestrator import JobContext
+
+    module = _scheduler_module()
+
+    class _FakeFeatureRun:
+        feature_run_id = "11111111-2222-3333-4444-555555555555"
+
+    class _FakeFeaturesRepo:
+        def __init__(self, run):
+            self._run = run
+
+        async def latest_run(self):
+            return self._run
+
+    class _FakeUow:
+        def __init__(self, run):
+            self.features = _FakeFeaturesRepo(run)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def _context(artifacts, run):
+        return JobContext(
+            trade_date=date(2026, 9, 2),
+            as_of=datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc),
+            uow_factory=lambda: _FakeUow(run),
+            artifacts=artifacts,
+        )
+
+    artifact_context = _context(
+        {"features": {"feature_run_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}},
+        run=None,
+    )
+    assert asyncio.run(module._resolve_feature_run_id(artifact_context)) == (
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    )
+
+    fallback_context = _context({}, run=_FakeFeatureRun())
+    assert asyncio.run(module._resolve_feature_run_id(fallback_context)) == (
+        "11111111-2222-3333-4444-555555555555"
+    )
+
+    with pytest.raises(RuntimeError, match="no published feature run"):
+        asyncio.run(module._resolve_feature_run_id(_context({}, run=None)))
 
 
 def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:

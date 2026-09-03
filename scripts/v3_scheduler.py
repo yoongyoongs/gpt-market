@@ -2,16 +2,17 @@
 
 统一 Orchestrator：
 - 收盘后主链（交易日）：Universe/日线增量/公司行动摄取（Phase2 market job）
-  → 全市场 Feature Run + Market Regime；
+  → 指数基准 → 全市场 Feature Run + Market Regime
+  → Evidence 增量（24h 窗口，RT §7.2 Step 09）
+  → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11，
+    RawOpp 由 RunMultiRecallService.publish 一并落库）；
 - 独立每日维护链：Corporate Action Match、Projection Verify。
 
 每个 Job 的运行记录（status/as_of/known_at/attempt/error/metrics）由
 Orchestrator 落库到 v3.orchestrator_job_runs；按交易日幂等，重复执行
 自动跳过；全局 advisory lock 防止并发重复调度。
-Recall/Evidence/Expected Registry 链路维持既有脚本（v3_phase4/5/6），
-待其 Provider 生产化后在同一 Orchestrator 注册；Recall Observation
-Mature 的 Outcome Provider 已生产化（已落库日 K + 指数基准 Revision），
-随 RT-10 进入维护链。
+Evidence 部分能力失败不阻断（仅全部失败才 FAILED），Recall 通道自带
+失败声明（failed_channel_count 记录），与生产诚实原则一致。
 """
 
 from __future__ import annotations
@@ -22,10 +23,17 @@ import json
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from uuid import UUID
 
 from app.config import Settings
 from app.utils.time import SHANGHAI
+from app.v3.application.evaluate_evidence_recall_channels import (
+    evidence_recall_channels,
+)
+from app.v3.application.evaluate_recall_channels import feature_recall_channels
+from app.v3.application.ingest_evidence import IngestEvidenceBatchService
 from app.v3.application.ingest_index_benchmarks import IngestIndexBenchmarksService
+from app.v3.application.link_evidence_entities import EvidenceEntityMatcher
 from app.v3.application.mature_performance import MaturePerformanceService
 from app.v3.application.mature_recall_observations import (
     MatureRecallObservationsService,
@@ -33,7 +41,13 @@ from app.v3.application.mature_recall_observations import (
 )
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.release_resolver import ReleaseResolver
+from app.v3.application.run_evidence_ingestion import RunEvidenceIngestionService
+from app.v3.application.run_evidence_registry import (
+    CapabilityRunStatus,
+    RunEvidenceRegistryService,
+)
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
+from app.v3.application.run_multi_recall import RunMultiRecallService
 from app.v3.application.verify_position_projections import (
     VerifyPositionProjectionsService,
 )
@@ -44,13 +58,35 @@ from app.v3.infrastructure.providers.exchange_calendar import (
     ExchangeCalendarsAShareCalendar,
 )
 from app.v3.providers.bars_outcome import BarsOutcomeProvider
+from app.v3.providers.evidence import EvidenceCapability
 from app.v3.jobs.market_data import catchup_trade_dates, latest_completed_session
 from app.v3.jobs.orchestrator import JobDefinition, Orchestrator
 from scripts.v3_phase2_market_job import build_parser as build_job_parser
 from scripts.v3_phase2_market_job import execute as execute_market_job
+from scripts.v3_phase4_evidence import build_registry as build_evidence_registry
 
 
 CORPORATE_ACTION_LOOKBACK_DAYS = 10
+EVIDENCE_WINDOW = timedelta(days=1)
+
+
+def _evidence_failed_capabilities(report) -> list[str]:
+    return [
+        item.capability.value for item in report.capabilities
+        if item.status in {CapabilityRunStatus.FAILED, CapabilityRunStatus.UNAVAILABLE}
+    ]
+
+
+async def _resolve_feature_run_id(context) -> str:
+    """优先同一次编排里 features Job 的产物，追平时退回最新 PUBLISHED run。"""
+    artifact = context.artifact("features")
+    if artifact.get("feature_run_id"):
+        return artifact["feature_run_id"]
+    async with context.uow_factory() as uow:
+        latest = await uow.features.latest_run()
+    if latest is None:
+        raise RuntimeError("no published feature run available for recall")
+    return str(latest.feature_run_id)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -139,6 +175,82 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             "coverage": str(run.coverage),
         }
 
+    async def evidence_increment_handler(context) -> dict:
+        """Evidence 增量（RT §7.2 Step 09）：24h 窗口，复用 phase4 注册表。
+
+        失败策略与 index-benchmarks 一致：仅全部能力失败才 FAILED，
+        部分能力失败如实记入 failed_capabilities，不阻断下游 Recall
+        （Recall 通道自带可用性声明）。
+        """
+        async with context.uow_factory() as uow:
+            snapshot = await uow.universes.latest()
+        if snapshot is None:
+            raise RuntimeError("no universe snapshot available for evidence ingestion")
+        registry = build_evidence_registry(tuple(member.code for member in snapshot.members))
+        try:
+            batch_service = IngestEvidenceBatchService(
+                context.uow_factory,
+                entity_linker=EvidenceEntityMatcher.from_universe(snapshot),
+            )
+            service = RunEvidenceRegistryService(
+                registry,
+                RunEvidenceIngestionService(
+                    context.uow_factory, batch_service=batch_service,
+                ),
+            )
+            report = await service.execute(
+                capabilities=tuple(EvidenceCapability),
+                window_start=context.as_of - EVIDENCE_WINDOW,
+                window_end=context.as_of,
+                max_batches=int(os.getenv("V3_EVIDENCE_MAX_BATCHES", "1")),
+            )
+        finally:
+            await registry.close()
+        failed = _evidence_failed_capabilities(report)
+        if len(failed) == len(report.capabilities):
+            raise RuntimeError(f"all evidence capabilities failed: {failed}")
+        return {
+            "capability_count": len(report.capabilities),
+            "failed_capabilities": failed,
+            "fetched_count": sum(
+                attempt.fetched_count
+                for item in report.capabilities for attempt in item.attempts
+            ),
+            "evidence_count": sum(
+                attempt.evidence_count
+                for item in report.capabilities for attempt in item.attempts
+            ),
+        }
+
+    async def full_recall_handler(context) -> dict:
+        """Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11）。
+
+        优先复用同一次编排里 features Job 发布的 Feature Run
+        （context.artifacts），幂等重跑/追平时退回最新 PUBLISHED run。
+        RawOpportunity 与 Recall Observation 由 RunMultiRecallService
+        在 publish 内一并落库。
+        """
+        feature_run_id = await _resolve_feature_run_id(context)
+        service = RunMultiRecallService(
+            context.uow_factory,
+            ExchangeCalendarsAShareCalendar(),
+            channels=(*feature_recall_channels(), *evidence_recall_channels()),
+        )
+        run = await service.execute(
+            feature_run_id=UUID(feature_run_id), strategy_version="multi-recall-v1",
+        )
+        if run.status.value != "PUBLISHED":
+            raise RuntimeError(f"multi-recall finished with status {run.status.value}")
+        return {
+            "recall_run_id": str(run.recall_run_id),
+            "feature_run_id": str(run.feature_run_id),
+            "status": run.status.value,
+            "expected_channel_count": run.expected_channel_count,
+            "successful_channel_count": run.successful_channel_count,
+            "failed_channel_count": run.failed_channel_count,
+            "hit_security_count": run.hit_security_count,
+        }
+
     async def index_benchmarks_handler(context) -> dict:
         service = IngestIndexBenchmarksService(
             context.uow_factory, eastmoney,
@@ -212,6 +324,16 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
             JobDefinition(
                 job_id="features", handler=features_handler,
                 depends_on=("index-benchmarks",),
+            ),
+            # RT §7.2 Step 09：Evidence 增量（24h 窗口）
+            JobDefinition(
+                job_id="evidence-increment", handler=evidence_increment_handler,
+                depends_on=("features",),
+            ),
+            # RT §7.2 Step 10/11：Full Recall + Raw Opportunity Publish
+            JobDefinition(
+                job_id="full-recall", handler=full_recall_handler,
+                depends_on=("evidence-increment",),
             ),
         ),
         advisory_lock_key="v3-scheduler-main",
