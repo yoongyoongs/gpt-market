@@ -108,10 +108,16 @@ def test_openapi_exposes_phase6_read_routes():
         "/api/v3/task-runs",
         "/api/v3/task-runs/{task_run_id}",
     } <= set(paths)
-    for path in {
-        "/api/v3/market-overview",
+    # API-002：build 有落库副作用 → 正式入口 POST，GET 保留 deprecated 兼容
+    build_paths = {
         "/api/v3/candidates/comparison-pack",
         "/api/v3/stocks/{code}/context-pack",
+    }
+    for path in build_paths:
+        assert "post" in paths[path]
+        assert paths[path]["get"]["deprecated"] is True
+    for path in {
+        "/api/v3/market-overview",
         "/api/v3/stocks/{code}/evidence",
         "/api/v3/context-packs/{context_pack_id}",
         "/api/v3/task-context/{profile}",

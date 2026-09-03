@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
 from app.container import container
 from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
@@ -190,26 +191,39 @@ async def market_overview():
     return await market_regime()
 
 
-@router.get("/candidates/comparison-pack")
-async def candidate_comparison_pack(
-    candidate_set_id: UUID | None = None,
-    codes: str | None = Query(
-        default=None,
-        description="20-100 comma-separated CODE or MARKET:CODE candidates",
-    ),
-    feature_run_id: UUID | None = None,
-    recall_run_id: UUID | None = None,
-    field_profile_version: str = Query(
+class CandidateComparisonBuildRequest(BaseModel):
+    """API-002：Comparison Pack build 的 POST body（build 会落库 publish）。"""
+
+    candidate_set_id: UUID | None = None
+    codes: list[str] = Field(default_factory=list)
+    feature_run_id: UUID | None = None
+    recall_run_id: UUID | None = None
+    field_profile_version: str = Field(
         default="compact-fields.v1", min_length=1, max_length=64
-    ),
-    as_of: datetime | None = None,
+    )
+    as_of: datetime | None = None
+
+
+class ContextPackBuildRequest(BaseModel):
+    """API-002：Context Pack build 的 POST body（build 会落库 publish）。"""
+
+    profile: str = Field(min_length=1, max_length=64)
+    profile_version: int | None = Field(default=None, ge=1)
+    market: str | None = Field(default=None, pattern=r"^(SH|SZ|BJ)$")
+    as_of: datetime | None = None
+    feature_run_id: UUID | None = None
+    recall_run_id: UUID | None = None
+    comparison_pack_id: UUID | None = None
+
+
+async def _execute_comparison_build(
+    *, candidate_set_id, codes, feature_run_id, recall_run_id,
+    field_profile_version, as_of,
 ):
     try:
         query = CandidateComparisonQuery(
             candidate_set_id=candidate_set_id,
-            codes=tuple(item.strip() for item in codes.split(",") if item.strip())
-            if codes
-            else (),
+            codes=codes,
             feature_run_id=feature_run_id,
             recall_run_id=recall_run_id,
             field_profile_version=field_profile_version,
@@ -222,6 +236,87 @@ async def candidate_comparison_pack(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _execute_stock_context_build(
+    *, code, profile, profile_version, market, as_of,
+    feature_run_id, recall_run_id, comparison_pack_id,
+):
+    try:
+        async with _uow() as uow:
+            task_profile = (
+                await uow.task_registry.latest_profile(profile)
+                if profile_version is None
+                else await uow.task_registry.get_profile_version(
+                    profile_code=profile, version=profile_version
+                )
+            )
+        if task_profile is None or not task_profile.enabled:
+            raise RepositoryNotFoundError("enabled task profile not found")
+        return await BuildContextPackService(_uow).execute(
+            BuildContextPackCommand(
+                context_level=task_profile.context_level,
+                subject_type="SECURITY",
+                subject_id=f"{market}:{code}" if market else code,
+                task_profile_id=task_profile.task_profile_id,
+                task_profile_version=task_profile.version,
+                as_of=as_of or datetime.now(timezone.utc),
+                feature_run_id=feature_run_id,
+                recall_run_id=recall_run_id,
+                comparison_pack_id=comparison_pack_id,
+            )
+        )
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepositoryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/candidates/comparison-pack")
+async def build_candidate_comparison_pack(
+    request: CandidateComparisonBuildRequest,
+):
+    """API-002：Comparison Pack 构建有落库副作用（publish ComparisonPack），
+    正式入口为 POST；GET 仅作 deprecated 兼容。"""
+    return await _execute_comparison_build(
+        candidate_set_id=request.candidate_set_id,
+        codes=tuple(item.strip() for item in request.codes if item.strip()),
+        feature_run_id=request.feature_run_id,
+        recall_run_id=request.recall_run_id,
+        field_profile_version=request.field_profile_version,
+        as_of=request.as_of,
+    )
+
+
+@router.get("/candidates/comparison-pack", deprecated=True)
+async def candidate_comparison_pack(
+    response: Response,
+    candidate_set_id: UUID | None = None,
+    codes: str | None = Query(
+        default=None,
+        description="20-100 comma-separated CODE or MARKET:CODE candidates",
+    ),
+    feature_run_id: UUID | None = None,
+    recall_run_id: UUID | None = None,
+    field_profile_version: str = Query(
+        default="compact-fields.v1", min_length=1, max_length=64
+    ),
+    as_of: datetime | None = None,
+):
+    """Deprecated（API-002）：build 有落库副作用，改用同名 POST。"""
+    response.headers["Deprecation"] = "true"
+    return await _execute_comparison_build(
+        candidate_set_id=candidate_set_id,
+        codes=tuple(item.strip() for item in codes.split(",") if item.strip())
+        if codes
+        else (),
+        feature_run_id=feature_run_id,
+        recall_run_id=recall_run_id,
+        field_profile_version=field_profile_version,
+        as_of=as_of,
+    )
 
 
 def _enum_values(value: str | None, enum_type):
@@ -271,8 +366,27 @@ async def stock_evidence(
     )
 
 
-@router.get("/stocks/{code}/context-pack")
+@router.post("/stocks/{code}/context-pack")
+async def build_stock_context_pack(
+    code: str, request: ContextPackBuildRequest,
+):
+    """API-002：Context Pack 构建有落库副作用（publish ContextPack），
+    正式入口为 POST；GET 仅作 deprecated 兼容。"""
+    return await _execute_stock_context_build(
+        code=code,
+        profile=request.profile,
+        profile_version=request.profile_version,
+        market=request.market,
+        as_of=request.as_of,
+        feature_run_id=request.feature_run_id,
+        recall_run_id=request.recall_run_id,
+        comparison_pack_id=request.comparison_pack_id,
+    )
+
+
+@router.get("/stocks/{code}/context-pack", deprecated=True)
 async def stock_context_pack(
+    response: Response,
     code: str,
     profile: str = Query(min_length=1, max_length=64),
     profile_version: int | None = Query(default=None, ge=1),
@@ -282,36 +396,18 @@ async def stock_context_pack(
     recall_run_id: UUID | None = None,
     comparison_pack_id: UUID | None = None,
 ):
-    try:
-        async with _uow() as uow:
-            task_profile = (
-                await uow.task_registry.latest_profile(profile)
-                if profile_version is None
-                else await uow.task_registry.get_profile_version(
-                    profile_code=profile, version=profile_version
-                )
-            )
-        if task_profile is None or not task_profile.enabled:
-            raise RepositoryNotFoundError("enabled task profile not found")
-        return await BuildContextPackService(_uow).execute(
-            BuildContextPackCommand(
-                context_level=task_profile.context_level,
-                subject_type="SECURITY",
-                subject_id=f"{market}:{code}" if market else code,
-                task_profile_id=task_profile.task_profile_id,
-                task_profile_version=task_profile.version,
-                as_of=as_of or datetime.now(timezone.utc),
-                feature_run_id=feature_run_id,
-                recall_run_id=recall_run_id,
-                comparison_pack_id=comparison_pack_id,
-            )
-        )
-    except RepositoryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RepositoryConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    """Deprecated（API-002）：build 有落库副作用，改用同名 POST。"""
+    response.headers["Deprecation"] = "true"
+    return await _execute_stock_context_build(
+        code=code,
+        profile=profile,
+        profile_version=profile_version,
+        market=market,
+        as_of=as_of,
+        feature_run_id=feature_run_id,
+        recall_run_id=recall_run_id,
+        comparison_pack_id=comparison_pack_id,
+    )
 
 
 @router.get("/context-packs/{context_pack_id}")

@@ -87,6 +87,12 @@ def _client(*, public_market_read: bool = True) -> TestClient:
     async def activate(request: Request):
         return {"principal_id": request.state.v3_principal.principal_id}
 
+    for path in (
+        "/api/v3/candidates/comparison-pack",
+        "/api/v3/stocks/600000/context-pack",
+    ):
+        app.post(path)(portfolio_write)
+
     return TestClient(app)
 
 
@@ -179,6 +185,26 @@ def test_portfolio_read_and_write_require_authentication() -> None:
     assert write_response.status_code == 401
     assert read_response.json()["code"] == "V3_UNAUTHORIZED"
     assert write_response.json()["details"]["required_scope"] == "V3_WRITE"
+
+
+def test_build_endpoints_are_write_scoped_not_public() -> None:
+    """API-002：comparison-pack / context-pack 的 POST build 有落库副作用，
+    与 GET 不同，必须认证（V3_WRITE），不得落入公开市场读 allowlist。"""
+    for path, body in (
+        ("/api/v3/candidates/comparison-pack", {"codes": ["SH:600000"]}),
+        ("/api/v3/stocks/600000/context-pack", {"profile": "default"}),
+    ):
+        with _client() as client:
+            anonymous = client.post(path, json=body)
+            authorized = client.post(
+                path, json=body,
+                headers={"Authorization": "Bearer write-secret"},
+            )
+        assert anonymous.status_code == 401, path
+        assert (
+            anonymous.json()["details"]["required_scope"] == "V3_WRITE"
+        ), path
+        assert authorized.status_code == 200, path
 
 
 def test_valid_write_token_sets_server_principal() -> None:
