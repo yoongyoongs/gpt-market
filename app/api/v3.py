@@ -738,7 +738,8 @@ async def entry_decision_context(
     """
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
-    bars_service = IntradayMarketDataService(container.eastmoney)
+    # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback + 健康降级）
+    bars_service = IntradayMarketDataService(container.provider_manager)
     service = ReadEntryDecisionContextService(
         _uow,
         bars_service,
@@ -755,7 +756,9 @@ async def portfolio_intraday_structure(
     as_of: datetime | None = Query(default=None),
 ):
     """分钟级深度结构（RC-04D）：只服务持仓上下文，fetch-time 事实。"""
-    service = DeepMarketDataService(container.eastmoney)
+    service = DeepMarketDataService(
+        container.provider_manager, source="legacy-provider",
+    )
     return await service.get_intraday_structure(
         code, as_of=as_of or datetime.now(timezone.utc),
     )
@@ -802,8 +805,10 @@ def _position_context_service() -> ReadPositionContextService:
     return ReadPositionContextService(
         _uow,
         calendar=ExchangeCalendarsAShareCalendar(),
-        deep_market_data=DeepMarketDataService(container.eastmoney),
-        quote_service=IntradayMarketDataService(container.eastmoney),
+        deep_market_data=DeepMarketDataService(
+            container.provider_manager, source="legacy-provider",
+        ),
+        quote_service=IntradayMarketDataService(container.provider_manager),
     )
 
 

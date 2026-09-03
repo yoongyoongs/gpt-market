@@ -28,6 +28,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.config import Settings
+from app.providers.manager import ProviderManager
 from app.providers.tencent import TencentProvider
 from app.services.data_quality import DataQualityService
 from app.utils.time import SHANGHAI
@@ -788,6 +789,11 @@ def build_intraday_loop(database) -> IntradayTriggerLoop:
     settings = Settings(_env_file=None, v3_database_url=os.getenv("V3_DATABASE_URL"))
     uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)  # noqa: E731
     calendar = ExchangeCalendarsAShareCalendar()
+    # R3-P1-006：盘中触发循环同样走 ProviderManager（东财/腾讯 fallback +
+    # 健康降级），不再绑死单 EastmoneyProvider
+    provider_manager = ProviderManager(
+        EastmoneyProvider(settings), TencentProvider(settings, DataQualityService()),
+    )
 
     def _trading_day(value):
         try:
@@ -797,7 +803,7 @@ def build_intraday_loop(database) -> IntradayTriggerLoop:
 
     return IntradayTriggerLoop(
         uow_factory,
-        IntradayMarketDataService(EastmoneyProvider(settings)),
+        IntradayMarketDataService(provider_manager),
         AttentionEngineService(uow_factory),
         _trading_day,
         interval_seconds=float(os.getenv("V3_INTRADAY_INTERVAL_SECONDS", "300")),

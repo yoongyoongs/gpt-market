@@ -312,3 +312,31 @@ async def test_structure_snapshot_latest_price_from_quote_is_optional() -> None:
     without_price = IntradayStructureSnapshotService(bars)
     snapshot2 = await without_price.get_snapshot("000001", as_of=NOW)
     assert snapshot2.latest_price is None
+
+
+@pytest.mark.asyncio
+async def test_service_wired_to_provider_manager_falls_back_to_tencent() -> None:
+    """R3-P1-006：V3 实时主入口接 ProviderManager——主 Provider 故障时
+    自动落到次级（腾讯），不再绑死单 EastmoneyProvider。"""
+    from app.providers.manager import ProviderManager
+
+    class _FailingEast:
+        async def get_quote(self, code: str) -> Quote:
+            raise RuntimeError("eastmoney down")
+
+    class _FakeTencent:
+        def __init__(self):
+            self.calls = 0
+
+        async def get_quote(self, code: str) -> Quote:
+            self.calls += 1
+            return _quote(source="tencent", timestamp_source="fetch_time")
+
+    manager = ProviderManager(
+        _FailingEast(), _FakeTencent(), attempts_per_provider=1,
+    )
+    tencent = manager.providers["tencent"]
+    service = IntradayMarketDataService(manager)
+    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    assert snapshot.source == "tencent"
+    assert tencent.calls == 1

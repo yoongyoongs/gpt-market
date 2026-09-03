@@ -71,7 +71,8 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
 
     def _bars_service() -> Any:
         if "bars" not in _cache:
-            _cache["bars"] = IntradayMarketDataService(root_container.eastmoney)
+            # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback）
+            _cache["bars"] = IntradayMarketDataService(root_container.provider_manager)
         return _cache["bars"]
 
     def _structure_service() -> Any:
@@ -123,7 +124,9 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             _cache["position_context"] = ReadPositionContextService(
                 uow_factory,
                 calendar=calendar,
-                deep_market_data=DeepMarketDataService(root_container.eastmoney),
+                deep_market_data=DeepMarketDataService(
+                    root_container.provider_manager, source="legacy-provider",
+                ),
                 quote_service=_bars_service(),
             )
         return _cache["position_context"]
