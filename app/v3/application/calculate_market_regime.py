@@ -15,8 +15,18 @@ from app.v3.domain.features import MarketRegimeSnapshot, SecurityFeature
 INDEX_STATE_UP_THRESHOLD = 0.02
 INDEX_STATE_DOWN_THRESHOLD = -0.02
 
+# RT §23.3（用户拍板）：regime stale 改比例阈值——不再因单票 stale 拖垮全局。
+# stale 行占比超阈值，或全部行 stale，才判 stale=true；原因如实透传 stale_reason。
+REGIME_STALE_RATIO_THRESHOLD = 0.2
+STALE_RULE_VERSION = "regime-stale-ratio-v1"
+
 
 class CalculateMarketRegimeService:
+    def __init__(self, *, stale_ratio_threshold: float = REGIME_STALE_RATIO_THRESHOLD) -> None:
+        if not 0 < stale_ratio_threshold <= 1:
+            raise ValueError("stale_ratio_threshold must be in (0, 1]")
+        self._stale_ratio_threshold = stale_ratio_threshold
+
     def execute(
         self,
         *,
@@ -28,6 +38,28 @@ class CalculateMarketRegimeService:
         index_benchmark: IndexBenchmarkReturnResult | None = None,
     ) -> MarketRegimeSnapshot:
         usable = tuple(item for item in features if not item.stale)
+        stale_count = len(features) - len(usable)
+        stale_ratio = stale_count / len(features) if features else 0.0
+        if not features:
+            stale = True
+            stale_cause = "no_rows"
+        elif not usable:
+            stale = True
+            stale_cause = "all_rows_stale"
+        elif stale_ratio > self._stale_ratio_threshold:
+            stale = True
+            stale_cause = "stale_ratio_above_threshold"
+        else:
+            stale = False
+            stale_cause = None
+        stale_reason = {
+            "rule_version": STALE_RULE_VERSION,
+            "threshold": self._stale_ratio_threshold,
+            "stale_count": stale_count,
+            "total_count": len(features),
+            "stale_ratio": stale_ratio,
+            "cause": stale_cause,
+        }
         returns = [item.return_3d for item in usable if item.return_3d is not None]
         advancing = sum(value > 0 for value in returns)
         declining = sum(value < 0 for value in returns)
@@ -65,11 +97,12 @@ class CalculateMarketRegimeService:
             risk_appetite_facts={
                 "volume_expansion_count": expansion_count,
                 "breakout_20d_count": breakout_count,
-                "stale_count": len(features) - len(usable),
+                "stale_count": stale_count,
             },
             coverage=coverage,
             confidence=min(coverage, len(returns) / expected_count if expected_count else 0.0),
-            stale=not usable or any(item.stale for item in features),
+            stale=stale,
+            stale_reason=stale_reason,
         )
 
     @staticmethod

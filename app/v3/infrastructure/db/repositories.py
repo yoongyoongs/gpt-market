@@ -1583,6 +1583,7 @@ class SQLAlchemyFeatureRepository:
             domestic_risk_evidence_ids=tuple(model.domestic_risk_evidence_ids),
             global_risk_evidence_ids=tuple(model.global_risk_evidence_ids),
             coverage=float(model.coverage), confidence=float(model.confidence), stale=model.stale,
+            stale_reason=model.stale_reason or {},
             content_hash=model.content_hash,
         )
 

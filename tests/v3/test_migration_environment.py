@@ -16,7 +16,7 @@ def test_alembic_environment_loads_without_database_credentials() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
     assert Path(scripts.dir).resolve() == ROOT / "migrations"
-    assert scripts.get_heads() == ["0016_attention_events"]
+    assert scripts.get_heads() == ["0017_regime_stale_reason"]
 
 
 def test_v3_metadata_contains_phase1_through_phase11_tables() -> None:

@@ -1113,6 +1113,9 @@ class MarketRegimeSnapshotModel(Base):
     coverage: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
     confidence: Mapped[Decimal] = mapped_column(Numeric(8, 7), nullable=False)
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    stale_reason: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

@@ -275,3 +275,74 @@ def test_multi_timeframe_unknown_when_any_key_period_insufficient() -> None:
     )
     assert short_daily.features["daily_trend_state"] == "UNKNOWN"
     assert short_daily.features["multi_timeframe_state"] == "UNKNOWN"
+
+
+# ---- RT §23.3：regime stale 比例阈值 + stale_reason（用户拍板规则）----
+
+
+def _regime_feature(stale: bool, return_3d: float = 0.01):
+    from app.v3.domain.features import SecurityFeature
+
+    from app.v3.domain.hashing import canonical_hash
+
+    return SecurityFeature.build(
+        feature_run_id=uuid4(), security_id=uuid4(), series_revision_id=uuid4(),
+        input_hash=canonical_hash({"fixture": uuid4().hex}),
+        as_of=NOW, close=10.0, return_3d=return_3d, amount=1_000.0,
+        coverage=1.0, stale=stale,
+    )
+
+
+def _regime(features, **kwargs):
+    return CalculateMarketRegimeService(**kwargs).execute(
+        feature_run_id=uuid4(), features=features,
+        as_of=NOW, known_at=NOW, expected_count=max(len(features), 1),
+    )
+
+
+def test_regime_stale_uses_ratio_threshold_not_single_stock() -> None:
+    """2/10=20% 不超阈值（严格大于才判 stale）——旧 any 规则会误判 True。"""
+    features = (
+        tuple(_regime_feature(stale=False) for _ in range(8))
+        + tuple(_regime_feature(stale=True) for _ in range(2))
+    )
+    result = _regime(features)
+    assert result.stale is False
+    reason = result.stale_reason
+    assert reason["rule_version"] == "regime-stale-ratio-v1"
+    assert reason["threshold"] == 0.2
+    assert reason["stale_count"] == 2
+    assert reason["total_count"] == 10
+    assert reason["stale_ratio"] == 0.2
+    assert reason["cause"] is None
+
+
+def test_regime_stale_true_when_ratio_exceeds_threshold() -> None:
+    features = (
+        tuple(_regime_feature(stale=False) for _ in range(7))
+        + tuple(_regime_feature(stale=True) for _ in range(3))
+    )
+    result = _regime(features, stale_ratio_threshold=0.2)
+    assert result.stale is True
+    assert result.stale_reason["cause"] == "stale_ratio_above_threshold"
+
+
+def test_regime_stale_when_all_rows_stale_or_no_rows() -> None:
+    all_stale = _regime(tuple(_regime_feature(stale=True) for _ in range(3)))
+    assert all_stale.stale is True
+    assert all_stale.stale_reason["cause"] == "all_rows_stale"
+
+    empty = _regime(())
+    assert empty.stale is True
+    assert empty.stale_reason["cause"] == "no_rows"
+    assert empty.stale_reason["stale_ratio"] == 0.0
+
+
+def test_regime_rejects_invalid_threshold() -> None:
+    import pytest as _pytest
+
+    from app.v3.application.calculate_market_regime import CalculateMarketRegimeService as Svc
+
+    for bad in (0, -0.1, 1.5):
+        with _pytest.raises(ValueError):
+            Svc(stale_ratio_threshold=bad)

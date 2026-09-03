@@ -236,6 +236,7 @@ class MarketRegimeSnapshot(V3Contract):
     coverage: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
     stale: bool
+    stale_reason: dict[str, Any] = Field(default_factory=dict)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("as_of", "known_at")
@@ -280,6 +281,7 @@ class PublishedMarketRegimeView(V3Contract):
     coverage: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
     stale: bool
+    stale_reason: dict[str, Any] = Field(default_factory=dict)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("as_of", "known_at")
