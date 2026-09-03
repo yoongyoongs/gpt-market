@@ -207,14 +207,17 @@ class SQLAlchemyStrategyRepository:
             await self._session.scalars(
                 select(StrategyExperimentModel)
                 .join(
+                    latest_event,
+                    latest_event.c.experiment_id
+                    == StrategyExperimentModel.experiment_id,
+                )
+                .join(
                     StrategyExperimentEventModel,
                     and_(
                         StrategyExperimentEventModel.experiment_id
-                        == StrategyExperimentModel.experiment_id,
+                        == latest_event.c.experiment_id,
                         StrategyExperimentEventModel.sequence
                         == latest_event.c.sequence,
-                        StrategyExperimentEventModel.experiment_id
-                        == latest_event.c.experiment_id,
                     ),
                 )
                 .where(

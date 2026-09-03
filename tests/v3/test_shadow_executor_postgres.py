@@ -70,6 +70,21 @@ async def _seed_experiment(sessions, *, experiment_type="SHADOW", allocation_per
     return experiment_id, control_id, treatment_id
 
 
+async def test_active_experiments_returns_started_experiments() -> None:
+    """回归：latest_event 子查询必须真实参与 join，否则生产报
+    ProgrammingError: missing FROM-clause entry for table "anon_1"。"""
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    experiment_id, _, _ = await _seed_experiment(sessions)
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        rows = await uow.strategies.active_experiments(as_of=NOW)
+
+    ids = {row["experiment_id"] for row in rows}
+    assert experiment_id in ids
+    await engine.dispose()
+
+
 async def test_shadow_observation_persisted_with_real_repositories() -> None:
     engine = create_async_engine(DATABASE_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
