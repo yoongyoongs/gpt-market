@@ -329,7 +329,7 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
     monkeypatch.setenv("V3_DATABASE_URL", "postgresql+asyncpg://fake")
     monkeypatch.setenv("V3_ENABLED", "true")  # R3-P0-001 场景：Resolver 真查库
     output = tmp_path / "report.json"
-    args = module.build_parser().parse_args(["--once", "--output", str(output)])
+    module.build_parser().parse_args(["--once", "--output", str(output)])
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         report = asyncio.run(module.run_once(output))
@@ -380,7 +380,6 @@ def test_run_once_skips_v3_main_chain_when_effective_mode_is_v2(monkeypatch, tmp
 
 
 def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp_path) -> None:
-    module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path, effective_mode="V3", reason=None,
     )
@@ -483,7 +482,7 @@ def _maintenance_handler(module, job_id):
 def test_profile_schedule_slots_contract() -> None:
     """R3-P1-005：schedule × timezone → 当日 slot 的显式契约——
     cron 固定时刻 / 简式多时刻 / 缺失 = NO_AUTO_SCHEDULE / 其余显式拒绝。"""
-    from datetime import date, datetime, time
+    from datetime import date, datetime
     from zoneinfo import ZoneInfo
 
     module = _scheduler_module()
@@ -523,7 +522,7 @@ def test_expected_run_registry_registers_enabled_profiles(monkeypatch) -> None:
     """REMAIN-OPS-EXPECTED：启用 Profile 按其 schedule（cron 16:00）确定性
     登记 Expected Run + PENDING Task Run；uuid5 identity 同 slot 重放零新增。"""
     import asyncio
-    from datetime import datetime, time, timezone
+    from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
     module = _expected_run_handler(monkeypatch)

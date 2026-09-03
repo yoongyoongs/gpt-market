@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from dataclasses import dataclass
+from datetime import datetime, time, timezone
 from uuid import uuid4
 
 import pytest
 
-from app.utils.time import SHANGHAI
 from app.v3.jobs.intraday_loop import IntradayTriggerLoop, in_trading_session
 
 
