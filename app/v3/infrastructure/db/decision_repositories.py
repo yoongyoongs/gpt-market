@@ -39,6 +39,7 @@ from app.v3.infrastructure.db.models import (
     PositionProjectionModel,
     PositionReviewModel,
     ReviewModel,
+    SecurityModel,
     TaskRunModel,
     WatchlistProposalModel,
     WatchlistEventModel,
@@ -577,6 +578,66 @@ class SQLAlchemyAIResultImportRepository:
             {column.name: getattr(row, column.name) for column in row.__table__.columns}
             for row in rows
         )
+
+    async def active_price_trigger_plans(self) -> tuple[dict, ...]:
+        """RT §21 盘中循环：每个 decision 最新版本 plan 中带 stop/target 的行。
+
+        只陈述存储事实（code/market/plan 载荷），stop/target 判定交给
+        AttentionEngineService；plan JSONB 为 RT-06 类型化结构
+        （stop.price / targets[].price），兼容历史 stop_loss/take_profit 顶层键。
+        """
+        plans = (
+            await self._session.scalars(
+                select(EntryPlanModel).order_by(
+                    EntryPlanModel.decision_id, EntryPlanModel.version,
+                )
+            )
+        ).all()
+        latest: dict[UUID, EntryPlanModel] = {}
+        for row in plans:  # version 升序 → 同 decision 后者覆盖
+            latest[row.decision_id] = row
+        if not latest:
+            return ()
+        joined = (
+            await self._session.execute(
+                select(DecisionModel, SecurityModel)
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id == DecisionModel.security_id,
+                )
+                .where(DecisionModel.decision_id.in_(latest))
+            )
+        ).all()
+        security_by_decision = {
+            decision.decision_id: security for decision, security in joined
+        }
+        result = []
+        for decision_id, plan in latest.items():
+            security = security_by_decision.get(decision_id)
+            if security is None:
+                continue
+            payload = plan.plan or {}
+            stop = payload.get("stop_loss")
+            target = payload.get("take_profit")
+            if stop is None and isinstance(payload.get("stop"), dict):
+                stop = payload["stop"].get("price")
+            if target is None:
+                targets = payload.get("targets") or []
+                if targets and isinstance(targets[0], dict):
+                    target = targets[0].get("price")
+            if stop is None and target is None:
+                continue
+            result.append({
+                "entry_plan_id": plan.entry_plan_id,
+                "decision_id": decision_id,
+                "security_id": security.security_id,
+                "code": security.code,
+                "market": security.market,
+                "stop_loss": stop,
+                "take_profit": target,
+                "plan": payload,
+            })
+        return tuple(result)
 
     async def read_decision_state(self, security_id: UUID):
         decisions = (

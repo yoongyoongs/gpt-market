@@ -29,6 +29,9 @@ from app.config import Settings
 from app.providers.tencent import TencentProvider
 from app.services.data_quality import DataQualityService
 from app.utils.time import SHANGHAI
+from app.v3.application.attention_engine import AttentionEngineService
+from app.v3.application.intraday_market_data import IntradayMarketDataService
+from app.v3.jobs.intraday_loop import IntradayTriggerLoop
 from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
 )
@@ -97,6 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--at", default=os.getenv("V3_SCHEDULE_AT", "18:45"), type=_schedule_time,
     )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--intraday-once", action="store_true",
+        help="跑一轮盘中触发评估后退出（部署烟测用，不进入任何循环）",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -473,8 +480,60 @@ async def run_scheduler(args: argparse.Namespace) -> int:
             return 0
 
 
+def build_intraday_loop(database) -> IntradayTriggerLoop:
+    """RT §21：现有 worker 容器内的盘中触发循环（不新增容器）。"""
+    settings = Settings(_env_file=None, v3_database_url=os.getenv("V3_DATABASE_URL"))
+    uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)  # noqa: E731
+    calendar = ExchangeCalendarsAShareCalendar()
+
+    def _trading_day(value):
+        try:
+            return bool(calendar.is_trading_day(value))
+        except Exception:
+            return False
+
+    return IntradayTriggerLoop(
+        uow_factory,
+        IntradayMarketDataService(EastmoneyProvider(settings)),
+        AttentionEngineService(uow_factory),
+        _trading_day,
+        interval_seconds=float(os.getenv("V3_INTRADAY_INTERVAL_SECONDS", "300")),
+        clock=lambda: datetime.now(timezone.utc),
+    )
+
+
+async def run_resident(args: argparse.Namespace) -> int:
+    """常驻模式：EOD 调度 + 盘中触发循环并发（RT §21 部署裁决）。"""
+    database_url = os.getenv("V3_DATABASE_URL")
+    if not database_url:
+        raise ValueError("V3_DATABASE_URL is required")
+    _, _, database = build_orchestrators(database_url)
+    intraday_task = asyncio.create_task(build_intraday_loop(database).run_forever())
+    try:
+        return await run_scheduler(args)
+    finally:
+        intraday_task.cancel()
+
+
 def main() -> int:
-    return asyncio.run(run_scheduler(build_parser().parse_args()))
+    args = build_parser().parse_args()
+    if args.intraday_once:
+        return asyncio.run(_run_intraday_once())
+    if args.once:
+        # --once 只跑一次 EOD（测试/手动触发语义不变），不起盘中循环
+        return asyncio.run(run_scheduler(args))
+    return asyncio.run(run_resident(args))
+
+
+async def _run_intraday_once() -> int:
+    database_url = os.getenv("V3_DATABASE_URL")
+    if not database_url:
+        raise ValueError("V3_DATABASE_URL is required")
+    _, _, database = build_orchestrators(database_url)
+    summary = await build_intraday_loop(database).evaluate_once()
+    await database.close()
+    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    return 0
 
 
 if __name__ == "__main__":
