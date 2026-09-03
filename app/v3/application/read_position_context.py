@@ -340,18 +340,41 @@ class ReadPositionContextService:
         section: dict[str, Any] = {
             "weekly": weekly, "daily": daily, "state": state, "rule": rule,
         }
-        for period in ("60m", "15m", "5m"):
-            if self._deep is None:
-                section[period] = _unknown("DEEP_MARKET_DATA_NOT_BOUND")
-                continue
+        # R3-P2-008：get_intraday_structure 一次已取全 60m/15m/5m——
+        # 只调用一次（原实现每周期重复抓取 → 3×Provider 请求放大，且
+        # 三次请求时间点不同可能得到不同快照）。
+        structure: Any = None
+        deep_error: str | None = None
+        if self._deep is not None:
             try:
                 structure = await self._deep.get_intraday_structure(
                     code, as_of=as_of
                 )
-                section[period] = structure["periods"][period]
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - 深度数据失败显式 UNKNOWN
+                deep_error = f"{type(exc).__name__}: {exc}"
+        periods: dict[str, Any] = {}
+        if structure is not None:
+            raw = (
+                structure.get("periods")
+                if isinstance(structure, dict)
+                else getattr(structure, "periods", None)
+            )
+            if isinstance(raw, dict):
+                periods = raw
+        for period in ("60m", "15m", "5m"):
+            payload = periods.get(period)
+            if payload is not None:
+                section[period] = payload
+            elif deep_error is not None:
                 section[period] = {
-                    **_unknown(f"{type(exc).__name__}: {exc}"),
+                    **_unknown(deep_error),
+                    "precision": "UNKNOWN",
+                }
+            elif self._deep is None:
+                section[period] = _unknown("DEEP_MARKET_DATA_NOT_BOUND")
+            else:
+                section[period] = {
+                    **_unknown("PERIOD_NOT_IN_STRUCTURE"),
                     "precision": "UNKNOWN",
                 }
         return section

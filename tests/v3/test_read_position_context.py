@@ -106,7 +106,11 @@ class _WeekdayCalendar:
 
 
 class _FakeDeepService:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def get_intraday_structure(self, code, *, as_of):
+        self.calls += 1
         return {
             "code": code, "as_of": as_of, "known_at": NOW,
             "source": "eastmoney",
@@ -326,3 +330,24 @@ async def test_suspended_quote_does_not_replace_lkg_price():
     assert market["price_source"] == "FEATURE_LKG"
     assert market["quote_status"] == "SUSPENDED"
     assert market["latest_price"] == Decimal("11.0")
+
+@pytest.mark.asyncio
+async def test_multi_timeframe_fetches_deep_structure_once():
+    """R3-P2-008：get_intraday_structure 一次已含 60m/15m/5m——
+    一个 Context 只允许调用一次，绝不按周期重复抓取。"""
+    plan_v1 = _plan(1)
+    facts = _facts(plan_v1, _plan(2, supersedes=plan_v1["entry_plan_id"]))
+    deep = _FakeDeepService()
+    service = ReadPositionContextService(
+        lambda: _FakeUow(facts, _feature(), _daily_revision(facts["security"]["security_id"])),
+        clock=lambda: NOW,
+        calendar=_WeekdayCalendar(),
+        deep_market_data=deep,
+    )
+    payload = await service.execute(
+        facts["security"]["security_id"] and uuid4(), "600300", "SH", as_of=NOW,
+    )
+    assert deep.calls == 1
+    for period in ("60m", "15m", "5m"):
+        assert payload["multi_timeframe"][period]["status"] == "AVAILABLE"
+        assert payload["multi_timeframe"][period]["precision"] == "LIMITED"
