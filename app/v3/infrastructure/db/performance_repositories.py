@@ -109,6 +109,8 @@ class SQLAlchemyPerformanceRepository:
                 "trade_time": row.trade_time,
                 "price": row.price,
                 "quantity": row.quantity,
+                "entry_plan_id": row.entry_plan_id,
+                "entry_plan_version": row.entry_plan_version,
             }
             for row in rows
         ]

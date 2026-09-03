@@ -14,6 +14,7 @@ from app.v3.domain.index_benchmark import (
     IndexBenchmarkRevision,
     IndexBenchmarkRevisionContent,
 )
+from app.v3.domain.performance import PerformanceAbility
 from app.v3.domain.market_data import (
     AdjustType,
     BarPeriod,
@@ -151,7 +152,14 @@ async def test_mature_engine_computes_attribution_from_system_facts():
     service = MaturePerformanceService(lambda: uow, clock=lambda: NOW)
     report = await service.execute(as_of=NOW)
 
-    assert report["matured_count"] == 4  # T+1/3/5/10 成熟，T+20 未满待成熟
+    # 每个成熟 horizon 产出 4 类：SELECTION + INITIAL_ENTRY + USER_EXECUTION
+    # + RISK_CONTROL（计划有止损且有成交）；T+20 未满待成熟
+    assert report["matured_count"] == 16
+    assert report["pending_count"] == 1
+    assert report["by_ability"] == {
+        "SELECTION": 4, "INITIAL_ENTRY": 4,
+        "USER_EXECUTION": 4, "RISK_CONTROL": 4,
+    }
     assert report["pending_count"] > 0
     first = uow.performance.written[0]
     assert first.ability.value == "SELECTION"
@@ -174,7 +182,150 @@ async def test_mature_engine_computes_attribution_from_system_facts():
     # 幂等：重复执行不再写新 Attribution
     second = await service.execute(as_of=NOW)
     assert second["matured_count"] == 0
-    assert len(uow.performance.written) == 4
+    assert len(uow.performance.written) == 16
+
+
+@pytest.mark.asyncio
+async def test_trade_anchored_abilities_are_produced():
+    """PF-001：INITIAL_ENTRY/USER_EXECUTION/RISK_CONTROL 从真实 Trade/Plan 事实
+    自动产出，subject 与绑定语义正确。"""
+    security_id = uuid4()
+    decision = _decision(security_id)
+    revision = _bars(security_id, datetime(2026, 8, 1, tzinfo=timezone.utc), 25)
+    trade = _trade(
+        decision["decision_id"], security_id,
+        datetime(2026, 8, 13, 1, 30, tzinfo=timezone.utc),
+    )
+    trade["entry_plan_id"] = decision["original_entry_plan_id"]
+    trade["entry_plan_version"] = 1
+    uow = _FakeUow([decision], [trade], {security_id: revision}, _benchmark())
+    service = MaturePerformanceService(lambda: uow, clock=lambda: NOW)
+    report = await service.execute(as_of=NOW)
+
+    assert report["by_ability"] == {
+        "SELECTION": 4, "INITIAL_ENTRY": 4,
+        "USER_EXECUTION": 4, "RISK_CONTROL": 4,
+    }
+    by_ability = {item.ability: item for item in uow.performance.written}
+
+    entry = by_ability[PerformanceAbility.INITIAL_ENTRY]
+    assert entry.subject_type == "DECISION"
+    assert entry.trade_id == trade["trade_id"]
+    # 08-13 01:30 ∈ 计划入场窗口 [08-12, 08-14]
+    assert entry.metrics["entry_within_window"] is True
+    # 10.1 ∈ 计划价格区间 [10, 10.2]
+    assert entry.metrics["entry_price_in_range"] is True
+    assert entry.metrics["plan_binding"] == "BOUND"
+    assert entry.trade_bound_entry_plan_id == decision["original_entry_plan_id"]
+
+    execution = by_ability[PerformanceAbility.USER_EXECUTION]
+    assert execution.subject_type == "TRADE"
+    assert execution.subject_id == trade["trade_id"]
+    assert execution.trade_id == trade["trade_id"]
+    # 成交日 08-13：open 11.2 / low 11.0 / high 11.4 → 10.1 不在日内区间
+    assert execution.metrics["in_day_range"] is False
+    assert execution.metrics["price_vs_open_pct"] == pytest.approx(
+        10.1 / 11.2 - 1, abs=1e-9
+    )
+
+    risk = by_ability[PerformanceAbility.RISK_CONTROL]
+    assert risk.stop_hit is False  # 窗口 low ≥ 11.0 > 止损 9.5
+    assert risk.metrics["stop_hit"] is False
+    assert "risk_outcome" not in risk.metrics  # 未触发 → 无退出判定
+    assert risk.mae == pytest.approx(11.0 / 11.1 - 1, abs=1e-9)
+
+    # 幂等：四类 attribution 重跑全部 skip
+    rerun = await service.execute(as_of=NOW)
+    assert rerun["matured_count"] == 0
+    assert len(uow.performance.written) == 16
+
+
+@pytest.mark.asyncio
+async def test_risk_control_records_exit_fact_after_stop_hit():
+    """RISK_CONTROL：止损触发后必须陈述是否实际退出（事实，非建议）。"""
+    security_id = uuid4()
+    decision = _decision(security_id)
+    decision["original_entry_plan_snapshot"]["plan"]["stop_loss"] = "11.05"
+    revision = _bars(security_id, datetime(2026, 8, 1, tzinfo=timezone.utc), 25)
+    buy = _trade(
+        decision["decision_id"], security_id,
+        datetime(2026, 8, 13, 1, 30, tzinfo=timezone.utc),
+    )
+    sell = _trade(
+        decision["decision_id"], security_id,
+        datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc), price="10.9",
+    )
+    sell["side"] = "SELL"
+    uow = _FakeUow(
+        [decision], [buy, sell], {security_id: revision}, _benchmark()
+    )
+    service = MaturePerformanceService(lambda: uow, clock=lambda: NOW)
+    await service.execute(as_of=NOW)
+
+    assert uow.performance.written
+    risks = [
+        item for item in uow.performance.written
+        if item.ability is PerformanceAbility.RISK_CONTROL
+    ]
+    assert len(risks) == 4  # 每个成熟 horizon 一条
+    first = next(item for item in risks if item.horizon_sessions == 1)
+    assert first.stop_hit is True  # T+1 low 11.0 <= 11.05
+    assert first.metrics["first_stop_hit_time"] == (
+        datetime(2026, 8, 13, tzinfo=timezone.utc).isoformat()
+    )
+    assert first.metrics["exited_after_stop"] is True  # 08-14 SELL ≥ 止损日
+    assert first.metrics["risk_outcome"] == "EXITED_AFTER_STOP"
+
+
+@pytest.mark.asyncio
+async def test_no_baseline_bar_is_isolated_not_fatal():
+    """NEW-PF-001：Revision 存在但无 baseline bar → 单候选跳过 + reason，
+    其余候选照常成熟，绝不让整批 Job 失败。"""
+    bad_sid = uuid4()
+    bad = _decision(bad_sid)
+    bad["as_of"] = datetime(2026, 7, 20, tzinfo=timezone.utc)  # 早于全部 bar
+    good_sid = uuid4()
+    good = _decision(good_sid)
+    uow = _FakeUow(
+        [bad, good], [],
+        {
+            bad_sid: _bars(bad_sid, datetime(2026, 8, 1, tzinfo=timezone.utc), 25),
+            good_sid: _bars(good_sid, datetime(2026, 8, 1, tzinfo=timezone.utc), 25),
+        },
+        None,
+    )
+    service = MaturePerformanceService(lambda: uow, clock=lambda: NOW)
+    report = await service.execute(as_of=NOW)
+
+    assert report["status"] == "COMPLETED"
+    assert report["issues"] == {"NO_BASELINE_BAR": 1}
+    assert report["skipped_count"] == 5  # 坏候选 5 个 horizon 全部跳过
+    assert report["matured_count"] == 4  # 好候选照常产出 SELECTION
+
+
+@pytest.mark.asyncio
+async def test_broken_candidate_is_isolated_not_fatal():
+    """NEW-PF-001：脏数据候选抛异常 → CANDIDATE_ERROR 隔离，不拖垮整批。"""
+    bad_sid = uuid4()
+    bad = _decision(bad_sid)
+    bad["original_entry_plan_snapshot"] = None  # 脏数据 → AttributeError
+    good_sid = uuid4()
+    good = _decision(good_sid)
+    uow = _FakeUow(
+        [bad, good], [],
+        {
+            bad_sid: _bars(bad_sid, datetime(2026, 8, 1, tzinfo=timezone.utc), 25),
+            good_sid: _bars(good_sid, datetime(2026, 8, 1, tzinfo=timezone.utc), 25),
+        },
+        None,
+    )
+    service = MaturePerformanceService(lambda: uow, clock=lambda: NOW)
+    report = await service.execute(as_of=NOW)
+
+    assert report["status"] == "COMPLETED"
+    assert report["issues"] == {"CANDIDATE_ERROR:AttributeError": 1}
+    assert report["skipped_count"] == 5
+    assert report["matured_count"] == 4
 
 
 @pytest.mark.asyncio
