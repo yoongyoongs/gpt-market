@@ -315,13 +315,24 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def v3_dashboard(
-    market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
+    market: str | None = Query(default=None),
     sort_by: FeatureSortField = FeatureSortField.RETURN_20D,
     descending: bool = True,
-    limit: int = Query(default=50, ge=20, le=100),
+    limit: str | None = Query(default=None),
 ):
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+    # 表单 GET 提交时“全部”市场/空条数会带空串，必须当作缺省而不是 422
+    if market == "":
+        market = None
+    if market is not None and market not in {"SH", "SZ", "BJ"}:
+        raise HTTPException(status_code=422, detail="market must be one of SH/SZ/BJ")
+    try:
+        limit_value = 50 if limit in (None, "") else int(limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="limit must be an integer") from exc
+    if not 20 <= limit_value <= 100:
+        raise HTTPException(status_code=422, detail="limit must be between 20 and 100")
     calendar = ExchangeCalendarsAShareCalendar()
 
     def _trading_day(value):
@@ -338,7 +349,7 @@ async def v3_dashboard(
                 sort_by=sort_by,
                 descending=descending,
                 fields=FEATURE_FIELDS,
-                limit=limit,
+                limit=limit_value,
             )
         )
         regime = await uow.features.latest_regime()
@@ -358,7 +369,7 @@ async def v3_dashboard(
             sort_by=sort_by,
             descending=descending,
             market=market,
-            limit=limit,
+            limit=limit_value,
             intraday_status=intraday_status,
             pipeline=pipeline,
             attention_events=attention_events,

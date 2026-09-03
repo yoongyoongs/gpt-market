@@ -175,3 +175,28 @@ def test_dashboard_renders_v24_sections(monkeypatch):
     assert "features" in html and "SUCCEEDED" in html
     # regime stale 徽章（fake regime 未配置 → None → 不出 regime 区块）
     assert "REGIME" in html or "<section" in html
+
+
+def test_dashboard_treats_empty_market_as_all(monkeypatch):
+    """表单选“全部”市场时 GET 会带上 market=（空串），不得 422（生产实测 2026-09-03）。"""
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/v3/dashboard?market=&sort_by=return_60d&descending=false&limit=50"
+        )
+
+    assert response.status_code == 200
+    assert features.query_seen.market is None
+    assert features.query_seen.sort_by.value == "return_60d"
+    assert features.query_seen.limit == 50
+
+
+def test_dashboard_treats_empty_limit_as_default(monkeypatch):
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard?market=SH&limit=")
+
+    assert response.status_code == 200
+    assert features.query_seen.limit == 50
