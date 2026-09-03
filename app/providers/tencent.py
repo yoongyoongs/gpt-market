@@ -225,6 +225,56 @@ class TencentProvider(MarketDataProvider):
             raise ProviderParseError(f"tencent index quote decode failed: {exc}") from exc
         return parse_tencent_quote(raw, fetched_at, self.quality, market_override=market)
 
+    async def get_index_kline(
+        self, code: str, market: str, period: str = "day", limit: int = 400
+    ) -> KlineResult:
+        """指数日 K 备用源（RT §23.1）：东财被限流时由 V3 编排层降级调用。
+
+        指数无复权概念，请求沿用 qfq 参数（指数数据 day/qfqday 内容一致）；
+        行结构与个股日 K 相同，复用 parse_tencent_kline_rows（amount 缺省 0.0）。
+        """
+        if market not in {"SH", "SZ"}:
+            raise ValueError("index market must be SH or SZ")
+        code = validate_code(code)
+        if period != "day":
+            raise ProviderUnsupportedError("tencent index K-line supports daily only")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        symbol = market.lower() + code
+        last_error: Exception | None = None
+        for url in self.day_kline_urls:
+            try:
+                response = await self._get(url, {"param": f"{symbol},day,,,{limit},qfq"})
+            except ProviderError as exc:
+                last_error = exc
+                continue
+            try:
+                payload = json.loads(response.content.decode("utf-8"))
+                data = (payload.get("data") or {}).get(symbol) or {}
+                rows = data.get("qfqday") or data.get("day") or []
+            except (UnicodeDecodeError, ValueError, AttributeError) as exc:
+                last_error = ProviderParseError(f"tencent index K-line parse failed: {exc}")
+                continue
+            klines = parse_tencent_kline_rows(rows)[-limit:]
+            if not klines:
+                last_error = ProviderEmptyDataError(
+                    f"tencent returned empty index day K-line for {code}"
+                )
+                continue
+            return KlineResult(
+                code=code,
+                period="day",
+                klines=klines,
+                **self.quality.assess(
+                    klines[-1].timestamp,
+                    timestamp_source="fetch_time",
+                    source="tencent",
+                    complete=True,
+                    server_timestamp=now_shanghai(),
+                ),
+            )
+        raise last_error or ProviderError("tencent index day K-line failed")
+
     async def get_quotes(self, codes: list[str]) -> list[Quote]:
         results = await asyncio.gather(*(self.get_quote(code) for code in dict.fromkeys(codes)), return_exceptions=True)
         quotes = [value for value in results if isinstance(value, Quote)]

@@ -59,11 +59,11 @@ class FakeUow:
         return False
 
 
-def make_service(provider) -> tuple[IngestIndexBenchmarksService, FakeIndexBenchmarkRepository]:
+def make_service(provider, **kwargs) -> tuple[IngestIndexBenchmarksService, FakeIndexBenchmarkRepository]:
     repo = FakeIndexBenchmarkRepository()
     return (
         IngestIndexBenchmarksService(
-            lambda: FakeUow(repo), provider, clock=lambda: NOW
+            lambda: FakeUow(repo), provider, clock=lambda: NOW, **kwargs
         ),
         repo,
     )
@@ -104,3 +104,45 @@ async def test_ingest_same_content_is_unchanged_not_republished() -> None:
     assert second["benchmarks"]["HS300"]["status"] == "UNCHANGED"
     assert second["benchmarks"]["HS300"]["published"] == 0
     assert len(repo.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_publishes_with_honest_source() -> None:
+    """RT §23.1：主源失败逐基准降级备用源，source 如实记录实际取数源。"""
+    service, repo = make_service(
+        FakeIndexProvider(fail_codes={"000300"}),
+        fallback_provider=FakeIndexProvider(),
+    )
+    report = await service.execute(benchmarks=("HS300", "CSI500"))
+    assert report["status"] == "COMPLETED"
+    assert report["benchmarks"]["HS300"]["status"] == "PUBLISHED"
+    assert report["benchmarks"]["HS300"]["source"] == "tencent"
+    assert report["benchmarks"]["CSI500"]["source"] == "eastmoney"
+    assert repo.published[0].source == "tencent"
+    assert repo.published[0].upstream_source == "tencent"
+
+
+@pytest.mark.asyncio
+async def test_fallback_both_sources_fail_reports_error() -> None:
+    service, _ = make_service(
+        FakeIndexProvider(fail_codes={"000300"}),
+        fallback_provider=FakeIndexProvider(fail_codes={"000300"}),
+    )
+    report = await service.execute(benchmarks=("HS300",))
+    assert report["status"] == "PARTIAL"
+    item = report["benchmarks"]["HS300"]
+    assert item["status"] == "FAILED"
+    assert "primary and fallback index sources both failed" in item["error"]
+    assert "RuntimeError" in item["error"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_source_label_is_configurable() -> None:
+    """source 标签显式可配，不靠类名猜（生产诚实：审计可追）。"""
+    service, repo = make_service(
+        FakeIndexProvider(fail_codes={"000300"}),
+        fallback_provider=FakeIndexProvider(),
+        fallback_source="tencent-manual",
+    )
+    await service.execute(benchmarks=("HS300",))
+    assert repo.published[0].source == "tencent-manual"

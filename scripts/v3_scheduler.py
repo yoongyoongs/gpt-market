@@ -2,7 +2,7 @@
 
 统一 Orchestrator：
 - 收盘后主链（交易日）：Universe/日线增量/公司行动摄取（Phase2 market job）
-  → 指数基准 → 全市场 Feature Run + Market Regime
+  → 指数基准（东财失败逐基准降级腾讯，RT §23.1）→ 全市场 Feature Run + Market Regime
   → Evidence 增量（24h 窗口，RT §7.2 Step 09）
   → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11，
     RawOpp 由 RunMultiRecallService.publish 一并落库）；
@@ -26,6 +26,8 @@ from pathlib import Path
 from uuid import UUID
 
 from app.config import Settings
+from app.providers.tencent import TencentProvider
+from app.services.data_quality import DataQualityService
 from app.utils.time import SHANGHAI
 from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
@@ -254,6 +256,7 @@ def build_orchestrators(database_url: str) -> tuple[Orchestrator, Orchestrator, 
     async def index_benchmarks_handler(context) -> dict:
         service = IngestIndexBenchmarksService(
             context.uow_factory, eastmoney,
+            fallback_provider=TencentProvider(settings, DataQualityService()),
             clock=lambda: context.as_of,
         )
         report = await service.execute()

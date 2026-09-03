@@ -125,3 +125,47 @@ async def test_kline_uses_configured_retries_so_alternate_hosts_are_reached() ->
 
     assert result.klines[0].close == 9.8
     assert observed_attempts == 3  # 股票行情保持原重试数（指数 K 线才加固到 5）
+
+
+@pytest.mark.asyncio
+async def test_tencent_index_kline_parses_rows_and_marks_source() -> None:
+    """RT §23.1 备用源：腾讯指数日 K 可解析，供东财被限流时降级。"""
+    import json
+
+    from app.providers.tencent import TencentProvider
+    from app.services.data_quality import DataQualityService
+
+    provider = TencentProvider(Settings(_env_file=None), DataQualityService())
+
+    class _Response:
+        content = json.dumps({
+            "data": {"sh000300": {"qfqday": [
+                ["2026-08-26", "4000.0", "4010.0", "4020.0", "3990.0", "100000.00"],
+                ["2026-08-27", "4010.0", "3995.5", "4015.0", "3985.0", "90000.00"],
+            ]}}
+        }).encode("utf-8")
+
+    async def fake_get(url, params=None):
+        assert params["param"] == "sh000300,day,,,400,qfq"
+        return _Response()
+
+    provider._get = fake_get
+    result = await provider.get_index_kline("000300", "SH", limit=400)
+    assert result.code == "000300"
+    assert [kline.close for kline in result.klines] == [4010.0, 3995.5]
+    assert [kline.timestamp.date().isoformat() for kline in result.klines] == [
+        "2026-08-26", "2026-08-27",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tencent_index_kline_rejects_non_daily_and_bad_market() -> None:
+    from app.config import Settings as _Settings
+    from app.providers.tencent import TencentProvider as _TencentProvider
+    from app.services.data_quality import DataQualityService as _DataQualityService
+
+    provider = _TencentProvider(_Settings(_env_file=None), _DataQualityService())
+    with pytest.raises(Exception):
+        await provider.get_index_kline("000300", "SH", period="1m")
+    with pytest.raises(ValueError):
+        await provider.get_index_kline("000300", "US")
