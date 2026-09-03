@@ -395,15 +395,18 @@ def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp
     assert all(run["status"] == "COMPLETED" for run in report["main"])
 
 
-# --- REMAIN-OPS-EXPECTED：Expected Run Registry Job ---
+# --- REMAIN-OPS-EXPECTED / R3-P1-005：Expected Run Registry Job ---
 
 
-def _task_profile(code: str = "daily-review", version: int = 1):
+def _task_profile(
+    code: str = "daily-review", version: int = 1, schedule: str | None = "0 16 * * 1-5",
+):
     from app.v3.domain.context import ContextLevel
     from app.v3.domain.task import TaskProfile
 
     return TaskProfile.build(
-        profile_code=code, version=version, schedule=None, timezone="Asia/Shanghai",
+        profile_code=code, version=version, schedule=schedule,
+        timezone="Asia/Shanghai",
         trading_calendar_source="fixture", trading_calendar_version="v1",
         context_level=ContextLevel.NORMAL, comparison_first=False,
         output_schema={"type": "object"}, expected_group_count=2,
@@ -469,44 +472,146 @@ def _expected_run_handler(monkeypatch, *, trading_day=True):
     return module
 
 
-def test_expected_run_registry_registers_enabled_profiles(monkeypatch) -> None:
-    """REMAIN-OPS-EXPECTED：启用 Profile 按当日零点（Profile 时区）确定性
-    登记 Expected Run + PENDING Task Run；uuid5 identity 同 slot 重放零新增。"""
-    import asyncio
-    from datetime import datetime, timezone
-
-    module = _expected_run_handler(monkeypatch)
-    profile = _task_profile("daily-review", 3)
-    registry = _FakeTaskRegistry(
-        [profile], {("daily-review", 3): profile},
-    )
-    as_of = datetime(2026, 9, 2, 10, 45, tzinfo=timezone.utc)
-    handler = _maintenance_handler(module, "expected-run-registry")
-    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
-    assert result["trading_day"] is True
-    assert result["profile_count"] == 1
-    assert result["registered_count"] == 1
-    assert result["error_count"] == 0
-    # scheduled_for = Profile 时区当日零点（确定性 → 幂等 identity）
-    assert len(registry.published) == 1 and len(registry.created) == 1
-    expected = registry.published[0]
-    from datetime import time as dtime
-    from zoneinfo import ZoneInfo
-
-    assert expected.scheduled_for == datetime.combine(
-        as_of.astimezone(ZoneInfo("Asia/Shanghai")).date(),
-        dtime.min, tzinfo=ZoneInfo("Asia/Shanghai"),
-    )
-    assert expected.task_profile_id == profile.task_profile_id
-    assert expected.task_profile_version == 3
-
-
 def _maintenance_handler(module, job_id):
     """从 build_orchestrators 取维护链 handler（闭包内函数，不连真库）。"""
     main, maintenance, _ = module.build_orchestrators(
         "postgresql+asyncpg://invalid"
     )
     return maintenance._jobs[job_id].handler
+
+
+def test_profile_schedule_slots_contract() -> None:
+    """R3-P1-005：schedule × timezone → 当日 slot 的显式契约——
+    cron 固定时刻 / 简式多时刻 / 缺失 = NO_AUTO_SCHEDULE / 其余显式拒绝。"""
+    from datetime import date, datetime, time
+    from zoneinfo import ZoneInfo
+
+    module = _scheduler_module()
+    tz = ZoneInfo("Asia/Shanghai")
+    wednesday = date(2026, 9, 2)
+    saturday = date(2026, 9, 5)
+
+    def _profile(schedule):
+        return _task_profile(schedule=schedule)
+
+    # 5 段 cron 固定时刻 + day-of-week 过滤（1-5 = Mon-Fri，cron 1=Monday）
+    assert module.profile_schedule_slots(_profile("0 16 * * 1-5"), wednesday) == [
+        datetime(2026, 9, 2, 16, 0, tzinfo=tz)
+    ]
+    assert module.profile_schedule_slots(_profile("0 16 * * 1-5"), saturday) == []
+    assert module.profile_schedule_slots(_profile("0 16 * * 0-6"), saturday) == [
+        datetime(2026, 9, 5, 16, 0, tzinfo=tz)
+    ]
+    # 简式多时刻
+    assert module.profile_schedule_slots(_profile("10:00,14:30"), wednesday) == [
+        datetime(2026, 9, 2, 10, 0, tzinfo=tz),
+        datetime(2026, 9, 2, 14, 30, tzinfo=tz),
+    ]
+    # 缺失 → NO_AUTO_SCHEDULE（不猜 00:00）
+    assert module.profile_schedule_slots(_profile(None), wednesday) == []
+    assert module.profile_schedule_slots(_profile("   "), wednesday) == []
+    # 显式拒绝：限定日 cron / 步进 cron / 不可解析格式
+    with pytest.raises(ValueError, match="day-of-month"):
+        module.profile_schedule_slots(_profile("0 9 1 * *"), wednesday)
+    with pytest.raises(ValueError, match="unsupported"):
+        module.profile_schedule_slots(_profile("*/15 * * * *"), wednesday)
+    with pytest.raises(ValueError, match="unsupported"):
+        module.profile_schedule_slots(_profile("at noon"), wednesday)
+
+
+def test_expected_run_registry_registers_enabled_profiles(monkeypatch) -> None:
+    """REMAIN-OPS-EXPECTED：启用 Profile 按其 schedule（cron 16:00）确定性
+    登记 Expected Run + PENDING Task Run；uuid5 identity 同 slot 重放零新增。"""
+    import asyncio
+    from datetime import datetime, time, timezone
+    from zoneinfo import ZoneInfo
+
+    module = _expected_run_handler(monkeypatch)
+    profile = _task_profile("daily-review", 3, schedule="0 16 * * 1-5")
+    registry = _FakeTaskRegistry(
+        [profile], {("daily-review", 3): profile},
+    )
+    # 2026-09-02 是周三（Asia/Shanghai）→ 命中 1-5
+    as_of = datetime(2026, 9, 2, 10, 45, tzinfo=timezone.utc)
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
+    assert result["trading_day"] is True
+    assert result["profile_count"] == 1
+    assert result["registered_count"] == 1
+    assert result["skipped_no_schedule"] == 0
+    assert result["error_count"] == 0
+    # scheduled_for = Profile 时区 cron 时刻（确定性 → 幂等 identity）
+    assert len(registry.published) == 1 and len(registry.created) == 1
+    expected = registry.published[0]
+    assert expected.scheduled_for == datetime(
+        2026, 9, 2, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
+    assert expected.task_profile_id == profile.task_profile_id
+    assert expected.task_profile_version == 3
+
+
+def test_expected_run_registry_simple_schedule_multi_slot(monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    module = _expected_run_handler(monkeypatch)
+    profile = _task_profile("intraday", 1, schedule="10:00,14:30")
+    registry = _FakeTaskRegistry([profile], {("intraday", 1): profile})
+    as_of = datetime(2026, 9, 2, 3, 0, tzinfo=timezone.utc)
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
+    assert result["registered_count"] == 2
+    assert [run.scheduled_for for run in registry.published] == [
+        datetime(2026, 9, 2, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        datetime(2026, 9, 2, 14, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+    ]
+
+
+def test_expected_run_registry_skips_no_schedule(monkeypatch) -> None:
+    """R3-P1-005：schedule 缺失 → 显式 NO_AUTO_SCHEDULE 跳过（不登记、
+    不报错、绝不猜 00:00）。"""
+    import asyncio
+    from datetime import datetime, timezone
+
+    module = _expected_run_handler(monkeypatch)
+    profile = _task_profile("manual-only", 1, schedule=None)
+    registry = _FakeTaskRegistry([profile], {("manual-only", 1): profile})
+    as_of = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
+    assert result["registered_count"] == 0
+    assert result["skipped_no_schedule"] == 1
+    assert result["error_count"] == 0
+    assert registry.published == [] and registry.created == []
+
+
+def test_expected_run_registry_unsupported_schedule_isolated(monkeypatch) -> None:
+    """R3-P1-005：schedule 无法解释 → UNSUPPORTED_SCHEDULE 记 errors，
+    绝不伪造 slot；同批其它 Profile 不受阻断。"""
+    import asyncio
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    module = _expected_run_handler(monkeypatch)
+    good = _task_profile("good-profile", 1, schedule="0 16 * * 1-5")
+    bad = _task_profile("bad-profile", 2, schedule="at noon")
+    registry = _FakeTaskRegistry(
+        [good, bad],
+        {("good-profile", 1): good, ("bad-profile", 2): bad},
+    )
+    as_of = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
+    handler = _maintenance_handler(module, "expected-run-registry")
+    result = asyncio.run(handler(_expected_run_context(registry, as_of=as_of)))
+    assert result["profile_count"] == 2
+    assert result["registered_count"] == 1
+    assert result["error_count"] == 1
+    assert result["errors"][0]["profile_code"] == "bad-profile"
+    assert "unsupported" in result["errors"][0]["error"]
+    # 只有 good-profile 的 16:00 slot 被登记
+    assert registry.published[0].scheduled_for == datetime(
+        2026, 9, 2, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
 
 
 def test_expected_run_registry_skips_non_trading_day(monkeypatch) -> None:
@@ -521,6 +626,7 @@ def test_expected_run_registry_skips_non_trading_day(monkeypatch) -> None:
     )))
     assert result["trading_day"] is False
     assert result["registered_count"] == 0
+    assert result["skipped_no_schedule"] == 0
     assert registry.published == [] and registry.created == []
 
 

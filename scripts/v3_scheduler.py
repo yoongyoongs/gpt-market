@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -363,46 +364,62 @@ def build_orchestrators(
         }
 
     async def expected_run_registry_handler(context) -> dict:
-        """REMAIN-OPS-EXPECTED：Expected Run Registry 正式进入调度。
+        """REMAIN-OPS-EXPECTED / R3-P1-005：Expected Run Registry 正式进入调度。
 
-        每个启用 Task Profile 按（Profile 时区）当日零点确定性登记
-        Expected Run + PENDING Task Run——identity = profile+version+
-        scheduled_for（uuid5），同 slot 重放零新增，天然幂等；AI 日程
-        闭环不再依赖手工/其它入口。非交易日跳过（AI 日程不排班）。
+        每个启用 Task Profile 依 **其 schedule × timezone**（见
+        profile_schedule_slots 契约）解释当日应产出的 slot，逐 slot 确定性
+        登记 ExpectedRun + PENDING TaskRun——identity = profile+version+
+        scheduled_for（uuid5），同 slot 重放零新增，天然幂等。schedule
+        缺失 → 显式 skipped_no_schedule（NO_AUTO_SCHEDULE，不自动排班）；
+        schedule 无法解释 → UNSUPPORTED_SCHEDULE 记 errors，绝不统一猜
+        00:00。非交易日跳过（AI 日程不排班）。单 Profile/单 slot 失败隔离。
         """
         calendar = ExchangeCalendarsAShareCalendar()
         local_day = context.as_of.astimezone(SHANGHAI).date()
         if not calendar.is_trading_day(local_day):
             return {
                 "trading_day": False, "profile_count": 0, "registered_count": 0,
+                "skipped_no_schedule": 0,
             }
         async with context.uow_factory() as uow:
             profiles = await uow.task_registry.enabled_profiles()
         service = RegisterExpectedTaskService(context.uow_factory)
         registered = 0
+        skipped_no_schedule = 0
         errors: list[dict[str, str]] = []
+
+        def _record_error(profile, exc: Exception) -> None:
+            if len(errors) < 20:
+                errors.append({
+                    "profile_code": profile.profile_code,
+                    "profile_version": str(profile.version),
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
         for profile in profiles:
             try:
-                scheduled_for = datetime.combine(
-                    local_day, time.min, tzinfo=ZoneInfo(profile.timezone),
-                )
-                await service.execute(
-                    profile_code=profile.profile_code,
-                    profile_version=profile.version,
-                    scheduled_for=scheduled_for,
-                )
-                registered += 1
-            except Exception as exc:  # noqa: BLE001 —— 单 Profile 失败隔离
-                if len(errors) < 20:
-                    errors.append({
-                        "profile_code": profile.profile_code,
-                        "profile_version": str(profile.version),
-                        "error": f"{type(exc).__name__}: {exc}",
-                    })
+                slots = profile_schedule_slots(profile, local_day)
+            except ValueError as exc:  # UNSUPPORTED_SCHEDULE：显式隔离，不猜
+                _record_error(profile, exc)
+                continue
+            if not slots:
+                skipped_no_schedule += 1
+                continue
+            for scheduled_for in slots:
+                try:
+                    await service.execute(
+                        profile_code=profile.profile_code,
+                        profile_version=profile.version,
+                        scheduled_for=scheduled_for,
+                    )
+                    registered += 1
+                except Exception as exc:  # noqa: BLE001 —— 单 slot 失败隔离
+                    _record_error(profile, exc)
         return {
             "trading_day": True,
             "profile_count": len(profiles),
             "registered_count": registered,
+            "skipped_no_schedule": skipped_no_schedule,
             "error_count": len(errors),
             "errors": errors,
         }
@@ -530,6 +547,76 @@ def build_orchestrators(
     )
     return main, maintenance, database
 
+
+
+_SIMPLE_SLOT_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
+_CRON_TIME_PATTERN = re.compile(r"^\d{1,2}$")
+
+
+def _cron_weekdays(field: str) -> set[int]:
+    """cron day-of-week（0=Sunday）→ Python weekday 集合（0=Monday）。"""
+    if field == "*":
+        return set(range(7))
+    weekdays: set[int] = set()
+    for item in field.split(","):
+        if "-" in item:
+            lo_s, hi_s = item.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+        else:
+            lo = hi = int(item)
+        if not (0 <= lo <= 6 and 0 <= hi <= 6 and lo <= hi):
+            raise ValueError(f"unsupported cron day-of-week: {field!r}")
+        weekdays.update((day - 1) % 7 for day in range(lo, hi + 1))
+    return weekdays
+
+
+def profile_schedule_slots(profile, local_day: date) -> list[datetime]:
+    """R3-P1-005：把 TaskProfile.schedule × timezone 解释成本地日 slot。
+
+    显式契约（绝不统一猜 00:00）：
+    - schedule 缺失/空白 → []（调用方计 NO_AUTO_SCHEDULE 跳过）；
+    - 简式 "HH:MM[,HH:MM...]" → 逐时刻 slot（Profile 时区）；
+    - 5 段 cron：仅支持固定 "M H * * *"；day-of-month/month 必须 "*"
+      （调度器按交易日逐日运行，无法忠实解释限定日 cron）；
+      day-of-week 支持 "*" / 数字 / 列表 / 范围（0=Sunday），按当日
+      weekday 过滤；其余形式一律 ValueError（UNSUPPORTED_SCHEDULE），
+      绝不伪造 slot。
+    """
+    raw = (profile.schedule or "").strip()
+    if not raw:
+        return []
+    tzinfo = ZoneInfo(profile.timezone)
+    simple_parts = [part.strip() for part in raw.split(",")]
+    if all(_SIMPLE_SLOT_PATTERN.match(part) for part in simple_parts):
+        slots: list[datetime] = []
+        for part in simple_parts:
+            hour_s, minute_s = part.split(":")
+            hour, minute = int(hour_s), int(minute_s)
+            if hour > 23 or minute > 59:
+                raise ValueError(f"invalid clock time in schedule: {part!r}")
+            slots.append(
+                datetime.combine(local_day, time(hour, minute), tzinfo=tzinfo)
+            )
+        return list(dict.fromkeys(slots))
+    fields = raw.split()
+    if len(fields) != 5:
+        raise ValueError(f"unsupported task profile schedule format: {raw!r}")
+    minute_s, hour_s, dom, month, dow = fields
+    if dom != "*" or month != "*":
+        raise ValueError(
+            "unsupported schedule: day-of-month/month must be '*' "
+            f"(scheduler runs per trading day): {raw!r}"
+        )
+    if not (_CRON_TIME_PATTERN.match(minute_s) and _CRON_TIME_PATTERN.match(hour_s)):
+        raise ValueError(
+            f"unsupported schedule: only fixed minute/hour cron supported: {raw!r}"
+        )
+    if local_day.weekday() not in _cron_weekdays(dow):
+        return []
+    hour, minute = int(hour_s), int(minute_s)
+    if hour > 23 or minute > 59:
+        raise ValueError(f"invalid cron time in schedule: {raw!r}")
+    return [datetime.combine(local_day, time(hour, minute), tzinfo=tzinfo)]
 
 
 async def _latest_main_success_key(
