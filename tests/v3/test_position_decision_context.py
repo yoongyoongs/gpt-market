@@ -90,3 +90,22 @@ async def test_passthrough_full_context() -> None:
     report = await service.execute("acc", "000001", market="SZ", as_of=NOW)
     assert report["levels"]["invalidation"] == "跌破 9.0 失效"
     assert report["data_quality"]["status"] == "AVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_objective_facts_expose_price_source_and_eod_fact() -> None:
+    """NEW-CTX-001：stop/target 客观事实必须携带价格来源与 EOD 事实，
+    FEATURE_LKG 收盘价不被冒充为实时价。"""
+    context = _context(last_price=8.9)
+    context["market"].update({
+        "price_source": "REALTIME_QUOTE",
+        "price_known_at": NOW.isoformat(),
+        "eod_feature_close": 9.1,
+    })
+    service = ReadPositionDecisionContextService(_FakeContextService(context))
+    report = await service.execute("acc", "000001", as_of=NOW)
+    facts = report["objective_sell_facts"]
+    assert facts["price_source"] == "REALTIME_QUOTE"
+    assert facts["price_known_at"] == NOW.isoformat()
+    assert facts["eod_feature_close"] == 9.1
+    assert facts["stop_hit"] is True

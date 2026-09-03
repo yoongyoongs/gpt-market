@@ -63,6 +63,9 @@ class ReadPositionDecisionContextService:
             target_hit = last_price >= target
         return {
             "last_price": last_price,
+            "price_source": market.get("price_source"),
+            "price_known_at": market.get("price_known_at"),
+            "eod_feature_close": _price(market.get("eod_feature_close")),
             "stop": stop,
             "target": target,
             "stop_hit": stop_hit,

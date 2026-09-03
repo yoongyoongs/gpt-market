@@ -701,6 +701,17 @@ async def position_review_history(
     )
 
 
+def _position_context_service() -> ReadPositionContextService:
+    """NEW-CTX-002：主路径绑定 Calendar + DeepMarketData + 实时 Quote，
+    60m/15m/5m 与 holding_sessions 不再退化 UNKNOWN。"""
+    return ReadPositionContextService(
+        _uow,
+        calendar=ExchangeCalendarsAShareCalendar(),
+        deep_market_data=DeepMarketDataService(container.eastmoney),
+        quote_service=IntradayMarketDataService(container.eastmoney),
+    )
+
+
 @router.get("/portfolio/{code}/decision-context")
 async def portfolio_position_decision_context(
     code: str, account_id: UUID,
@@ -710,12 +721,13 @@ async def portfolio_position_decision_context(
     """RT-07：Position Decision Context——回答"现在卖不卖"。
 
     完整 Position Context + objective_sell_facts（stop/target 客观事实，
-    只陈述、绝无建议）；卖出决策由 AI/人做，成交必须走 Trade Draft。
+    只陈述、绝无建议）；NEW-CTX-001：stop/target 判断优先实时 Quote，
+    FEATURE_LKG 仅作独立 EOD 事实并列返回。卖出决策由 AI/人做，
+    成交必须走 Trade Draft。
     """
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
-    context_service = ReadPositionContextService(_uow)
-    service = ReadPositionDecisionContextService(context_service)
+    service = ReadPositionDecisionContextService(_position_context_service())
     return await service.execute(
         account_id, code, market, as_of=as_of or datetime.now(timezone.utc),
     )
@@ -727,9 +739,7 @@ async def portfolio_position_context(
     market: str | None = Query(default=None, pattern=r"^(SH|SZ|BJ)$"),
 ):
     try:
-        return await PortfolioWriteService(_uow).read_position_context(
-            account_id, code, market
-        )
+        return await _position_context_service().execute(account_id, code, market)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepositoryConflictError as exc:

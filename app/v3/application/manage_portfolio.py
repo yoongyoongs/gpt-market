@@ -279,12 +279,13 @@ class PortfolioWriteService:
 
     async def read_position_context(
         self, account_id: UUID, code: str, market: str | None,
-        *, deep_market_data=None, calendar=None,
+        *, deep_market_data=None, calendar=None, quote_service=None,
     ):
         # RC-05B（CTX-001）：全量载荷由专用服务组装（行情/多周期/级别/风控等）
         service = ReadPositionContextService(
             self._uow_factory,
             calendar=calendar,
             deep_market_data=deep_market_data,
+            quote_service=quote_service,
         )
         return await service.execute(account_id, code, market)

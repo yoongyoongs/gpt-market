@@ -4,8 +4,10 @@
 手工补价格/K线/成本。所有分节显式标注来源与时点语义；缺失一律
 UNKNOWN/NOT_AVAILABLE + reason，绝不伪造：
 - quantity/cost：Position Projection（Ledger 重放，只含已确认事实）；
-- latest price：已发布 Feature 的 LKG close（FEATURE_LKG，known_at 标注），
-  不用实时快照冒充时点事实；
+- latest price：绑定 quote_service 时为实时快照（REALTIME_QUOTE，
+  suspended/失败如实回退 FEATURE_LKG）；已发布 Feature 的 LKG close
+  始终作为独立 EOD 事实并列返回（eod_feature_close + known_at 标注），
+  两个时间戳并存，绝不混用；
 - support/resistance：版本化结构化计算 support-resistance-20d-v1；
 - 5m/15m/60m：DeepMarketData（分钟事实=抓取时点事实，precision LIMITED）；
 - fundamental/industry：当前无可靠数据源，显式 NOT_AVAILABLE。
@@ -43,11 +45,15 @@ class ReadPositionContextService:
         clock: Callable[[], datetime] | None = None,
         calendar: Any = None,
         deep_market_data: Any = None,
+        quote_service: Any = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._calendar = calendar
         self._deep = deep_market_data
+        # NEW-CTX-001：实时 Quote Overlay（IntradayMarketDataService 等协议：
+        # get_quote_snapshot(code, as_of=...) → last_price/known_at/suspended）
+        self._quote_service = quote_service
 
     async def execute(
         self,
@@ -83,7 +89,10 @@ class ReadPositionContextService:
         quantity = Decimal(str(position["quantity"]))
         average_cost = Decimal(str(position["average_cost"]))
 
-        price_section = self._price_section(feature, quantity, average_cost)
+        price_section = await self._price_section(
+            feature, quantity, average_cost,
+            code=facts["security"]["code"], as_of=as_of,
+        )
         holding = self._holding_section(trades, position, as_of)
         entry_plan = self._entry_plan_section(plans, trades)
         levels = self._levels_section(
@@ -145,23 +154,64 @@ class ReadPositionContextService:
             "data_quality": self._quality_section(position, feature, daily_revisions),
         }
 
-    @staticmethod
-    def _price_section(feature, quantity: Decimal, average_cost: Decimal) -> dict:
+    async def _price_section(
+        self,
+        feature,
+        quantity: Decimal,
+        average_cost: Decimal,
+        *,
+        code: str,
+        as_of: datetime,
+    ) -> dict:
+        """NEW-CTX-001：market.latest_price 优先实时 Quote（REALTIME_QUOTE）；
+        未绑定/失败/停牌时回退 FEATURE_LKG 并如实标注 quote_status。
+        EOD Feature close 永远作为独立事实（eod_feature_close）并列返回。"""
         if feature is None:
-            return _unknown("NO_FEATURE_PRICE")
-        price = Decimal(str(feature.close))
-        section: dict[str, Any] = {
-            "status": "AVAILABLE",
-            "latest_price": price,
-            "price_source": "FEATURE_LKG",
-            "price_known_at": _iso(feature.as_of),
-        }
+            section: dict[str, Any] = _unknown("NO_FEATURE_PRICE")
+        else:
+            section = {
+                "status": "AVAILABLE",
+                "latest_price": Decimal(str(feature.close)),
+                "price_source": "FEATURE_LKG",
+                "price_known_at": _iso(feature.as_of),
+            }
+        if self._quote_service is not None:
+            section = await self._overlay_realtime_quote(section, code, as_of)
+            if feature is not None:
+                section["eod_feature_close"] = Decimal(str(feature.close))
+                section["eod_feature_known_at"] = _iso(feature.as_of)
+        if section.get("status") != "AVAILABLE":
+            return section
+        price = section["latest_price"]
         if quantity == 0:
             section["unrealized_pnl"] = Decimal("0")
             section["return_pct"] = None
         elif average_cost > 0:
             section["unrealized_pnl"] = (price - average_cost) * quantity
             section["return_pct"] = float(price / average_cost - 1)
+        return section
+
+    async def _overlay_realtime_quote(
+        self, section: dict, code: str, as_of: datetime,
+    ) -> dict:
+        try:
+            quote = await self._quote_service.get_quote_snapshot(code, as_of=as_of)
+        except Exception as exc:  # noqa: BLE001 - 行情失败回退 LKG 并如实标注
+            section["quote_status"] = f"UNKNOWN: {type(exc).__name__}: {exc}"
+            return section
+        if getattr(quote, "suspended", False):
+            section["quote_status"] = "SUSPENDED"
+        elif quote.last_price is None:
+            section["quote_status"] = "NO_LAST_PRICE"
+        else:
+            section.update({
+                "status": "AVAILABLE",
+                "latest_price": Decimal(str(quote.last_price)),
+                "price_source": "REALTIME_QUOTE",
+                "price_known_at": _iso(quote.known_at),
+                "quote_source": quote.source,
+                "quote_stale": bool(getattr(quote, "stale", False)),
+            })
         return section
 
     def _holding_section(self, trades, position, as_of: datetime) -> dict:

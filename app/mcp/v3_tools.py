@@ -115,6 +115,19 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             )
         return _cache["entry"]
 
+    def _position_context_service() -> Any:
+        """NEW-CTX-002：MCP 主路径同样绑定 Calendar/Deep/实时 Quote。"""
+        if "position_context" not in _cache:
+            from app.v3.application.deep_market_data import DeepMarketDataService
+
+            _cache["position_context"] = ReadPositionContextService(
+                uow_factory,
+                calendar=calendar,
+                deep_market_data=DeepMarketDataService(root_container.eastmoney),
+                quote_service=_bars_service(),
+            )
+        return _cache["position_context"]
+
     registered: list[str] = []
 
     def _tool(func):
@@ -215,7 +228,7 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             from uuid import UUID
 
             service = ReadPositionDecisionContextService(
-                ReadPositionContextService(uow_factory),
+                _position_context_service(),
             )
             return await service.execute(
                 UUID(account_id),
@@ -269,7 +282,7 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             """V3 完整持仓上下文（成本/仓位/市场/levels，只读）。"""
             from uuid import UUID
 
-            return await ReadPositionContextService(uow_factory).execute(
+            return await _position_context_service().execute(
                 UUID(account_id),
                 code,
                 market,
@@ -286,7 +299,7 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             from uuid import UUID
 
             service = ReadPositionDecisionContextService(
-                ReadPositionContextService(uow_factory),
+                _position_context_service(),
             )
             return await service.execute(
                 UUID(account_id),

@@ -153,12 +153,14 @@ class _FakeUow:
         return None
 
 
-def _service(facts, feature, revision, *, calendar=True, deep=True, clock=NOW):
+def _service(facts, feature, revision, *, calendar=True, deep=True, clock=NOW,
+             quote_service=None):
     return ReadPositionContextService(
         lambda: _FakeUow(facts, feature, revision),
         clock=lambda: clock,
         calendar=_WeekdayCalendar() if calendar else None,
         deep_market_data=_FakeDeepService() if deep else None,
+        quote_service=quote_service,
     )
 
 
@@ -237,3 +239,90 @@ async def test_missing_pieces_degrade_explicitly_without_fabrication():
     # 特征缺失 → 合成事实诚实 UNKNOWN
     assert payload["multi_timeframe"]["state"]["status"] == "UNKNOWN"
     assert payload["multi_timeframe"]["state"]["reason"] == "NO_FEATURE"
+
+
+class _FakeQuoteSnapshot:
+    def __init__(self, last_price="10.8", *, suspended=False, stale=False):
+        self.last_price = last_price
+        self.known_at = NOW
+        self.source = "eastmoney"
+        self.suspended = suspended
+        self.stale = stale
+
+
+class _FakeQuoteService:
+    def __init__(self, quote=None, *, error=None):
+        self._quote = quote
+        self._error = error
+        self.requested: list[str] = []
+
+    async def get_quote_snapshot(self, code, *, as_of):
+        self.requested.append(code)
+        if self._error is not None:
+            raise self._error
+        return self._quote
+
+
+@pytest.mark.asyncio
+async def test_realtime_quote_overrides_price_and_keeps_eod_fact():
+    """NEW-CTX-001：绑定实时 Quote → latest_price=REALTIME_QUOTE，
+    EOD LKG close 保留为独立事实（eod_feature_close），两时间戳并存。"""
+    plan_v1 = _plan(1)
+    plan_v2 = _plan(2, supersedes=plan_v1["entry_plan_id"])
+    facts = _facts(plan_v1, plan_v2)
+    feature = _feature()
+    revision = _daily_revision(facts["security"]["security_id"])
+    quote_service = _FakeQuoteService(_FakeQuoteSnapshot("10.8"))
+    payload = await _service(
+        facts, feature, revision, quote_service=quote_service,
+    ).execute(uuid4(), "600300", "SH", as_of=NOW)
+
+    market = payload["market"]
+    assert market["price_source"] == "REALTIME_QUOTE"
+    assert market["latest_price"] == Decimal("10.8")
+    assert market["price_known_at"] == NOW.isoformat()
+    assert market["quote_source"] == "eastmoney"
+    assert market["quote_stale"] is False
+    assert market["eod_feature_close"] == Decimal("11.0")
+    assert market["eod_feature_known_at"] == feature.as_of.isoformat()
+    # 持仓盈亏按实时价计算
+    assert payload["market"]["unrealized_pnl"] == (Decimal("10.8") - Decimal("10.005")) * 1000
+    assert quote_service.requested == ["600300"]
+
+
+@pytest.mark.asyncio
+async def test_quote_failure_falls_back_to_feature_lkg_honestly():
+    """NEW-CTX-001：行情失败回退 FEATURE_LKG，quote_status 如实标注，
+    绝不伪造实时价。"""
+    plan_v1 = _plan(1)
+    plan_v2 = _plan(2, supersedes=plan_v1["entry_plan_id"])
+    facts = _facts(plan_v1, plan_v2)
+    revision = _daily_revision(facts["security"]["security_id"])
+    quote_service = _FakeQuoteService(error=RuntimeError("quote down"))
+    payload = await _service(
+        facts, _feature(), revision, quote_service=quote_service,
+    ).execute(uuid4(), "600300", "SH", as_of=NOW)
+
+    market = payload["market"]
+    assert market["price_source"] == "FEATURE_LKG"
+    assert market["latest_price"] == Decimal("11.0")
+    assert market["quote_status"] == "UNKNOWN: RuntimeError: quote down"
+    assert market["eod_feature_close"] == Decimal("11.0")
+
+
+@pytest.mark.asyncio
+async def test_suspended_quote_does_not_replace_lkg_price():
+    """NEW-CTX-001：停牌快照不冒充可交易实时价。"""
+    plan_v1 = _plan(1)
+    plan_v2 = _plan(2, supersedes=plan_v1["entry_plan_id"])
+    facts = _facts(plan_v1, plan_v2)
+    revision = _daily_revision(facts["security"]["security_id"])
+    quote_service = _FakeQuoteService(_FakeQuoteSnapshot("10.8", suspended=True))
+    payload = await _service(
+        facts, _feature(), revision, quote_service=quote_service,
+    ).execute(uuid4(), "600300", "SH", as_of=NOW)
+
+    market = payload["market"]
+    assert market["price_source"] == "FEATURE_LKG"
+    assert market["quote_status"] == "SUSPENDED"
+    assert market["latest_price"] == Decimal("11.0")
