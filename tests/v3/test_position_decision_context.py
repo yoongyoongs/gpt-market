@@ -25,7 +25,12 @@ def _context(last_price=9.5, stop="9.0", target="12.0"):
         "security": {"code": "000001", "market": "SZ"},
         "as_of": NOW.isoformat(),
         "known_at": NOW.isoformat(),
-        "market": {"status": "AVAILABLE", "latest_price": last_price},
+        "market": {
+            "status": "AVAILABLE", "latest_price": last_price,
+            # R3-P1-007：确定性触达事实只允许新鲜实时快照——fixture 缺省
+            # 即新鲜实时；stale/LKG 场景在具体测试里显式覆盖
+            "price_source": "REALTIME_QUOTE", "quote_stale": False,
+        },
         "levels": {
             "stop": stop, "target": target,
             "support": 8.9, "resistance": 10.1,
@@ -109,3 +114,34 @@ async def test_objective_facts_expose_price_source_and_eod_fact() -> None:
     assert facts["price_known_at"] == NOW.isoformat()
     assert facts["eod_feature_close"] == 9.1
     assert facts["stop_hit"] is True
+    assert facts["assessment_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_stale_realtime_quote_yields_unknown_hits() -> None:
+    """R3-P1-007：Quote stale 时 stop/target 触达不可判定——显式 UNKNOWN
+    + reason，绝不给确定性事实。"""
+    context = _context(last_price=8.9)
+    context["market"]["quote_stale"] = True
+    service = ReadPositionDecisionContextService(_FakeContextService(context))
+    facts = (await service.execute("acc", "000001", as_of=NOW))[
+        "objective_sell_facts"
+    ]
+    assert facts["stop_hit"] is None
+    assert facts["target_hit"] is None
+    assert facts["assessment_reason"] == "STALE_REALTIME_QUOTE"
+
+
+@pytest.mark.asyncio
+async def test_lkg_price_never_yields_definitive_hits() -> None:
+    """R3-P1-007：LKG close 只可作展示/PnL 参考，绝不冒充当前
+    Stop/Target 判断（与 Entry Context stale 不得 READY 纪律一致）。"""
+    context = _context(last_price=8.9)
+    context["market"]["price_source"] = "FEATURE_LKG"
+    service = ReadPositionDecisionContextService(_FakeContextService(context))
+    facts = (await service.execute("acc", "000001", as_of=NOW))[
+        "objective_sell_facts"
+    ]
+    assert facts["stop_hit"] is None
+    assert facts["target_hit"] is None
+    assert facts["assessment_reason"] == "NO_REALTIME_PRICE"
