@@ -152,7 +152,8 @@ def test_mcp_registers_market_and_portfolio_groups(monkeypatch) -> None:
     fast_mcp_module.register_v3_tools(_StubMcp(), container)
     for name in (
         "v3_market_overview", "v3_market_intraday_status",
-        "v3_scan_opportunities", "v3_stock_decision_context",
+        "v3_scan_opportunities", "v3_candidate_comparison",
+        "v3_stock_decision_context",
         "v3_stock_intraday_structure", "v3_watchlist", "v3_attention_events",
     ):
         assert name in registered, name
@@ -183,3 +184,89 @@ def test_mcp_skips_registration_when_v3_disabled() -> None:
     container.v3 = _FakeV3()
     fast_mcp_module.register_v3_tools(_StubMcp(), container)
     assert registered == []
+
+
+# ---------- R4-P2-010：MCP candidate_comparison（只读） ----------
+
+
+def _register_with_funcs(uow_factory):
+    fast_mcp_module = pytest.importorskip("app.mcp.v3_tools")
+    funcs: dict = {}
+
+    class _StubMcp:
+        def tool(self):
+            def decorator(func):
+                funcs[func.__name__] = func
+                return func
+            return decorator
+
+    class _FakeV3:
+        enabled = True
+        # staticmethod：类属性存函数经实例访问会被描述符协议绑定 self
+        uow = staticmethod(uow_factory)  # 注册时捕获，必须先注入
+
+    container = type("C", (), {})()
+    container.v3 = _FakeV3()
+    fast_mcp_module.register_v3_tools(_StubMcp(), container)
+    return funcs
+
+
+class _FakePack:
+    def model_dump(self, mode=None):
+        return {"comparison_pack_id": "pack-1", "members": []}
+
+
+class _ComparisonRepo:
+    def __init__(self, pack):
+        self._pack = pack
+        self.calls = []
+
+    async def get(self, pack_id):
+        self.calls.append(("get", pack_id))
+        return self._pack
+
+    async def latest_for_candidate_set(
+        self, candidate_set_id, *, field_profile_version, as_of,
+    ):
+        self.calls.append(("latest", candidate_set_id))
+        return self._pack
+
+
+class _ComparisonUow:
+    def __init__(self, repo):
+        self.candidate_comparisons = repo
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_mcp_candidate_comparison_read_only_paths() -> None:
+    """缺参 INVALID_ARGUMENT；坏 UUID 拒绝；按 set 读到 pack AVAILABLE；
+    无 pack 时 EMPTY（诚实，不伪造比较结果）。"""
+    repo = _ComparisonRepo(_FakePack())
+    funcs = _register_with_funcs(lambda: _ComparisonUow(repo))
+    tool = funcs["v3_candidate_comparison"]
+
+    missing = await tool()
+    assert missing["status"] == "INVALID_ARGUMENT"
+    bad = await tool(candidate_set_id="not-a-uuid")
+    assert bad["status"] == "INVALID_ARGUMENT"
+
+    report = await tool(
+        candidate_set_id="11111111-1111-1111-1111-111111111111",
+    )
+    assert report["status"] == "AVAILABLE"
+    assert report["comparison_pack_id"] == "pack-1"
+    assert repo.calls[0][0] == "latest"
+
+    empty_funcs = _register_with_funcs(
+        lambda: _ComparisonUow(_ComparisonRepo(None))
+    )
+    empty = await empty_funcs["v3_candidate_comparison"](
+        candidate_set_id="11111111-1111-1111-1111-111111111111",
+    )
+    assert empty["status"] == "EMPTY"
