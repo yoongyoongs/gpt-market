@@ -250,6 +250,56 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
         }
 
     @_tool
+    async def v3_candidate_comparison(
+        candidate_set_id: str | None = None,
+        comparison_pack_id: str | None = None,
+    ) -> dict:
+        """V3 Candidate Comparison Pack（只读）。comparison_pack_id 精确读；
+        candidate_set_id 读 known_at<=now 最近一次 pack。新建 pack 是落库
+        写操作（API-002），走 HTTP POST /api/v3/candidates/comparison-pack
+        （V3_WRITE token）——MCP 全部工具保持只读，绝不写库。"""
+        from uuid import UUID
+
+        if not comparison_pack_id and not candidate_set_id:
+            return {
+                "source": "candidate-comparison-v1",
+                "status": "INVALID_ARGUMENT",
+                "detail": "provide comparison_pack_id or candidate_set_id",
+            }
+        try:
+            pack_id = UUID(comparison_pack_id) if comparison_pack_id else None
+            set_id = UUID(candidate_set_id) if candidate_set_id else None
+        except ValueError as exc:
+            return {
+                "source": "candidate-comparison-v1",
+                "status": "INVALID_ARGUMENT",
+                "detail": f"ids must be UUID: {exc}",
+            }
+        async with uow_factory() as uow:
+            if pack_id is not None:
+                pack = await uow.candidate_comparisons.get(pack_id)
+            else:
+                pack = await uow.candidate_comparisons.latest_for_candidate_set(
+                    set_id,
+                    field_profile_version="compact-fields.v1",
+                    as_of=_utcnow(),
+                )
+        if pack is None:
+            return {
+                "source": "candidate-comparison-v1",
+                "status": "EMPTY",
+                "detail": "no published comparison pack for the given id",
+            }
+        result = (
+            pack.model_dump(mode="json")
+            if hasattr(pack, "model_dump") else pack
+        )
+        if isinstance(result, dict):
+            result.setdefault("source", "candidate-comparison-v1")
+            result.setdefault("status", "AVAILABLE")
+        return result
+
+    @_tool
     async def v3_stock_decision_context(
         code: str,
         market: str = "SZ",
