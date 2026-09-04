@@ -18,6 +18,7 @@ from app.v3.application.read_entry_decision_context import (
     ReadEntryDecisionContextService,
 )
 from app.v3.application.read_position_context import ReadPositionContextService
+from app.v3.application.read_worker_heartbeat import ReadWorkerHeartbeatService
 from app.v3.application.read_position_decision_context import (
     ReadPositionDecisionContextService,
 )
@@ -1238,3 +1239,19 @@ async def strategy_release_dashboard(environment: str):
 @router.post("/operations/health-events")
 async def create_operational_health_event(command: OperationalHealthEventCreate):
     return await StrategyStabilizationService(_uow).add_health_event(command)
+
+
+@router.get("/operations/worker-heartbeat")
+async def read_worker_heartbeat(
+    component: str = Query(default="intraday-worker", min_length=1, max_length=128),
+    limit: int = Query(default=20, ge=1, le=200),
+):
+    """R5-P1-007/§65：Worker heartbeat 跨进程读取——API/Dashboard 进程
+    从 operational_health_events 聚合 Worker 最近心跳（degraded /
+    last_error / consecutive_errors 必须直接可见）。"""
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    service = ReadWorkerHeartbeatService(
+        _uow, clock=lambda: datetime.now(timezone.utc),
+    )
+    return await service.execute(component, limit)

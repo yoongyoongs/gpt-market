@@ -564,6 +564,19 @@ class SQLAlchemyStrategyRepository:
         return {"health_event_id": command.health_event_id,
                 "automatic_rollback_event_id": rollback_event_id}
 
+    async def read_health_events(self, component: str, limit: int = 20) -> tuple:
+        """R5-P1-007/§65：按 component 读最近心跳（observed_at desc），
+        API/Dashboard 进程据此跨进程读取 Worker heartbeat。"""
+        return tuple((await self._session.scalars(
+            select(OperationalHealthEventModel)
+            .where(OperationalHealthEventModel.component == component)
+            .order_by(
+                OperationalHealthEventModel.observed_at.desc(),
+                OperationalHealthEventModel.health_event_id.desc(),
+            )
+            .limit(limit)
+        )).all())
+
     async def resolve_release(self, environment: str) -> dict:
         """RC-07B：唯一 Runtime 解析点——每次调用都读最新 ReleaseState
         （回滚立即生效），返回当前 executor 配置；不完整状态显式回落 V2。"""
