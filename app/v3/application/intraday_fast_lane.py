@@ -31,6 +31,13 @@ _FEATURE_FIELDS = (
 )
 _INDEX_CODE = "000001"  # 上证指数：相对强度基准
 _PAGE_LIMIT = 200  # FeatureQuery.limit 合同上限
+# R5-P2-012：Raw Opportunity 翻页上限（1000/页 × 2 页）
+_RAW_PAGE_LIMIT = 1000
+_RAW_PAGE_ROUNDS = 2
+# R5-P2-013：Watchlist 现态读取上限（全量现态，非事件增量）
+_WATCHLIST_LIMIT = 5000
+# R5-P2-013：进入 Active Pool 的 Watchlist 现态（与 R5-02 一致）
+_ACTIVE_WATCHLIST_STATES = {"WATCHING", "WAIT_ENTRY", "ACTION_READY"}
 # R5-P1-004/§62：全市场 Coverage Gate——部分市场绝不冒充全市场扫描。
 # coverage >= 0.9 → AVAILABLE；0.5 ~ 0.9 → PARTIAL；< 0.5 →
 # UNAVAILABLE_FOR_FULL_MARKET_SCAN。
@@ -42,8 +49,13 @@ class _FeaturesRepo(Protocol):
     async def query(self, query: FeatureQuery) -> Any: ...
 
 
+class _WatchlistStateRepo(Protocol):
+    async def read_watchlist(self, state: str | None, limit: int) -> Any: ...
+
+
 class _RecallsRepo(Protocol):
     async def read_results(self, **kwargs) -> Any: ...
+    async def read_raw(self, **kwargs) -> Any: ...
 
 
 class _ReadsRepo(Protocol):
@@ -55,6 +67,7 @@ class _Uow(Protocol):
     features: _FeaturesRepo
     recalls: _RecallsRepo
     reads: _ReadsRepo
+    ai_imports: _WatchlistStateRepo
 
     async def __aenter__(self) -> "_Uow": ...
     async def __aexit__(self, *args) -> None: ...
@@ -103,7 +116,7 @@ class IntradayFastLaneService:
         *,
         engine: _Engine | None = None,
         deep_service: Any = None,
-        feature_limit: int = 2000,
+        feature_limit: int = 6000,
         deep_limit: int = 10,
         clock: Any = None,
     ) -> None:
@@ -169,6 +182,13 @@ class IntradayFastLaneService:
             "full_market_complete": status == "AVAILABLE",
         })
         report["stale_quote_count"] = sum(1 for item in snapshots if item.stale)
+        # R5-P2-011/§63：L1 Overlay 全市场覆盖率必须可见——低位埋伏依赖
+        # 位置/均线/趋势，只覆盖 2000 只而无覆盖率说明不可接受。
+        report["feature_expected"] = expected
+        report["feature_actual"] = len(features)
+        report["feature_coverage"] = (
+            round(len(features) / expected, 4) if expected > 0 else None
+        )
 
         index_return = await self._load_index_return(as_of)
         overlays = {
@@ -283,23 +303,34 @@ class IntradayFastLaneService:
                     await uow.rollback()
                     _fail("features", exc)
                 try:
-                    recall_page = await uow.recalls.read_results(
-                        recall_run_id=None, channel_code=None,
-                        limit=_PAGE_LIMIT, cursor=None,
-                    )
-                    if recall_page is not None:
-                        eod = {
-                            (item.market, item.code)
-                            for item in recall_page.items
-                        }
+                    # R5-P2-012/§63：EOD 来源 = latest Raw Opportunity
+                    # （正式候选池），不再是 Recall channel hits 前 200。
+                    cursor: str | None = None
+                    for _ in range(_RAW_PAGE_ROUNDS):
+                        raw_page = await uow.recalls.read_raw(
+                            recall_run_id=None, limit=_RAW_PAGE_LIMIT,
+                            cursor=cursor,
+                        )
+                        if raw_page is None:
+                            break
+                        for item in raw_page.items:
+                            if item.market and item.code:
+                                eod.add((item.market, item.code))
+                        cursor = raw_page.next_cursor
+                        if cursor is None or not raw_page.items:
+                            break
                     _ok("eod", len(eod))
                 except Exception as exc:  # noqa: BLE001 - EOD 源独立降级
                     await uow.rollback()
                     _fail("eod", exc)
                 try:
-                    for row in await uow.reads.watchlist_changes(limit=500):
-                        if row.get("current_state") == "WATCHING" and row.get(
-                            "security_market",
+                    # R5-P2-013/§63：Watchlist 来源 = 现态表（长期稳定
+                    # WATCHING 的票不因不在最近 N 条事件里而丢失）。
+                    for row in await uow.ai_imports.read_watchlist(
+                        None, _WATCHLIST_LIMIT,
+                    ):
+                        if row.get("state") in _ACTIVE_WATCHLIST_STATES and (
+                            row.get("security_market")
                         ) and row.get("security_code"):
                             watchlist.add((
                                 row["security_market"], row["security_code"],

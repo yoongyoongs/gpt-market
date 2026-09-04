@@ -66,6 +66,25 @@ class _FakeRecalls:
             return None
         return _FakePage(tuple(self._items))
 
+    async def read_raw(self, *, recall_run_id, limit, cursor):
+        # R5-05：EOD 来源 = latest Raw Opportunity
+        if cursor is not None or not self._items:
+            return None
+        return _FakePage(tuple(self._items))
+
+
+class _FakeWatchlistRepo:
+    """现态 Watchlist 读（R5-05）：接收旧式 rows 并映射 state 键。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def read_watchlist(self, state, limit):
+        return [
+            {**row, "state": row.get("state", row.get("current_state"))}
+            for row in self._rows
+        ]
+
 
 class _FakeReads:
     def __init__(self, watchlist=(), accounts=()):
@@ -84,6 +103,7 @@ class _FakeUow:
         self.features = _FakeFeatures()
         self.recalls = recalls or _FakeRecalls()
         self.reads = reads
+        self.ai_imports = _FakeWatchlistRepo(reads._watchlist)
 
     async def __aenter__(self):
         return self
@@ -469,3 +489,43 @@ async def test_session_failure_marks_all_sources_failed_but_quotes_still_scan() 
     # 池只剩 Scanner 异常候选（历史投影全失效）——实时链照常工作
     assert report["pool_size"] == 1
     assert report["deep"] == []  # 未接 deep service
+
+
+@pytest.mark.asyncio
+async def test_watchlist_reads_current_state_not_event_history() -> None:
+    """R5-P2-013 §63：Watchlist 来源 = 现态表——长期稳定 WATCHING /
+    WAIT_ENTRY / ACTION_READY 票进池，CLOSED / INVALIDATED 不进。
+    一只不在任何近期变更事件里的票绝不因翻页遗漏而消失。"""
+    reads = _FakeReads(accounts=[])
+    uow = _FakeUow(reads)
+    uow.ai_imports = _FakeWatchlistRepo([
+        {"security_market": "SH", "security_code": "600000",
+         "state": "WATCHING"},
+        {"security_market": "SH", "security_code": "600036",
+         "state": "WAIT_ENTRY"},
+        {"security_market": "SZ", "security_code": "000001",
+         "state": "ACTION_READY"},
+        {"security_market": "SZ", "security_code": "000002",
+         "state": "CLOSED"},
+        {"security_market": "SZ", "security_code": "000003",
+         "state": "INVALIDATED"},
+    ])
+    service = _service(_FakeProvider((_quote("999999"),), index=None), uow)
+    report = await service.execute(as_of=NOW)
+    assert report["sources"]["watchlist"] == {
+        "status": "AVAILABLE", "count": 3,
+    }
+    assert report["pool_size"] == 3
+
+
+@pytest.mark.asyncio
+async def test_feature_coverage_reported() -> None:
+    """R5-P2-011 §63：feature overlay 必须暴露 expected/actual/coverage，
+    只加载部分特征不允许无覆盖率说明。"""
+    quotes = (_quote("000001"), _quote("600000", market="SH"))
+    provider = _FakeProvider(quotes, index=None)
+    service = _service(provider, _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["feature_expected"] == 2
+    assert report["feature_actual"] == 2  # fake feature 两只
+    assert report["feature_coverage"] == 1.0

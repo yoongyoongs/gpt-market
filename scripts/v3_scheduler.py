@@ -816,7 +816,7 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
         deep_service=DeepMarketDataService(
             provider_manager, source="legacy-provider",
         ),
-        feature_limit=int(os.getenv("V3_FASTLANE_FEATURE_LIMIT", "2000")),
+        feature_limit=int(os.getenv("V3_FASTLANE_FEATURE_LIMIT", "6000")),
         deep_limit=int(os.getenv("V3_FASTLANE_DEEP_LIMIT", "10")),
         clock=lambda: datetime.now(timezone.utc),
     )
