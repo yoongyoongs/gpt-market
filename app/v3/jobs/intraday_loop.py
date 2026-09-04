@@ -65,6 +65,7 @@ class IntradayTriggerLoop:
         *,
         interval_seconds: float = 300.0,
         clock: Callable[[], datetime] | None = None,
+        fast_lane: Any = None,
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
@@ -76,6 +77,18 @@ class IntradayTriggerLoop:
         self._clock = clock or (
             lambda: datetime.now(datetime.now().astimezone().tzinfo)
         )
+        # R4-P1-003：Intraday Fast Lane（Overlay/Scanner/Active Pool/Deep）
+        # 与计划价格触发同一常驻循环；None 时退回纯 plan-trigger 模式。
+        self._fast_lane = fast_lane
+        self.last_fast_lane_summary: dict | None = None
+
+    async def run_fast_lane_once(self) -> dict:
+        """单轮 Fast Lane：全市场扫描 → 池 → Deep → Attention（§28 链）。"""
+        if self._fast_lane is None:
+            return {"status": "NOT_WIRED", "detail": "fast lane is not configured"}
+        summary = await self._fast_lane.execute(as_of=self._clock())
+        self.last_fast_lane_summary = summary
+        return summary
 
     async def evaluate_once(self) -> dict:
         """单轮评估：读最新带 stop/target 的 plan，逐计划拉实时行情触发。"""
@@ -135,5 +148,10 @@ class IntradayTriggerLoop:
             try:
                 await self.evaluate_once()
             except Exception:  # noqa: BLE001 - 单轮失败不终止常驻循环
+                pass
+            # R4-P1-003：同间隔跑 Fast Lane 全市场扫描；失败只记录不终止
+            try:
+                await self.run_fast_lane_once()
+            except Exception:  # noqa: BLE001 - Fast Lane 失败不阻断计划触发
                 pass
             await asyncio.sleep(self._interval)

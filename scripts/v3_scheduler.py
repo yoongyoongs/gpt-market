@@ -33,7 +33,14 @@ from app.providers.tencent import TencentProvider
 from app.services.data_quality import DataQualityService
 from app.utils.time import SHANGHAI
 from app.v3.application.attention_engine import AttentionEngineService
+from app.v3.application.intraday_fast_lane import IntradayFastLaneService
 from app.v3.application.intraday_market_data import IntradayMarketDataService
+from app.v3.application.intraday_overlay import (
+    ActiveIntradayUniverseService,
+    IntradayOverlayService,
+    IntradayScannerService,
+)
+from app.v3.application.deep_market_data import DeepMarketDataService
 from app.v3.jobs.intraday_loop import IntradayTriggerLoop
 from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
@@ -794,6 +801,22 @@ def build_intraday_loop(database) -> IntradayTriggerLoop:
     provider_manager = ProviderManager(
         EastmoneyProvider(settings), TencentProvider(settings, DataQualityService()),
     )
+    # R4-P1-003：Fast Lane 全量接线——Overlay/Scanner/Active Pool/Deep
+    # 与计划价格触发共用同一 ProviderManager 与 UoW
+    fast_lane = IntradayFastLaneService(
+        uow_factory,
+        provider_manager,
+        IntradayOverlayService(),
+        IntradayScannerService(),
+        ActiveIntradayUniverseService(),
+        engine=AttentionEngineService(uow_factory),
+        deep_service=DeepMarketDataService(
+            provider_manager, source="legacy-provider",
+        ),
+        feature_limit=int(os.getenv("V3_FASTLANE_FEATURE_LIMIT", "2000")),
+        deep_limit=int(os.getenv("V3_FASTLANE_DEEP_LIMIT", "10")),
+        clock=lambda: datetime.now(timezone.utc),
+    )
 
     def _trading_day(value):
         try:
@@ -808,6 +831,7 @@ def build_intraday_loop(database) -> IntradayTriggerLoop:
         _trading_day,
         interval_seconds=float(os.getenv("V3_INTRADAY_INTERVAL_SECONDS", "300")),
         clock=lambda: datetime.now(timezone.utc),
+        fast_lane=fast_lane,
     )
 
 
@@ -839,9 +863,14 @@ async def _run_intraday_once() -> int:
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
     _, _, database = build_orchestrators(database_url)
-    summary = await build_intraday_loop(database).evaluate_once()
-    await database.close()
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    loop = build_intraday_loop(database)
+    try:
+        summary = await loop.evaluate_once()
+        # R4-P1-003：--intraday-once 同样跑一轮 Fast Lane 全市场扫描
+        summary["fast_lane"] = await loop.run_fast_lane_once()
+    finally:
+        await database.close()
+    print(json.dumps(summary, ensure_ascii=False, default=str), flush=True)
     return 0
 
 
