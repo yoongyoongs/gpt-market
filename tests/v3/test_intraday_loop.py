@@ -475,3 +475,44 @@ def test_fast_lane_failure_recorded_in_heartbeat() -> None:
     assert loop.heartbeat["last_fast_lane_status"] == "ERROR"
     assert "RuntimeError" in loop.heartbeat["last_fast_lane_error"]
     assert loop.heartbeat["last_fast_lane_error"].find("scan down") > 0
+
+
+# ---------- R5-P1-010/§33：常驻循环评估 typed Entry Trigger/Cancel ----------
+
+
+class _TcEngine(_FakeEngine):
+    """同时记录 evaluate_entry_trigger_cancel 调用。"""
+
+    def __init__(self):
+        super().__init__()
+        self.tc_calls: list[dict] = []
+
+    async def evaluate_entry_trigger_cancel(self, **kwargs):
+        self.tc_calls.append(kwargs)
+        return _Evaluation(created=(), skipped=0)
+
+
+def test_evaluate_once_evaluates_typed_triggers() -> None:
+    """WAIT_ENTRY 计划带 typed triggers → 常驻循环自动评估
+    ENTRY_TRIGGER_MET/ENTRY_CANCEL_MET（不再只靠 on-demand）。"""
+    plan = _plan(stop=9.0)
+    plan["plan"] = {
+        "entry_mode": "PULLBACK_ENTRY",
+        "triggers": [{"kind": "PRICE_ABOVE", "value": 9.3}],
+        "cancels": [{"kind": "PRICE_BELOW", "value": 9.02}],
+    }
+    engine = _TcEngine()
+    loop, _, _ = _loop([plan], engine=engine)
+    summary = asyncio.run(loop.evaluate_once())
+    assert summary["trigger_cancel_evaluated"] == 1
+    assert engine.tc_calls[0]["plan"]["triggers"][0]["kind"] == "PRICE_ABOVE"
+
+
+def test_evaluate_once_skips_tc_for_plan_without_conditions() -> None:
+    """无 triggers/cancels 的计划 → 不发起 typed 评估（零事实零事件）。"""
+    plan = _plan(stop=9.0)  # plan dict 为空
+    engine = _TcEngine()
+    loop, _, _ = _loop([plan], engine=engine)
+    summary = asyncio.run(loop.evaluate_once())
+    assert "trigger_cancel_evaluated" not in summary
+    assert engine.tc_calls == []

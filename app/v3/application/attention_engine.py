@@ -22,6 +22,7 @@ from app.v3.domain.attention import (
     AttentionEventType,
     IntradayAttentionEvent,
 )
+from app.v3.domain.entry_plan import EntryPlanPayload
 from app.v3.domain.hashing import canonical_hash
 
 _NEAR_PCT = 0.01  # 距离 stop/target 1% 以内视为"逼近"
@@ -194,6 +195,157 @@ class AttentionEngineService:
                     security_id=security_id, entry_plan_id=entry_plan_id,
                     subject_type="ENTRY_PLAN",
                 ))
+        return await self._emit(drafts)
+
+    @staticmethod
+    def _quote_block(quote: Any) -> str | None:
+        """R4-P1-002 Gate：suspended / stale / UNTRUSTED → 降级原因；
+        可信行情返回 None。停牌/stale/不可信的 Quote 绝不产生确定性
+        触发事件（常驻 Loop 与 on-demand 同一防线）。"""
+        if bool(getattr(quote, "suspended", False)):
+            return "SUSPENDED"
+        if bool(getattr(quote, "stale", False)):
+            return "STALE_QUOTE"
+        quality = getattr(quote, "quality", None) or ""
+        if quality == "UNTRUSTED":
+            return "UNTRUSTED_QUALITY"
+        return None
+
+    async def evaluate_entry_trigger_cancel(
+        self,
+        *,
+        entry_plan_id: UUID,
+        security_id: UUID,
+        code: str,
+        market: str,
+        plan: dict[str, Any],
+        quote: Any,
+        as_of: datetime,
+    ) -> AttentionEvaluation:
+        """R5-P1-010/§33/§66：后台常驻评估 typed Entry Trigger/Cancel。
+
+        - 全部客观 Trigger 满足（且至少一条客观 Trigger）→
+          ENTRY_TRIGGER_MET；有满足/逼近但未全满足 → ENTRY_TRIGGER_NEAR；
+        - 任一客观 Cancel 满足 → ENTRY_CANCEL_MET；
+        - TEXT 条件绝不假装客观评估（缺位即跳过）；
+        - Gate 同 evaluate_entry_plan_levels：suspended/stale/UNTRUSTED
+          只发 DATA_QUALITY_DEGRADED，绝不产生 MET 事件；
+        - plan 不可解析 → 零事件（没有客观事实就没有事件）。
+        """
+        known_at = self._clock()
+        blocked = self._quote_block(quote)
+        if blocked is not None:
+            return await self._emit([self._draft(
+                event_type=AttentionEventType.DATA_QUALITY_DEGRADED,
+                dedupe_key=f"DATA_QUALITY_DEGRADED:{market}:{code}",
+                severity="WARNING",
+                facts={"reason": blocked,
+                       "quality": getattr(quote, "quality", None),
+                       "suspended": bool(getattr(quote, "suspended", False)),
+                       "stale": bool(getattr(quote, "stale", False)),
+                       "last_price": _price(getattr(quote, "last_price", None))},
+                as_of=as_of, known_at=known_at, code=code, market=market,
+            )])
+        try:
+            payload = EntryPlanPayload.from_plan(plan)
+        except Exception:  # noqa: BLE001 - 计划不可解析 → 零事件
+            return AttentionEvaluation()
+        last_price = _price(getattr(quote, "last_price", None))
+        if last_price is None:
+            return AttentionEvaluation()
+        drafts: list[IntradayAttentionEvent] = []
+        met: list[str] = []
+        near: list[str] = []
+        objective_count = 0
+        for condition in payload.triggers:
+            if not condition.objective or condition.value is None:
+                continue
+            objective_count += 1
+            if condition.kind == "PRICE_ABOVE":
+                distance = (condition.value - last_price) / condition.value
+            else:  # PRICE_BELOW
+                distance = (last_price - condition.value) / condition.value
+            satisfied = (
+                last_price >= condition.value
+                if condition.kind == "PRICE_ABOVE"
+                else last_price <= condition.value
+            )
+            label = f"{condition.kind}@{condition.value:g}"
+            if satisfied:
+                met.append(label)
+            elif distance <= _NEAR_PCT:
+                near.append(label)
+        if objective_count and len(met) == objective_count:
+            drafts.append(self._draft(
+                event_type=AttentionEventType.ENTRY_TRIGGER_MET,
+                dedupe_key=f"ENTRY_TRIGGER_MET:{entry_plan_id}",
+                severity="INFO",
+                facts={"last_price": last_price, "met": met,
+                       "entry_mode": payload.entry_mode,
+                       "plan": "all objective entry triggers satisfied"},
+                as_of=as_of, known_at=known_at, code=code, market=market,
+                security_id=security_id, entry_plan_id=entry_plan_id,
+            ))
+        elif met or near:
+            drafts.append(self._draft(
+                event_type=AttentionEventType.ENTRY_TRIGGER_NEAR,
+                dedupe_key=f"ENTRY_TRIGGER_NEAR:{entry_plan_id}",
+                severity="INFO",
+                facts={"last_price": last_price, "met": met, "near": near,
+                       "entry_mode": payload.entry_mode},
+                as_of=as_of, known_at=known_at, code=code, market=market,
+                security_id=security_id, entry_plan_id=entry_plan_id,
+            ))
+        cancel_met: list[str] = []
+        for condition in payload.cancels:
+            if not condition.objective or condition.value is None:
+                continue
+            satisfied = (
+                last_price >= condition.value
+                if condition.kind == "PRICE_ABOVE"
+                else last_price <= condition.value
+            )
+            if satisfied:
+                cancel_met.append(f"{condition.kind}@{condition.value:g}")
+        if cancel_met:
+            drafts.append(self._draft(
+                event_type=AttentionEventType.ENTRY_CANCEL_MET,
+                dedupe_key=f"ENTRY_CANCEL_MET:{entry_plan_id}",
+                severity="WARNING",
+                facts={"last_price": last_price, "met": cancel_met,
+                       "entry_mode": payload.entry_mode,
+                       "plan": "objective cancel condition satisfied"},
+                as_of=as_of, known_at=known_at, code=code, market=market,
+                security_id=security_id, entry_plan_id=entry_plan_id,
+            ))
+        return await self._emit(drafts)
+
+    async def record_structure_changes(
+        self, changes: Iterable[dict[str, Any]], *, as_of: datetime,
+    ) -> AttentionEvaluation:
+        """§66 Structure Change：60m/15m/5m 趋势翻转达阈值 →
+        STRUCTURE_CHANGED（按 market/code/timeframe 去抖，事实即翻转）。"""
+        known_at = self._clock()
+        drafts: list[IntradayAttentionEvent] = []
+        for change in changes:
+            timeframe = str(change.get("timeframe") or "UNKNOWN")
+            drafts.append(self._draft(
+                event_type=AttentionEventType.STRUCTURE_CHANGED,
+                dedupe_key=(
+                    f"STRUCTURE_CHANGED:{change.get('market')}:"
+                    f"{change.get('code')}:{timeframe}"
+                ),
+                severity="INFO",
+                facts={
+                    "timeframe": timeframe,
+                    "from_trend": change.get("from_trend"),
+                    "to_trend": change.get("to_trend"),
+                    "structure": change.get("structure"),
+                },
+                as_of=as_of, known_at=known_at,
+                code=change.get("code"), market=change.get("market"),
+                security_id=change.get("security_id"),
+            ))
         return await self._emit(drafts)
 
     async def record_intraday_anomalies(

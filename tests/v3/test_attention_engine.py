@@ -286,3 +286,151 @@ async def test_fresh_quote_still_triggers_hits() -> None:
         market="SZ", plan=_PLAN, quote=_quote(8.9), as_of=NOW,
     )
     assert report.created[0].event_type == AttentionEventType.STOP_HIT
+
+
+# ---------- R5-P1-010/§33/§66：后台常驻 typed Entry Trigger/Cancel ----------
+
+_TYPED_PLAN = {
+    "entry_mode": "PULLBACK_ENTRY",
+    "entry_zone": {"low": 9.28, "high": 9.36},
+    "triggers": [
+        {"kind": "PRICE_ABOVE", "value": 9.30},
+        {"kind": "TEXT", "description": "60m 支撑企稳"},
+    ],
+    "cancels": [{"kind": "PRICE_BELOW", "value": 9.02}],
+    "stop": {"price": 9.02, "reason": "跌破前低失效"},
+    "targets": [{"price": 9.85, "target_type": "T1"}],
+}
+
+
+def _types(report):
+    return {event.event_type for event in report.created}
+
+
+@pytest.mark.asyncio
+async def test_entry_trigger_met_when_all_objective_triggers_satisfied() -> None:
+    """WAIT_ENTRY + 价格满足全部客观 Trigger → ENTRY_TRIGGER_MET
+    （TEXT 条件不阻塞客观判定，也不假装已满足）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_TYPED_PLAN, quote=_quote(9.41), as_of=NOW,
+    )
+    assert report.created[0].event_type == AttentionEventType.ENTRY_TRIGGER_MET
+    assert report.created[0].facts["met"] == ["PRICE_ABOVE@9.3"]
+    assert report.created[0].facts["entry_mode"] == "PULLBACK_ENTRY"
+
+
+@pytest.mark.asyncio
+async def test_entry_trigger_near_when_price_close_to_trigger() -> None:
+    """距客观 Trigger 1% 以内但未满足 → ENTRY_TRIGGER_NEAR。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_TYPED_PLAN, quote=_quote(9.27), as_of=NOW,
+    )
+    assert report.created[0].event_type == AttentionEventType.ENTRY_TRIGGER_NEAR
+    assert report.created[0].facts["near"] == ["PRICE_ABOVE@9.3"]
+
+
+@pytest.mark.asyncio
+async def test_entry_cancel_met_emits_warning() -> None:
+    """客观 Cancel 满足 → ENTRY_CANCEL_MET（不产生 MET）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_TYPED_PLAN, quote=_quote(9.0), as_of=NOW,
+    )
+    types = _types(report)
+    assert AttentionEventType.ENTRY_CANCEL_MET in types
+    assert AttentionEventType.ENTRY_TRIGGER_MET not in types
+    cancel = next(
+        event for event in report.created
+        if event.event_type == AttentionEventType.ENTRY_CANCEL_MET
+    )
+    assert cancel.facts["met"] == ["PRICE_BELOW@9.02"]
+
+
+@pytest.mark.asyncio
+async def test_stale_quote_blocks_entry_trigger() -> None:
+    """§66 stale 场景：stale Quote → NO ENTRY_TRIGGER_MET，只允许
+    DATA_QUALITY_DEGRADED（与 stop/target 同一 Gate）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    stale = _quote(9.41).model_copy(update={"stale": True, "quality": "STALE"})
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_TYPED_PLAN, quote=stale, as_of=NOW,
+    )
+    types = _types(report)
+    assert types == {AttentionEventType.DATA_QUALITY_DEGRADED}
+    assert report.created[0].facts["reason"] == "STALE_QUOTE"
+
+
+@pytest.mark.asyncio
+async def test_suspended_quote_blocks_entry_trigger() -> None:
+    """§66 suspended 场景：停牌 → 无 ENTRY_TRIGGER_MET。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    suspended = _quote(9.41).model_copy(update={"suspended": True})
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_TYPED_PLAN, quote=suspended, as_of=NOW,
+    )
+    assert _types(report) == {AttentionEventType.DATA_QUALITY_DEGRADED}
+
+
+@pytest.mark.asyncio
+async def test_text_only_plan_creates_zero_events() -> None:
+    """只有 TEXT Trigger 的计划没有客观事实 → 零事件（绝不假装判定）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ",
+        plan={"entry_mode": "X", "triggers": [
+            {"kind": "TEXT", "description": "60m 支撑企稳"},
+        ]},
+        quote=_quote(9.41), as_of=NOW,
+    )
+    assert report.created == ()
+    assert report.skipped == 0
+
+
+@pytest.mark.asyncio
+async def test_unparseable_plan_creates_zero_events() -> None:
+    """plan 不可解析 → 零事件（不抛错、不阻断循环）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.evaluate_entry_trigger_cancel(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan={"triggers": "not-a-list"}, quote=_quote(9.41),
+        as_of=NOW,
+    )
+    assert report.created == ()
+
+
+@pytest.mark.asyncio
+async def test_structure_change_recorded_per_timeframe() -> None:
+    """§66 Structure Change：趋势翻转 → STRUCTURE_CHANGED（按
+    market/code/timeframe 去抖）。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    report = await engine.record_structure_changes([
+        {"market": "SZ", "code": "000001", "timeframe": "60m",
+         "from_trend": "UP", "to_trend": "DOWN",
+         "structure": {"support": 9.0, "resistance": 10.5}},
+    ], as_of=NOW)
+    event = report.created[0]
+    assert event.event_type == AttentionEventType.STRUCTURE_CHANGED
+    assert event.facts["timeframe"] == "60m"
+    assert event.facts["from_trend"] == "UP"
+    assert event.facts["to_trend"] == "DOWN"
+    second = await engine.record_structure_changes([
+        {"market": "SZ", "code": "000001", "timeframe": "60m",
+         "from_trend": "UP", "to_trend": "DOWN", "structure": {}},
+    ], as_of=NOW)
+    assert second.created == ()  # cooldown 去抖
