@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from app.v3.contracts.base import require_aware
@@ -25,13 +25,23 @@ _DEFAULT_PERIODS = ("1m", "5m", "15m", "60m", "day", "week")
 # R4-P1-006：ProviderManager 顺序 eastmoney → tencent；source 与首选一致
 # 视为直连主源，其余（tencent fallback / aggregate:* / cache:* / 组合）算 fallback
 _PRIMARY_SOURCE = "eastmoney"
+# R5-P0-001：CURRENT 语义下正常网络延迟（server_timestamp 晚于 request_start
+# 几毫秒到几秒）不是未来数据——只有绝对时钟意义上的"离谱未来"（超过
+# 当前时钟 + 容忍）才判 FUTURE，防止上游坏时间戳冒充新鲜事实。
+# Historical PIT 的严格 known_at <= cutoff 拒绝不在本 adapter（历史走
+# ContextPack / Replay，绝不复用 CURRENT 快照链路）。
+_FUTURE_CLOCK_TOLERANCE = timedelta(minutes=5)
 
 
-def map_quote_snapshot(quote: Any, as_of: datetime) -> IntradayQuoteSnapshot:
-    """Legacy Quote → V3 快照（R4-P0-001 Future Guard 内置）。
+def map_quote_snapshot(
+    quote: Any, as_of: datetime, *, now: datetime | None = None,
+) -> IntradayQuoteSnapshot:
+    """Legacy Quote → V3 快照（R5-P0-001 CURRENT 时间语义）。
 
-    known_at/event_time 晚于 as_of 的事实绝不冒充新鲜价：显式降级
-    stale + UNTRUSTED + stale_reason。全市场批量与单只走同一映射。
+    as_of = 本次请求起点（request_started_at）。本次请求过程中刚获得的
+    事实（known_at > as_of）是正常网络延迟，绝不因此判 FUTURE；
+    仅当 known_at/event_time 超过绝对时钟 now + 容忍（上游时钟错乱）
+    才显式降级 stale + UNTRUSTED + stale_reason。全市场批量与单只同一映射。
     """
     snapshot = IntradayQuoteSnapshot(
         code=quote.code,
@@ -59,10 +69,13 @@ def map_quote_snapshot(quote: Any, as_of: datetime) -> IntradayQuoteSnapshot:
         stale=quote.stale,
         confidence=quote.confidence,
     )
+    if now is None:
+        now = datetime.now(as_of.tzinfo)
+    future_limit = now + _FUTURE_CLOCK_TOLERANCE
     stale_reason: str | None = None
-    if snapshot.known_at > as_of:
+    if snapshot.known_at is not None and snapshot.known_at > future_limit:
         stale_reason = "FUTURE_KNOWN_AT"
-    elif snapshot.event_time > as_of:
+    elif snapshot.event_time is not None and snapshot.event_time > future_limit:
         stale_reason = "FUTURE_EVENT_TIME"
     if stale_reason is not None:
         snapshot = snapshot.model_copy(update={
@@ -87,10 +100,12 @@ class IntradayMarketDataService:
         self._provider = provider
         self._bars_per_period = bars_per_period
 
-    async def get_quote_snapshot(self, code: str, *, as_of: datetime) -> IntradayQuoteSnapshot:
+    async def get_quote_snapshot(
+        self, code: str, *, as_of: datetime, now: datetime | None = None,
+    ) -> IntradayQuoteSnapshot:
         require_aware(as_of, "as_of")
         quote = await self._provider.get_quote(code)
-        return map_quote_snapshot(quote, as_of)
+        return map_quote_snapshot(quote, as_of, now=now)
 
     async def get_quote_snapshots(
         self, quotes: Any, *, as_of: datetime,
@@ -107,10 +122,17 @@ class IntradayMarketDataService:
         as_of: datetime,
     ) -> IntradayBarsResult:
         require_aware(as_of, "as_of")
-        known_at = datetime.now(as_of.tzinfo)
+        # R5-P0-001/§8.2：顶层 known_at 在全部周期抓完后计算——
+        # max(各周期 known_at, 抓取完成时刻)，绝不早于实际事实。
         series: dict[str, IntradayBarSeries] = {}
         for period in periods:
             series[period] = await self._read_period(code, period, as_of=as_of)
+        finalized_at = datetime.now(as_of.tzinfo)
+        period_known = [
+            item.known_at for item in series.values()
+            if item.known_at is not None
+        ]
+        known_at = max([finalized_at, *period_known])
         return IntradayBarsResult(
             code=code, as_of=as_of, known_at=known_at,
             source="legacy-provider", periods=series,
@@ -129,11 +151,14 @@ class IntradayMarketDataService:
                 reason=f"{type(exc).__name__}: {exc}",
                 precision="UNKNOWN",
             )
-        # R4-P1-006：来源/质量信息逐周期透传（§18.1），缓存/聚合可辨
+        # R4-P1-006：来源/质量信息逐周期透传（§18.1），缓存/聚合可辨。
+        # R5-P2-014/§8.3：known_at = server_timestamp（系统实际知道时点），
+        # event_time = data_timestamp（市场事件时点），两者不得混用。
         provenance = {
             "source": result.source,
             "upstream_source": result.timestamp_source,
-            "known_at": result.data_timestamp,
+            "event_time": result.data_timestamp,
+            "known_at": result.server_timestamp,
             "quality": result.quality,
             "confidence": result.confidence,
             "fallback_used": result.source != _PRIMARY_SOURCE,

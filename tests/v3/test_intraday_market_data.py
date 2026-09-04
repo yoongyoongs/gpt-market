@@ -167,7 +167,10 @@ async def test_intraday_bars_carry_per_period_provenance() -> None:
     assert hour.source == "eastmoney"
     assert hour.upstream_source == "eastmoney"
     assert hour.fallback_used is False
-    assert hour.known_at == NOW - timedelta(seconds=2)
+    # R5-P2-014：event_time=市场事件时点（data_timestamp），
+    # known_at=系统实际知道时点（server_timestamp），两者不得混用。
+    assert hour.event_time == NOW - timedelta(seconds=2)
+    assert hour.known_at == NOW
     assert hour.quality == "LIVE" and hour.confidence == "MEDIUM"
     fifteen = result.periods["15m"]
     assert fifteen.source == "tencent"
@@ -382,12 +385,28 @@ async def test_service_wired_to_provider_manager_falls_back_to_tencent() -> None
     assert tencent.calls == 1
 
 @pytest.mark.asyncio
-async def test_future_known_at_quote_marked_untrusted():
-    """R4-P0-001 §26.1：known_at > as_of 的 Quote 绝不冒充新鲜价——
-    显式降级 stale + UNTRUSTED + 原因。"""
-    from app.v3.domain.intraday import IntradayQuoteSnapshot
+async def test_normal_network_delay_not_future():
+    """R5-P0-001 §59.1 Case T1：CURRENT 正常网络延迟（known_at 晚于
+    request_start 几百毫秒）是新鲜事实，绝不判 FUTURE_KNOWN_AT。"""
+    class _DelayedProvider:
+        async def get_quote(self, code: str) -> Quote:
+            return _quote(
+                server_timestamp=NOW + timedelta(milliseconds=120),
+                data_timestamp=NOW + timedelta(milliseconds=80),
+            )
 
-    class _FutureProvider:
+    service = IntradayMarketDataService(_DelayedProvider())
+    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    assert snapshot.stale is False
+    assert snapshot.quality == "LIVE"
+    assert snapshot.stale_reason is None
+
+
+@pytest.mark.asyncio
+async def test_clock_skewed_future_quote_marked_untrusted():
+    """R5-P0-001：绝对时钟错乱（known_at 超 now + 容忍）才判 FUTURE——
+    上游坏时间戳不得冒充新鲜价。"""
+    class _SkewedProvider:
         async def get_quote(self, code: str) -> Quote:
             return _quote(
                 source_timestamp=NOW + timedelta(hours=2),
@@ -395,26 +414,26 @@ async def test_future_known_at_quote_marked_untrusted():
                 server_timestamp=NOW + timedelta(hours=2),
             )
 
-    service = IntradayMarketDataService(_FutureProvider())
-    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    service = IntradayMarketDataService(_SkewedProvider())
+    snapshot = await service.get_quote_snapshot(
+        "000001", as_of=NOW, now=NOW,
+    )
     assert snapshot.stale is True
     assert snapshot.quality == "UNTRUSTED"
     assert snapshot.stale_reason == "FUTURE_KNOWN_AT"
-    assert isinstance(snapshot, IntradayQuoteSnapshot)
 
 
 @pytest.mark.asyncio
 async def test_future_event_time_quote_marked_untrusted():
-    """R4-P0-001：event_time > as_of 同样降级（known_at 正常）。"""
-    from app.v3.domain.intraday import IntradayQuoteSnapshot
-
+    """R5-P0-001：event_time 超绝对时钟容忍（30 分钟后的事件）同判 FUTURE。"""
     class _FutureEventProvider:
         async def get_quote(self, code: str) -> Quote:
             return _quote(data_timestamp=NOW + timedelta(minutes=30))
 
     service = IntradayMarketDataService(_FutureEventProvider())
-    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    snapshot = await service.get_quote_snapshot(
+        "000001", as_of=NOW, now=NOW,
+    )
     assert snapshot.stale is True
     assert snapshot.quality == "UNTRUSTED"
     assert snapshot.stale_reason == "FUTURE_EVENT_TIME"
-    assert isinstance(snapshot, IntradayQuoteSnapshot)
