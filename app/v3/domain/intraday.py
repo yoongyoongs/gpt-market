@@ -94,6 +94,16 @@ class IntradayBarSeries(V3Contract):
     precision: Literal["LIMITED", "UNKNOWN"] = "LIMITED"
     first_bar_time: datetime | None = None
     last_bar_time: datetime | None = None
+    # R4-P1-006：每周期 provenance——消费方能看到"60m 实际 Eastmoney /
+    # 15m 实际 Tencent fallback / week 实际 aggregate:day:tencent"。
+    # source = 数据取得路径（KlineResult.source，如 aggregate:day:tencent）；
+    # upstream_source = 时戳来源（timestamp_source：eastmoney/tencent/fetch_time）。
+    source: str | None = None
+    upstream_source: str | None = None
+    known_at: datetime | None = None
+    quality: str | None = None
+    confidence: str | None = None
+    fallback_used: bool = False
 
 
 class IntradayBarsResult(V3Contract):
