@@ -340,3 +340,41 @@ async def test_service_wired_to_provider_manager_falls_back_to_tencent() -> None
     snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
     assert snapshot.source == "tencent"
     assert tencent.calls == 1
+
+@pytest.mark.asyncio
+async def test_future_known_at_quote_marked_untrusted():
+    """R4-P0-001 §26.1：known_at > as_of 的 Quote 绝不冒充新鲜价——
+    显式降级 stale + UNTRUSTED + 原因。"""
+    from app.v3.domain.intraday import IntradayQuoteSnapshot
+
+    class _FutureProvider:
+        async def get_quote(self, code: str) -> Quote:
+            return _quote(
+                source_timestamp=NOW + timedelta(hours=2),
+                data_timestamp=NOW + timedelta(hours=2),
+                server_timestamp=NOW + timedelta(hours=2),
+            )
+
+    service = IntradayMarketDataService(_FutureProvider())
+    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    assert snapshot.stale is True
+    assert snapshot.quality == "UNTRUSTED"
+    assert snapshot.stale_reason == "FUTURE_KNOWN_AT"
+    assert isinstance(snapshot, IntradayQuoteSnapshot)
+
+
+@pytest.mark.asyncio
+async def test_future_event_time_quote_marked_untrusted():
+    """R4-P0-001：event_time > as_of 同样降级（known_at 正常）。"""
+    from app.v3.domain.intraday import IntradayQuoteSnapshot
+
+    class _FutureEventProvider:
+        async def get_quote(self, code: str) -> Quote:
+            return _quote(data_timestamp=NOW + timedelta(minutes=30))
+
+    service = IntradayMarketDataService(_FutureEventProvider())
+    snapshot = await service.get_quote_snapshot("000001", as_of=NOW)
+    assert snapshot.stale is True
+    assert snapshot.quality == "UNTRUSTED"
+    assert snapshot.stale_reason == "FUTURE_EVENT_TIME"
+    assert isinstance(snapshot, IntradayQuoteSnapshot)

@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Protocol
 
@@ -34,6 +34,21 @@ def _price(value: Any) -> float | None:
         return float(Decimal(str(value)))
     except (InvalidOperation, TypeError, ValueError):
         return None
+
+
+def _aware(value: Any) -> datetime | None:
+    """行内时点字段 → aware datetime（naive 按 UTC 补齐）；不可解析返回 None。"""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    return None
 
 
 def _evaluate_condition(condition: PlanCondition, last_price: float) -> bool | None:
@@ -94,14 +109,30 @@ class ReadEntryDecisionContextService:
         plan_row = None
         if bundle:
             decisions = bundle.get("decisions") or ()
-            if decisions:
-                decision = dict(max(decisions, key=lambda row: row["as_of"]))
+            # R4-P0-001：PIT 纪律——只允许 as_of 之前已知的 Decision 入选；
+            # 时点不可解析的行同样排除，绝不静默采纳"未来决策"。
+            current_decisions = [
+                row for row in decisions
+                if (ts := _aware(row.get("as_of"))) is not None and ts <= as_of
+            ]
+            if current_decisions:
+                decision = dict(
+                    max(current_decisions, key=lambda row: _aware(row.get("as_of")))
+                )
             plans = [
                 dict(row) for row in (bundle.get("entry_plan_versions") or ())
                 if decision is None or row.get("decision_id") == decision.get("decision_id")
             ]
-            if plans:
-                plan_row = max(plans, key=lambda row: row.get("version", 0))
+            # R4-P0-001：EntryPlan 生效时点同理——effective_from > as_of 的
+            # 未来计划绝不入选（未标注 effective_from 视为已知，放行）。
+            current_plans = [
+                row for row in plans
+                if row.get("effective_from") is None
+                or (_eff := _aware(row.get("effective_from"))) is None
+                or _eff <= as_of
+            ]
+            if current_plans:
+                plan_row = max(current_plans, key=lambda row: row.get("version", 0))
 
         plan_payload: EntryPlanPayload | None = None
         plan_parse_error: str | None = None

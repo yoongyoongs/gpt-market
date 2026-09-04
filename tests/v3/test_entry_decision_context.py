@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -256,3 +256,75 @@ async def test_security_id_by_code_roundtrip() -> None:
     await engine.dispose()
     assert found == security_id
     assert missing is None
+
+# ---------- R4-P0-001 PIT guard ----------
+
+
+@pytest.mark.asyncio
+async def test_future_decision_never_selected() -> None:
+    """R4-P0-001 §26.2：as_of=T1 时未来 Decision 绝不入选——
+    返回 T1 前已知的 Decision A，其计划同理。"""
+    past_id, future_id = uuid4(), uuid4()
+    bundle = {
+        "decisions": (
+            {"decision_id": past_id, "as_of": NOW - timedelta(days=1)},
+            {"decision_id": future_id, "as_of": NOW + timedelta(days=1)},
+        ),
+        "entry_plan_versions": (
+            {"entry_plan_id": uuid4(), "decision_id": future_id, "version": 2,
+             "effective_from": NOW + timedelta(days=1),
+             "expected_horizon": "D3_10", "plan": _PLAN},
+            {"entry_plan_id": uuid4(), "decision_id": past_id, "version": 1,
+             "effective_from": NOW - timedelta(days=1),
+             "expected_horizon": "D3_10", "plan": _PLAN},
+        ),
+        "reviews": (),
+    }
+    report = await _service(_Quote(9.5), bundle).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["decision"]["decision_id"] == str(past_id)
+    assert report["entry_plan"]["decision_id"] == str(past_id)
+
+
+@pytest.mark.asyncio
+async def test_future_effective_plan_never_selected() -> None:
+    """R4-P0-001：effective_from > as_of 的 EntryPlan 绝不入选。"""
+    plan_id = uuid4()
+    bundle = {
+        "decisions": ({"decision_id": plan_id, "as_of": NOW - timedelta(days=1)},),
+        "entry_plan_versions": (
+            {"entry_plan_id": uuid4(), "decision_id": plan_id, "version": 3,
+             "effective_from": NOW + timedelta(days=1),
+             "expected_horizon": "D3_10", "plan": _PLAN},
+        ),
+        "reviews": (),
+    }
+    report = await _service(_Quote(9.5), bundle).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["entry_plan"] is None
+    assert report["readiness"] == EntryReadiness.NOT_READY
+    assert report["readiness_reason"] == "NO_ENTRY_PLAN"
+
+
+@pytest.mark.asyncio
+async def test_unparseable_decision_time_never_selected() -> None:
+    """时点不可解析的 Decision 绝不静默采纳。"""
+    good_id, bad_id = uuid4(), uuid4()
+    bundle = {
+        "decisions": (
+            {"decision_id": bad_id, "as_of": "not-a-time"},
+            {"decision_id": good_id, "as_of": NOW - timedelta(days=1)},
+        ),
+        "entry_plan_versions": (
+            {"entry_plan_id": uuid4(), "decision_id": good_id, "version": 1,
+             "effective_from": NOW - timedelta(days=1),
+             "expected_horizon": "D3_10", "plan": _PLAN},
+        ),
+        "reviews": (),
+    }
+    report = await _service(_Quote(9.5), bundle).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["decision"]["decision_id"] == str(good_id)

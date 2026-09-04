@@ -241,3 +241,32 @@ def test_stock_context_pack_get_is_pure_read_and_security_scoped(monkeypatch):
     with _client_with_uow(monkeypatch, uow) as client:
         response = client.get("/api/v3/stocks/000001/context-pack?market=SZ")
     assert response.status_code == 404
+
+# --- R4-P0-001：实时决策上下文 CURRENT_ONLY——显著历史 as_of 一律 400 ---
+
+
+def test_decision_context_rejects_historical_as_of(monkeypatch):
+    uow = _Uow(_facts())
+    with _client_with_uow(monkeypatch, uow) as client:
+        entry = client.get(
+            "/api/v3/stocks/000001/decision-context?as_of=2026-01-01T00:00:00Z"
+        )
+        position = client.get(
+            "/api/v3/portfolio/000001/decision-context"
+            f"?account_id={uuid4()}&as_of=2026-01-01T00:00:00Z"
+        )
+    assert entry.status_code == 400
+    assert "CURRENT_ONLY_CONTEXT" in entry.json()["detail"]
+    assert position.status_code == 400
+    assert "CURRENT_ONLY_CONTEXT" in position.json()["detail"]
+
+
+def test_decision_context_rejects_future_as_of(monkeypatch):
+    """未来 as_of 同样是伪造时点（把未来行情当已知），一律拒绝。"""
+    uow = _Uow(_facts())
+    with _client_with_uow(monkeypatch, uow) as client:
+        response = client.get(
+            "/api/v3/stocks/000001/decision-context?as_of=2030-01-01T00:00:00Z"
+        )
+    assert response.status_code == 400
+    assert "CURRENT_ONLY_CONTEXT" in response.json()["detail"]
