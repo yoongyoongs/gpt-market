@@ -66,6 +66,7 @@ class IntradayTriggerLoop:
         interval_seconds: float = 300.0,
         clock: Callable[[], datetime] | None = None,
         fast_lane: Any = None,
+        health_snapshot: Callable[[], dict] | None = None,
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
@@ -81,13 +82,61 @@ class IntradayTriggerLoop:
         # 与计划价格触发同一常驻循环；None 时退回纯 plan-trigger 模式。
         self._fast_lane = fast_lane
         self.last_fast_lane_summary: dict | None = None
+        # R4-P2-008：循环失败绝不静默——heartbeat 记录成功/错误时间线，
+        # 让"Worker 连续失败 2 小时但 Dashboard 看着在线"不可能再发生。
+        self.heartbeat: dict[str, Any] = {
+            "last_success_at": None,
+            "last_error_at": None,
+            "last_error_type": None,
+            "consecutive_errors": 0,
+            "last_plan_count": None,
+            "last_evaluated_count": None,
+            "last_quote_failed": None,
+            "last_engine_failed": None,
+            "last_fast_lane_status": None,
+            "last_fast_lane_error": None,
+            "provider_health": None,
+        }
+        self._health_snapshot = health_snapshot
+
+    def _record_success(self, summary: dict) -> None:
+        self.heartbeat.update({
+            "last_success_at": self._clock().isoformat(),
+            "last_plan_count": summary.get("plan_count"),
+            "last_evaluated_count": summary.get("evaluated"),
+            "last_quote_failed": summary.get("quote_failed"),
+            "last_engine_failed": summary.get("engine_failed"),
+            "consecutive_errors": 0,
+        })
+        if self._health_snapshot is not None:
+            try:
+                self.heartbeat["provider_health"] = self._health_snapshot()
+            except Exception:  # noqa: BLE001 - 健康快照失败不阻断主循环
+                pass
+
+    def _record_error(self, exc: BaseException) -> None:
+        self.heartbeat.update({
+            "last_error_at": self._clock().isoformat(),
+            "last_error_type": type(exc).__name__,
+            "consecutive_errors": self.heartbeat["consecutive_errors"] + 1,
+        })
 
     async def run_fast_lane_once(self) -> dict:
         """单轮 Fast Lane：全市场扫描 → 池 → Deep → Attention（§28 链）。"""
         if self._fast_lane is None:
+            self.heartbeat["last_fast_lane_status"] = "NOT_WIRED"
             return {"status": "NOT_WIRED", "detail": "fast lane is not configured"}
-        summary = await self._fast_lane.execute(as_of=self._clock())
+        try:
+            summary = await self._fast_lane.execute(as_of=self._clock())
+        except Exception as exc:
+            self.heartbeat["last_fast_lane_status"] = "ERROR"
+            self.heartbeat["last_fast_lane_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise
         self.last_fast_lane_summary = summary
+        self.heartbeat["last_fast_lane_status"] = summary.get("status")
+        self.heartbeat["last_fast_lane_error"] = summary.get("quote_error")
         return summary
 
     async def evaluate_once(self) -> dict:
@@ -135,7 +184,12 @@ class IntradayTriggerLoop:
         return summary
 
     async def run_forever(self) -> None:
-        """常驻循环：非交易时段低频空转，时段内按间隔评估。"""
+        """常驻循环：非交易时段低频空转，时段内按间隔评估。
+
+        R4-P2-008：单轮失败不再静默吞掉——成功/失败都进 heartbeat
+        （last_success_at / last_error_at / last_error_type / 计数），
+        循环本身继续跑，绝不终止。
+        """
         while True:
             local_now = self._clock().astimezone(SHANGHAI)
             try:
@@ -146,12 +200,14 @@ class IntradayTriggerLoop:
                 await asyncio.sleep(IDLE_POLL_SECONDS)
                 continue
             try:
-                await self.evaluate_once()
-            except Exception:  # noqa: BLE001 - 单轮失败不终止常驻循环
-                pass
+                summary = await self.evaluate_once()
+            except Exception as exc:  # noqa: BLE001 - 单轮失败不终止常驻循环
+                self._record_error(exc)
+            else:
+                self._record_success(summary)
             # R4-P1-003：同间隔跑 Fast Lane 全市场扫描；失败只记录不终止
             try:
                 await self.run_fast_lane_once()
-            except Exception:  # noqa: BLE001 - Fast Lane 失败不阻断计划触发
-                pass
+            except Exception as exc:  # noqa: BLE001 - Fast Lane 失败不阻断计划触发
+                self._record_error(exc)
             await asyncio.sleep(self._interval)

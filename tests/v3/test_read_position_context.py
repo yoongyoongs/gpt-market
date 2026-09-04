@@ -215,6 +215,29 @@ async def test_full_position_context_payload_assembles_all_sections():
 
 
 @pytest.mark.asyncio
+async def test_holding_sessions_uses_shanghai_calendar_day():
+    """R4-P2-009：交易日归属按 Asia/Shanghai——上海周一凌晨时
+    end=周一；旧实现按服务器本地时区（UTC）会算成周日、少一个交易日。"""
+    plan_v1 = _plan(1)
+    facts = _facts(plan_v1, _plan(2, supersedes=plan_v1["entry_plan_id"]))
+    facts["trades"] = ({
+        "trade_id": str(uuid4()), "side": "BUY",
+        "quantity": "1000", "price": "10.0", "fee": "5",
+        "trade_time": "2026-08-24T07:00:00+00:00",  # 8-24 周一买入
+        "entry_plan_id": facts["entry_plans"][0]["entry_plan_id"],
+        "entry_plan_version": 1,
+    },)
+    # 2026-09-06 17:30 UTC = 上海 9-7 周一 01:30
+    as_of = datetime(2026, 9, 6, 17, 30, tzinfo=timezone.utc)
+    payload = await _service(facts, None, None, deep=False).execute(
+        uuid4(), "600300", "SH", as_of=as_of,
+    )
+    # 8-25..9-7 的交易日（周线日历）：9 个整周交易日 + 9-7 周一 = 10；
+    # 若按 UTC end=9-6 周日则只有 9
+    assert payload["holding"]["holding_sessions"] == 10
+
+
+@pytest.mark.asyncio
 async def test_missing_pieces_degrade_explicitly_without_fabrication():
     plan_v1 = _plan(1)
     facts = _facts(plan_v1, _plan(2, supersedes=plan_v1["entry_plan_id"]))
