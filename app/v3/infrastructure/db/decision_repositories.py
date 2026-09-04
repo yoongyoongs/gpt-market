@@ -634,17 +634,34 @@ class SQLAlchemyAIResultImportRepository:
         }
 
     async def read_watchlist(self, state: str | None, limit: int):
-        statement = select(WatchlistModel)
+        """当前 Watchlist 现态（R5-P2-013：Fast Lane 等 Active Pool 来源
+        必须读现态表，不是最近 N 条变更事件）。join Security 带 back
+        market/code，供无 security_id 上下文的调用方直接使用。"""
+        statement = (
+            select(WatchlistModel, SecurityModel)
+            .join(
+                SecurityModel,
+                SecurityModel.security_id == WatchlistModel.security_id,
+            )
+        )
         if state:
             statement = statement.where(WatchlistModel.state == state)
         rows = (
-            await self._session.scalars(
+            await self._session.execute(
                 statement.order_by(WatchlistModel.updated_at.desc()).limit(limit)
             )
         ).all()
         return tuple(
-            {column.name: getattr(row, column.name) for column in row.__table__.columns}
-            for row in rows
+            {
+                **{
+                    column.name: getattr(watchlist, column.name)
+                    for column in watchlist.__table__.columns
+                },
+                "security_market": security.market,
+                "security_code": security.code,
+                "security_name": security.name,
+            }
+            for watchlist, security in rows
         )
 
     async def active_price_trigger_plans(self) -> tuple[dict, ...]:
