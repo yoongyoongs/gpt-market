@@ -12,6 +12,12 @@
    - 其余 → WAIT_TRIGGER；
 4. 响应携带 §18.4 点时字段（as_of/known_at/source/coverage/stale/quality）。
 
+R4-P1-004：聚合完整事实包（复验 §16）——在原有 decision/plan/quote/
+structure 之上补 market_regime / feature_eod / latest_recall /
+latest_raw_opportunity / latest_action / latest_entry_assessment /
+attention_events / data_quality；无数据源的字段（fundamental / evidence）
+显式 NOT_AVAILABLE + reason，绝不静默缺省。
+
 本服务只读，不创建 Decision / Trade，不改变任何状态。
 """
 
@@ -25,6 +31,72 @@ from app.v3.domain.action import EntryReadiness
 from app.v3.domain.entry_plan import EntryPlanPayload, PlanCondition
 
 _SOURCE = "entry-decision-context-v1"
+_FACT_LIMIT = 200
+
+
+def _not_available(reason: str) -> dict[str, str]:
+    return {"status": "NOT_AVAILABLE", "reason": reason}
+
+
+def _unknown(reason: str) -> dict[str, str]:
+    return {"status": "UNKNOWN", "reason": reason}
+
+
+def _dump(value: Any) -> Any:
+    """pydantic → JSON 兼容 dict；普通对象原样返回。"""
+    if value is None or isinstance(value, (dict, list, str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value
+
+
+def _jsonify(value: Any) -> Any:
+    """普通 ORM 列 dict → JSON 兼容（UUID/datetime/Decimal）。"""
+    from decimal import Decimal
+    from uuid import UUID
+
+    if isinstance(value, dict):
+        return {key: _jsonify(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonify(item) for item in value]
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _match_security(page: Any, market: str, code: str) -> Any:
+    """翻页结果里找本证券（read_results/read_raw 无证券过滤参数）。"""
+    if page is None:
+        return None
+    for item in getattr(page, "items", ()) or ():
+        if getattr(item, "market", None) == market and getattr(
+            item, "code", None,
+        ) == code:
+            return _dump(item)
+    return None
+
+
+def _latest_action(pipeline: Any) -> Any:
+    """read_pipeline 首条 = 最新 ActionCandidate（按 as_of desc）。"""
+    if not pipeline:
+        return _not_available("NO_ACTION_CANDIDATE")
+    first = pipeline[0]
+    action = _jsonify(first.get("action"))
+    latest_entry = None
+    entries = first.get("entries") or ()
+    if entries:
+        latest_entry = _jsonify(entries[0])
+    return {
+        "status": "AVAILABLE",
+        "raw_opportunity_id": str(first.get("raw_opportunity_id")),
+        "action": action,
+        "latest_entry": latest_entry,
+    }
 
 
 def _price(value: Any) -> float | None:
@@ -97,13 +169,14 @@ class ReadEntryDecisionContextService:
         self, code: str, market: str, *, as_of: datetime
     ) -> dict[str, Any]:
         known_at = self._clock()
-        bundle = await self._decision_bundle(code, market)
+        bundle, security_id = await self._decision_bundle(code, market)
         quote = await self._safe(lambda: self._quote_service.get_quote_snapshot(
             code, as_of=as_of,
         ))
         structure = await self._safe(lambda: self._structure_service.get_snapshot(
             code, as_of=as_of,
         ))
+        facts = await self._eod_facts(security_id, code, market, as_of)
 
         decision = None
         plan_row = None
@@ -164,6 +237,10 @@ class ReadEntryDecisionContextService:
                 "structure": bool(getattr(structure, "stale", True)),
                 "quote": stale,
             },
+            "security": {
+                "code": code, "market": market,
+                "security_id": str(security_id) if security_id else None,
+            },
             "decision": self._decision_summary(decision),
             "entry_plan": self._plan_summary(plan_row),
             "plan_payload": (
@@ -178,17 +255,125 @@ class ReadEntryDecisionContextService:
             "readiness_reason": reason,
             "evaluated_triggers": evaluated_triggers,
             "evaluated_cancels": evaluated_cancels,
+            "market_regime": facts["market_regime"],
+            "feature_eod": facts["feature_eod"],
+            "latest_recall": facts["latest_recall"],
+            "latest_raw_opportunity": facts["latest_raw_opportunity"],
+            "latest_action": facts["latest_action"],
+            "latest_entry_assessment": facts["latest_entry_assessment"],
+            "fundamental": facts["fundamental"],
+            "evidence": facts["evidence"],
+            "attention_events": facts["attention_events"],
+            "data_quality": facts["data_quality"],
         }
 
-    async def _decision_bundle(self, code: str, market: str) -> dict | None:
+    async def _eod_facts(
+        self, security_id: Any, code: str, market: str, as_of: datetime,
+    ) -> dict[str, Any]:
+        """R4-P1-004：一次 UoW 会话补齐 §16 缺口字段。
+
+        每个来源独立 try——单个 repo 失败降级 UNKNOWN 并回滚会话，
+        不拖垮其余事实；无数据源的字段显式 NOT_AVAILABLE + reason。
+        """
+        facts: dict[str, Any] = {
+            "fundamental": _not_available("NO_FUNDAMENTAL_SOURCE"),
+            "evidence": _not_available("NO_EVIDENCE_READ_API"),
+        }
+        for field in (
+            "market_regime", "feature_eod", "latest_recall",
+            "latest_raw_opportunity", "latest_action",
+            "latest_entry_assessment", "attention_events", "data_quality",
+        ):
+            facts.setdefault(field, _not_available("SOURCE_NOT_BOUND"))
+        if security_id is None:
+            for field in (
+                "market_regime", "feature_eod", "latest_recall",
+                "latest_raw_opportunity", "latest_action",
+                "latest_entry_assessment", "attention_events", "data_quality",
+            ):
+                facts[field] = _not_available("SECURITY_UNKNOWN")
+            return facts
+
+        async def grab(field: str, fetch: Callable, transform: Callable) -> None:
+            try:
+                facts[field] = transform(await fetch())
+            except Exception as exc:  # noqa: BLE001 - 单来源失败不拖垮整包
+                facts[field] = _unknown(f"{type(exc).__name__}: {exc}")
+                try:
+                    await uow.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        async with self._uow_factory() as uow:
+            await grab(
+                "market_regime",
+                lambda: uow.features.latest_regime(),
+                lambda regime: (
+                    _not_available("NO_PUBLISHED_REGIME")
+                    if regime is None else _dump(regime)
+                ),
+            )
+            await grab(
+                "feature_eod",
+                lambda: uow.features.latest_security_feature(
+                    security_id, as_of=as_of,
+                ),
+                lambda view: (
+                    _not_available("NO_PUBLISHED_FEATURE_FOR_SECURITY")
+                    if view is None else _dump(view)
+                ),
+            )
+            await grab(
+                "latest_recall",
+                lambda: uow.recalls.read_results(
+                    recall_run_id=None, channel_code=None,
+                    limit=_FACT_LIMIT, cursor=None,
+                ),
+                lambda page: _match_security(page, market, code)
+                or _not_available("NOT_IN_LATEST_RECALL_RESULTS"),
+            )
+            await grab(
+                "latest_raw_opportunity",
+                lambda: uow.recalls.read_raw(
+                    recall_run_id=None, limit=_FACT_LIMIT, cursor=None,
+                ),
+                lambda page: _match_security(page, market, code)
+                or _not_available("NOT_IN_LATEST_RAW_PAGE"),
+            )
+            await grab(
+                "latest_action",
+                lambda: uow.actions.read_pipeline(security_id, limit=10),
+                _latest_action,
+            )
+            facts["latest_entry_assessment"] = (
+                facts["latest_action"].get("latest_entry") if isinstance(
+                    facts.get("latest_action"), dict,
+                ) else None
+            ) or _not_available("NO_ENTRY_ASSESSMENT")
+            await grab(
+                "attention_events",
+                lambda: uow.attention.open_events(codes=[code], limit=20),
+                lambda events: [
+                    _dump(event) for event in events
+                ] or _not_available("NO_OPEN_ATTENTION_EVENTS"),
+            )
+            await grab("data_quality", lambda: uow.reads.data_quality(), _dump)
+        return facts
+
+    async def _decision_bundle(
+        self, code: str, market: str,
+    ) -> tuple[dict | None, Any]:
         try:
             async with self._uow_factory() as uow:
                 security_id = await uow.reads.security_id_by_code(market, code)
                 if security_id is None:
-                    return None
-                return await uow.ai_imports.read_decision_state(security_id)
+                    return None, None
+                return (
+                    await uow.ai_imports.read_decision_state(security_id),
+                    security_id,
+                )
         except Exception:  # noqa: BLE001 - 上下文缺失降级为无决策，绝不 500
-            return None
+            return None, None
 
     async def _safe(self, fetch: Callable) -> Any:
         try:
