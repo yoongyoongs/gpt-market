@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -256,6 +257,202 @@ async def test_security_id_by_code_roundtrip() -> None:
     await engine.dispose()
     assert found == security_id
     assert missing is None
+
+# ---------- R4-P1-004 聚合完整事实包 ----------
+
+
+class _FakeFeatures:
+    def __init__(self, regime=None, feature=None):
+        self._regime = regime
+        self._feature = feature
+
+    async def latest_regime(self):
+        return self._regime
+
+    async def latest_security_feature(self, security_id, *, as_of):
+        return self._feature
+
+
+class _FakeRecalls:
+    def __init__(self, results=None, raw=None):
+        self._results = results
+        self._raw = raw
+
+    async def read_results(self, **kwargs):
+        return self._results
+
+    async def read_raw(self, **kwargs):
+        return self._raw
+
+
+class _FakeActions:
+    def __init__(self, pipeline=()):
+        self._pipeline = tuple(pipeline)
+
+    async def read_pipeline(self, security_id, limit=50):
+        return self._pipeline
+
+
+class _FakeAttention:
+    def __init__(self, events=()):
+        self._events = tuple(events)
+
+    async def open_events(self, *, codes=None, limit=100):
+        return list(self._events)
+
+
+class _FakeDqReads:
+    def __init__(self, security_id):
+        self._security_id = security_id
+
+    async def security_id_by_code(self, market, code):
+        return self._security_id
+
+    async def data_quality(self):
+        return {"latest_feature_run": None, "latest_revision_known_at": None}
+
+
+class _FactUow:
+    def __init__(self, reads, features=None, recalls=None, actions=None,
+                 attention=None, decisions=None):
+        self.reads = reads
+        self.features = features or _FakeFeatures()
+        self.recalls = recalls or _FakeRecalls()
+        self.actions = actions or _FakeActions()
+        self.attention = attention or _FakeAttention()
+        self.ai_imports = decisions or _FakeDecisionRepo(_bundle())
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+class _View:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def model_dump(self, mode="json"):
+        return dict(self._payload)
+
+
+class _Event:
+    def __init__(self, code):
+        self._code = code
+
+    def model_dump(self, mode="json"):
+        return {"code": self._code, "event_type": "STOP_HIT"}
+
+
+def _fact_service(security_id, uow):
+    def uow_factory():
+        return uow
+    return ReadEntryDecisionContextService(
+        uow_factory, _QuoteService(_Quote(9.5)), _StructureService(),
+        clock=lambda: NOW,
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_facts_populated() -> None:
+    """§16：一次响应带全 market_regime/feature_eod/recall/raw/action/
+    assessment/attention/data_quality；fundamental/evidence 显式
+    NOT_AVAILABLE + reason。"""
+    security_id = uuid4()
+    uow = _FactUow(
+        _FakeDqReads(security_id),
+        features=_FakeFeatures(
+            regime={"as_of": NOW.isoformat(), "regime": "PULLBACK"},
+            feature=_View({"ma20": 9.0}),
+        ),
+        recalls=_FakeRecalls(
+            results=SimpleNamespace(items=(
+                SimpleNamespace(market="SH", code="600000"),
+                SimpleNamespace(market="SZ", code="000001"),
+            )),
+            raw=SimpleNamespace(items=(
+                SimpleNamespace(market="SZ", code="000001"),
+            )),
+        ),
+        actions=_FakeActions([{
+            "raw_opportunity_id": uuid4(),
+            "action": {"action_id": uuid4(), "as_of": NOW},
+            "entries": ({"entry_assessment_id": uuid4()},),
+        }]),
+        attention=_FakeAttention([_Event("000001")]),
+    )
+    report = await _fact_service(security_id, uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["market_regime"]["regime"] == "PULLBACK"
+    assert report["feature_eod"]["ma20"] == 9.0
+    assert report["latest_recall"].code == "000001"
+    assert report["latest_raw_opportunity"].code == "000001"
+    assert report["latest_action"]["status"] == "AVAILABLE"
+    assert report["latest_entry_assessment"]["entry_assessment_id"]
+    assert report["attention_events"][0]["code"] == "000001"
+    assert "latest_feature_run" in report["data_quality"]
+    assert report["fundamental"] == {
+        "status": "NOT_AVAILABLE", "reason": "NO_FUNDAMENTAL_SOURCE",
+    }
+    assert report["evidence"]["reason"] == "NO_EVIDENCE_READ_API"
+    assert report["security"]["security_id"] == str(security_id)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_facts_security_unknown() -> None:
+    """security 查不到 → 缺口字段统一 SECURITY_UNKNOWN，绝不静默。"""
+    uow = _FactUow(_FakeDqReads(None))
+    report = await _fact_service(uuid4(), uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    for field in ("market_regime", "feature_eod", "latest_recall",
+                  "latest_action", "attention_events", "data_quality"):
+        assert report[field] == {
+            "status": "NOT_AVAILABLE", "reason": "SECURITY_UNKNOWN",
+        }
+    assert report["security"]["security_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_facts_partial_failure_isolated() -> None:
+    """单 repo 抛错 → 该字段 UNKNOWN + reason，其余事实照常补齐。"""
+    security_id = uuid4()
+
+    class _BoomRecalls:
+        async def read_results(self, **kwargs):
+            raise RuntimeError("recall db down")
+
+        async def read_raw(self, **kwargs):
+            raise RuntimeError("recall db down")
+
+    uow = _FactUow(
+        _FakeDqReads(security_id),
+        features=_FakeFeatures(regime={"regime": "RANGE"}),
+        recalls=_BoomRecalls(),
+    )
+    report = await _fact_service(security_id, uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["latest_recall"]["status"] == "UNKNOWN"
+    assert "RuntimeError" in report["latest_recall"]["reason"]
+    assert report["market_regime"]["regime"] == "RANGE"
+    assert report["data_quality"]["latest_feature_run"] is None
+    assert report["readiness"] == EntryReadiness.READY  # 主链路不受影响
+
+
+@pytest.mark.asyncio
+async def test_aggregate_facts_no_action_candidate() -> None:
+    security_id = uuid4()
+    uow = _FactUow(_FakeDqReads(security_id), actions=_FakeActions([]))
+    report = await _fact_service(security_id, uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["latest_action"]["status"] == "NOT_AVAILABLE"
+    assert report["latest_action"]["reason"] == "NO_ACTION_CANDIDATE"
+    assert report["latest_entry_assessment"]["reason"] == "NO_ENTRY_ASSESSMENT"
+
 
 # ---------- R4-P0-001 PIT guard ----------
 
