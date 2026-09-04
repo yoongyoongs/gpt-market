@@ -289,15 +289,44 @@ class _FakeFeatures:
 
 
 class _FakeRecalls:
-    def __init__(self, results=None, raw=None):
-        self._results = results
-        self._raw = raw
+    """R5-P1-006：Security-specific 读取——latest_recall_for_security /
+    latest_raw_opportunity_for_security（None = 无 Published run，
+    () = run 内无此券）。"""
 
-    async def read_results(self, **kwargs):
-        return self._results
+    def __init__(self, recall_items=(), raw_items=(), *,
+                 recall_missing=False, raw_missing=False):
+        self._recall_items = recall_items
+        self._raw_items = raw_items
+        self._recall_missing = recall_missing
+        self._raw_missing = raw_missing
 
-    async def read_raw(self, **kwargs):
-        return self._raw
+    async def latest_recall_for_security(self, *, market, code, limit=5):
+        if self._recall_missing:
+            raise RuntimeError("recall db down")
+        return None if self._recall_items is None else tuple(self._recall_items)
+
+    async def latest_raw_opportunity_for_security(self, *, market, code, limit=5):
+        if self._raw_missing:
+            raise RuntimeError("recall db down")
+        return None if self._raw_items is None else tuple(self._raw_items)
+
+
+class _Item(SimpleNamespace):
+    """ReadItem 替身：带 model_dump → 走真实 _dump 路径（dict 输出）。"""
+
+    def model_dump(self, mode="json"):
+        return dict(self.__dict__)
+
+
+class _FakeEvidence:
+    def __init__(self, views=(), *, error=None):
+        self._views = tuple(views)
+        self._error = error
+
+    async def retrieve_view(self, *, query):
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(views=self._views)
 
 
 class _FakeActions:
@@ -329,12 +358,13 @@ class _FakeDqReads:
 
 class _FactUow:
     def __init__(self, reads, features=None, recalls=None, actions=None,
-                 attention=None, decisions=None):
+                 attention=None, decisions=None, evidence=None):
         self.reads = reads
         self.features = features or _FakeFeatures()
         self.recalls = recalls or _FakeRecalls()
         self.actions = actions or _FakeActions()
         self.attention = attention or _FakeAttention()
+        self.evidence = evidence or _FakeEvidence()
         self.ai_imports = decisions or _FakeDecisionRepo(_bundle())
 
     async def __aenter__(self):
@@ -371,9 +401,9 @@ def _fact_service(security_id, uow):
 
 @pytest.mark.asyncio
 async def test_aggregate_facts_populated() -> None:
-    """§16：一次响应带全 market_regime/feature_eod/recall/raw/action/
-    assessment/attention/data_quality；fundamental/evidence 显式
-    NOT_AVAILABLE + reason。"""
+    """§16/§64：一次响应带全 market_regime/feature_eod/recall/raw/
+    action/assessment/attention/data_quality/evidence；仅 fundamental
+    显式 NOT_AVAILABLE + reason；recall/raw 为 Security-specific 结果。"""
     security_id = uuid4()
     uow = _FactUow(
         _FakeDqReads(security_id),
@@ -382,13 +412,8 @@ async def test_aggregate_facts_populated() -> None:
             feature=_View({"ma20": 9.0}),
         ),
         recalls=_FakeRecalls(
-            results=SimpleNamespace(items=(
-                SimpleNamespace(market="SH", code="600000"),
-                SimpleNamespace(market="SZ", code="000001"),
-            )),
-            raw=SimpleNamespace(items=(
-                SimpleNamespace(market="SZ", code="000001"),
-            )),
+            recall_items=(_Item(market="SZ", code="000001"),),
+            raw_items=(_Item(market="SZ", code="000001", known_at=NOW),),
         ),
         actions=_FakeActions([{
             "raw_opportunity_id": uuid4(),
@@ -396,14 +421,17 @@ async def test_aggregate_facts_populated() -> None:
             "entries": ({"entry_assessment_id": uuid4()},),
         }]),
         attention=_FakeAttention([_Event("000001")]),
+        evidence=_FakeEvidence(views=(_FakeEvidenceView(NOW),)),
     )
     report = await _fact_service(security_id, uow).execute(
         code="000001", market="SZ", as_of=NOW,
     )
     assert report["market_regime"]["regime"] == "PULLBACK"
     assert report["feature_eod"]["ma20"] == 9.0
-    assert report["latest_recall"].code == "000001"
-    assert report["latest_raw_opportunity"].code == "000001"
+    assert report["latest_recall"]["status"] == "AVAILABLE"
+    assert report["latest_recall"]["items"][0]["code"] == "000001"
+    assert report["latest_raw_opportunity"]["status"] == "AVAILABLE"
+    assert report["latest_raw_opportunity"]["items"][0]["code"] == "000001"
     assert report["latest_action"]["status"] == "AVAILABLE"
     assert report["latest_entry_assessment"]["entry_assessment_id"]
     assert report["attention_events"][0]["code"] == "000001"
@@ -411,8 +439,102 @@ async def test_aggregate_facts_populated() -> None:
     assert report["fundamental"] == {
         "status": "NOT_AVAILABLE", "reason": "NO_FUNDAMENTAL_SOURCE",
     }
-    assert report["evidence"]["reason"] == "NO_EVIDENCE_READ_API"
+    assert report["evidence"]["status"] == "AVAILABLE"
+    assert report["evidence"]["count"] == 1
+    assert report["evidence"]["items"][0]["record"]["claim_key"] == "eod.breakout"
     assert report["security"]["security_id"] == str(security_id)
+
+
+class _FakeEvidenceView:
+    """EvidenceRepositoryView 最小替身：record.known_at 参与 §59.3 聚合。"""
+
+    def __init__(self, known_at, claim_key="eod.breakout"):
+        self.record = SimpleNamespace(known_at=known_at, claim_key=claim_key)
+        self.match_type = "DIRECT"
+        self.conflict_status = "NONE"
+
+    def model_dump(self, mode="json"):
+        return {
+            "record": {
+                "claim_key": self.record.claim_key,
+                "known_at": self.record.known_at.isoformat(),
+            },
+            "match_type": self.match_type,
+            "conflict_status": self.conflict_status,
+        }
+
+
+@pytest.mark.asyncio
+async def test_evidence_known_at_aggregated_into_context() -> None:
+    """§64：Evidence record.known_at 必须纳入顶层 as_of/known_at 聚合，
+    绝不因是"历史事实"被当作过期丢弃。"""
+    late_known_at = NOW + timedelta(milliseconds=500)
+    uow = _FactUow(
+        _FakeDqReads(uuid4()),
+        evidence=_FakeEvidence(views=(_FakeEvidenceView(late_known_at),)),
+    )
+    report = await _fact_service(uuid4(), uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["as_of"] >= late_known_at
+    assert report["known_at"] >= late_known_at
+    assert report["stale"] is False
+
+
+@pytest.mark.asyncio
+async def test_evidence_missing_marks_not_available() -> None:
+    """§64：retrieve_view 无匹配 → NO_EVIDENCE_FOR_SECURITY，非占位。"""
+    uow = _FactUow(_FakeDqReads(uuid4()), evidence=_FakeEvidence(views=()))
+    report = await _fact_service(uuid4(), uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["evidence"] == {
+        "status": "NOT_AVAILABLE", "reason": "NO_EVIDENCE_FOR_SECURITY",
+    }
+
+
+@pytest.mark.asyncio
+async def test_evidence_failure_isolated() -> None:
+    """§64：Evidence 读失败降级 UNKNOWN，不拖垮其余事实与 readiness。"""
+    uow = _FactUow(
+        _FakeDqReads(uuid4()),
+        evidence=_FakeEvidence(error=RuntimeError("evidence db down")),
+    )
+    report = await _fact_service(uuid4(), uow).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["evidence"]["status"] == "UNKNOWN"
+    assert "RuntimeError" in report["evidence"]["reason"]
+    assert report["readiness"] == EntryReadiness.READY
+
+
+@pytest.mark.asyncio
+async def test_security_specific_recall_none_vs_empty() -> None:
+    """§64：None（无 Published run）与空（run 内无此券）区分报告，
+    禁止"取前 200 条客户端找，找不到当作不存在"。"""
+    no_run = _FactUow(_FakeDqReads(uuid4()), recalls=_FakeRecalls())
+    report = await _fact_service(uuid4(), no_run).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["latest_recall"] == {
+        "status": "NOT_AVAILABLE", "reason": "NOT_IN_LATEST_RECALL_RESULTS",
+    }
+    assert report["latest_raw_opportunity"] == {
+        "status": "NOT_AVAILABLE", "reason": "NOT_IN_LATEST_RAW_OPPORTUNITY",
+    }
+    stale_run = _FactUow(
+        _FakeDqReads(uuid4()),
+        recalls=_FakeRecalls(recall_items=None, raw_items=None),
+    )
+    report = await _fact_service(uuid4(), stale_run).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["latest_recall"] == {
+        "status": "NOT_AVAILABLE", "reason": "NO_PUBLISHED_RECALL_RUN",
+    }
+    assert report["latest_raw_opportunity"] == {
+        "status": "NOT_AVAILABLE", "reason": "NO_PUBLISHED_RECALL_RUN",
+    }
 
 
 @pytest.mark.asyncio
@@ -436,10 +558,10 @@ async def test_aggregate_facts_partial_failure_isolated() -> None:
     security_id = uuid4()
 
     class _BoomRecalls:
-        async def read_results(self, **kwargs):
+        async def latest_recall_for_security(self, *, market, code, limit=5):
             raise RuntimeError("recall db down")
 
-        async def read_raw(self, **kwargs):
+        async def latest_raw_opportunity_for_security(self, *, market, code, limit=5):
             raise RuntimeError("recall db down")
 
     uow = _FactUow(
