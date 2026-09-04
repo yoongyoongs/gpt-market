@@ -22,6 +22,9 @@ from app.v3.domain.intraday import (
 )
 
 _DEFAULT_PERIODS = ("1m", "5m", "15m", "60m", "day", "week")
+# R4-P1-006：ProviderManager 顺序 eastmoney → tencent；source 与首选一致
+# 视为直连主源，其余（tencent fallback / aggregate:* / cache:* / 组合）算 fallback
+_PRIMARY_SOURCE = "eastmoney"
 
 
 def map_quote_snapshot(quote: Any, as_of: datetime) -> IntradayQuoteSnapshot:
@@ -126,6 +129,15 @@ class IntradayMarketDataService:
                 reason=f"{type(exc).__name__}: {exc}",
                 precision="UNKNOWN",
             )
+        # R4-P1-006：来源/质量信息逐周期透传（§18.1），缓存/聚合可辨
+        provenance = {
+            "source": result.source,
+            "upstream_source": result.timestamp_source,
+            "known_at": result.data_timestamp,
+            "quality": result.quality,
+            "confidence": result.confidence,
+            "fallback_used": result.source != _PRIMARY_SOURCE,
+        }
         bars = [
             bar for bar in result.klines if bar.timestamp <= as_of
         ]
@@ -133,7 +145,7 @@ class IntradayMarketDataService:
             return IntradayBarSeries(
                 period=period, status="UNKNOWN",
                 reason="NO_BARS_KNOWN_AT_AS_OF", stale=result.stale,
-                precision="UNKNOWN",
+                precision="UNKNOWN", **provenance,
             )
         mapped = tuple(
             IntradayBar(
@@ -151,4 +163,5 @@ class IntradayMarketDataService:
             stale=result.stale, precision="LIMITED",
             first_bar_time=bars[0].timestamp,
             last_bar_time=bars[-1].timestamp,
+            **provenance,
         )

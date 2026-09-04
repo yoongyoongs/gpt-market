@@ -139,6 +139,46 @@ async def test_intraday_bars_isolate_provider_failure_per_period() -> None:
 
 
 @pytest.mark.asyncio
+async def test_intraday_bars_carry_per_period_provenance() -> None:
+    """R4-P1-006 §18.1：每周期 source/upstream/known_at/quality/
+    confidence/fallback_used——直连主源与 aggregate/缓存 fallback 可辨。"""
+    class _MixedProvider:
+        async def get_kline(self, code, period, limit, adjust="qfq"):
+            if period == "60m":
+                source, ts_source = "eastmoney", "eastmoney"
+            elif period == "15m":
+                source, ts_source = "tencent", "tencent"
+            else:  # week：日 K 聚合
+                source, ts_source = "aggregate:day:tencent", "fetch_time"
+            return KlineResult(
+                code=code, period=period, klines=[_bar(5)],
+                source=source, source_timestamp=NOW,
+                data_timestamp=NOW - timedelta(seconds=2),
+                server_timestamp=NOW, age_seconds=2.0,
+                stale=False, quality="LIVE", timestamp_source=ts_source,
+                snapshot_id=f"snap-{period}", confidence="MEDIUM",
+            )
+
+    service = IntradayMarketDataService(_MixedProvider())
+    result = await service.get_intraday_bars(
+        "000001", periods=("60m", "15m", "week"), as_of=NOW,
+    )
+    hour = result.periods["60m"]
+    assert hour.source == "eastmoney"
+    assert hour.upstream_source == "eastmoney"
+    assert hour.fallback_used is False
+    assert hour.known_at == NOW - timedelta(seconds=2)
+    assert hour.quality == "LIVE" and hour.confidence == "MEDIUM"
+    fifteen = result.periods["15m"]
+    assert fifteen.source == "tencent"
+    assert fifteen.fallback_used is True
+    week = result.periods["week"]
+    assert week.source == "aggregate:day:tencent"
+    assert week.upstream_source == "fetch_time"
+    assert week.fallback_used is True
+
+
+@pytest.mark.asyncio
 async def test_intraday_bars_unknown_when_no_bars_known_at_as_of() -> None:
     provider = _FakeKlineProvider({"5m": [_bar(0), _bar(-5)]})
     service = IntradayMarketDataService(provider)
