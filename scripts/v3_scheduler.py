@@ -41,6 +41,7 @@ from app.v3.application.intraday_overlay import (
     IntradayScannerService,
 )
 from app.v3.application.deep_market_data import DeepMarketDataService
+from app.v3.application.intraday_event_poll import IntradayEventPollService
 from app.v3.jobs.intraday_loop import IntradayTriggerLoop, build_health_sink
 from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
@@ -829,6 +830,14 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
 
     # R5-P1-007/§65：拆分 cadence（禁单一 300s）+ heartbeat 持久化
     # （operational_health_events，API/Dashboard 跨进程可读）
+    # R5-P1-008/§31：盘中事件轮询（NEW_EVIDENCE / STRUCTURE_CHANGED）
+    # 接入 Evidence lane——record_new_evidence 不再只有测试调用方
+    event_poll = IntradayEventPollService(
+        uow_factory,
+        AttentionEngineService(uow_factory),
+        DeepMarketDataService(provider_manager, source="legacy-provider"),
+        clock=lambda: datetime.now(timezone.utc),
+    )
     return IntradayTriggerLoop(
         uow_factory,
         IntradayMarketDataService(provider_manager),
@@ -841,6 +850,7 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
         evidence_interval=float(os.getenv("V3_EVIDENCE_INTERVAL_SECONDS", "600")),
         clock=lambda: datetime.now(timezone.utc),
         fast_lane=fast_lane,
+        evidence_task=event_poll.execute,
         health_snapshot=provider_manager.health,
         health_sink=build_health_sink(
             uow_factory,

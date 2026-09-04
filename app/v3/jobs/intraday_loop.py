@@ -304,6 +304,38 @@ class IntradayTriggerLoop:
             summary["evaluated"] += 1
             summary["created"] += len(getattr(evaluation, "created", ()) or ())
             summary["skipped"] += getattr(evaluation, "skipped", 0) or 0
+            # R5-P1-010/§33：后台常驻同样评估 typed Entry Trigger/Cancel——
+            # WAIT_ENTRY 计划的价格/结构 Trigger 满足时自动产生
+            # ENTRY_TRIGGER_MET（"等买点，到了系统提醒"），不再只靠
+            # on-demand 上下文按需评估。
+            plan_payload = item.get("plan")
+            if isinstance(plan_payload, dict) and (
+                plan_payload.get("triggers") or plan_payload.get("cancels")
+            ):
+                try:
+                    trigger_eval = (
+                        await self._engine.evaluate_entry_trigger_cancel(
+                            entry_plan_id=item["entry_plan_id"],
+                            security_id=item["security_id"],
+                            code=item["code"],
+                            market=item["market"],
+                            plan=plan_payload,
+                            quote=quote,
+                            as_of=as_of,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 - 单计划引擎失败不阻断其余
+                    summary["engine_failed"] += 1
+                    continue
+                summary["trigger_cancel_evaluated"] = (
+                    summary.get("trigger_cancel_evaluated", 0) + 1
+                )
+                summary["created"] += len(
+                    getattr(trigger_eval, "created", ()) or ()
+                )
+                summary["skipped"] += (
+                    getattr(trigger_eval, "skipped", 0) or 0
+                )
         return summary
 
     # ---------- 常驻循环 ----------
