@@ -137,3 +137,75 @@ async def test_empty_history_is_explicit() -> None:
     assert report["degraded"] is False
     assert report["consecutive_errors"] == 0
     assert report["last_error"] is None
+
+
+# ---------- §65 HTTP 验收：状态接口可见 degraded/last_error/连续错误 ----------
+
+
+def _http_client(monkeypatch, rows):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.v3 import router
+    from app.container import container
+
+    class _V3:
+        enabled = True
+
+        def uow(self):
+            class _Strategies:
+                async def read_health_events(self, component, limit):
+                    return rows
+
+            class _Uow:
+                strategies = _Strategies()
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *exc):
+                    return False
+
+            return _Uow()
+
+    # monkeypatch 保证请求期间替换生效、用后自动还原
+    monkeypatch.setattr(container, "v3", _V3())
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_http_status_endpoint_shows_three_fast_lane_failures(monkeypatch) -> None:
+    """§65：连续 3 次 Fast Lane 失败 → HTTP GET /operations/worker-heartbeat
+    可见 degraded=true / last_error / consecutive_errors >= 3。"""
+    rows = [
+        _row("intraday-trigger-loop", "DEGRADED", NOW, {
+            "consecutive_errors": 3, "last_error_type": "RuntimeError",
+            "last_fast_lane_error": "RuntimeError: scan down",
+            "last_fast_lane_status": "ERROR",
+            "quote_expected": 5432, "quote_actual": 0, "quote_coverage": 0.0,
+            "active_pool_size": 12, "candidate_count": 0, "deep_count": 0,
+            "last_plan_count": 2,
+        }),
+    ]
+    client = _http_client(monkeypatch, rows)
+    response = client.get("/api/v3/operations/worker-heartbeat")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["degraded"] is True
+    assert body["consecutive_errors"] >= 3
+    assert body["last_error"] == "RuntimeError: scan down"
+    view = body["capabilities"]["intraday-trigger-loop"]
+    assert view["quote_coverage"] == 0.0
+    assert view["active_pool_size"] == 12
+
+
+def test_http_healthy_worker_not_degraded(monkeypatch) -> None:
+    client = _http_client(monkeypatch, [
+        _row("intraday-trigger-loop", "HEALTHY", NOW, _LOOP_META_HEALTHY),
+    ])
+    response = client.get("/api/v3/operations/worker-heartbeat")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["degraded"] is False
+    assert body["consecutive_errors"] == 0
