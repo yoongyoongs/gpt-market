@@ -60,6 +60,11 @@ def _client(*, public_market_read: bool = True) -> TestClient:
         "/api/v3/market-regime",
         "/api/v3/recalls/misses",
         "/api/v3/evidence/SECURITY/1",
+        "/api/v3/evidence/PUBLIC_INDUSTRY/power",
+        "/api/v3/evidence/PUBLIC_POLICY/relaunch",
+        "/api/v3/evidence/POSITION/1",
+        "/api/v3/evidence/ACCOUNT/1",
+        "/api/v3/evidence/PRIVATE_CASE/1",
         "/api/v3/stocks/600000/evidence",
         "/api/v3/stocks/600000/context-pack",
         "/api/v3/context-packs/1",
@@ -116,6 +121,12 @@ PRIVATE_READ_PATHS = (
     # R3-P1-004：按 UUID 读任意 ContextPack 可能命中 POSITION 主体
     # （含账户/持仓事实）——不得匿名，回归 MARKET_READ
     "/api/v3/context-packs/1",
+    # R4-P1-005：MarketReview 属 AI Review 语义，回归 MARKET_READ
+    "/api/v3/market-reviews",
+    # R4-P1-005：allowlist 之外的 Evidence subject_type 一律认证
+    "/api/v3/evidence/POSITION/1",
+    "/api/v3/evidence/ACCOUNT/1",
+    "/api/v3/evidence/PRIVATE_CASE/1",
 )
 
 
@@ -123,13 +134,15 @@ PUBLIC_MARKET_PATHS = (
     "/api/v3/market-regime",
     "/api/v3/recalls/misses",
     "/api/v3/evidence/SECURITY/1",
+    # R4-P1-005：Public Subject Type Allowlist
+    "/api/v3/evidence/PUBLIC_INDUSTRY/power",
+    "/api/v3/evidence/PUBLIC_POLICY/relaunch",
     "/api/v3/stocks/600000/evidence",
     # R3-P0-003：GET 已改纯读（SECURITY-only 主体），保持公开
     "/api/v3/stocks/600000/context-pack",
     "/api/v3/market/intraday-status",
     "/api/v3/health/data-quality",
     "/api/v3/raw-opportunities",
-    "/api/v3/market-reviews",
     # R3-P0-003：GET 已改纯读（按 id/candidate_set 读已有 pack）
     "/api/v3/candidates/comparison-pack",
 )

@@ -58,6 +58,8 @@ def bind_v3_principal(command: Any, principal: V3Principal):
 # Public Market READ Allowlist —— 只允许纯市场事实匿名读取。
 # Watchlist/Decision/EntryPlan/Task/Strategy/Release/Performance/Context 决策面
 # 等 GET 一律需要认证（有效 token 全部持有 MARKET_READ）。
+# R4-P1-005：/market-reviews 属 AI Review 语义（agent_identity/
+# context_pack_id/evidence_ids/AI payload），撤出公开列表，回归 MARKET_READ。
 PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
     {
         "/universe/features",
@@ -68,17 +70,17 @@ PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
         "/recalls",
         "/recalls/misses",
         "/raw-opportunities",
-        "/market-reviews",
         "/market/intraday-status",
         "/health/data-quality",
     }
 )
-PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = (
-    "/evidence/",  # /evidence/{subject_type}/{subject_id}
-    # R3-P1-004：/context-packs/{id} 是按 UUID 读任意 ContextPack——Domain
-    # 支持 subject_type=POSITION（含账户/持仓事实），不得作为公开市场
-    # API；该路径回归认证读取（MARKET_READ），公开股票上下文只走
-    # SECURITY-only 的 GET /stocks/{code}/context-pack。
+# R4-P1-005：/evidence/ 不再任意 prefix 公开——subject_type 是自由字符串，
+# 未来新增 POSITION/ACCOUNT 等 subject 不许自动变公开；改用下方明确
+# allowlist。/context-packs/{id} 同理回归认证（R3-P1-004）。
+PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = ()
+# 只有明确"公开语义"的 Evidence subject_type 匿名可读；其余一律认证。
+PUBLIC_EVIDENCE_SUBJECT_TYPES: frozenset[str] = frozenset(
+    {"SECURITY", "PUBLIC_INDUSTRY", "PUBLIC_POLICY"}
 )
 PUBLIC_MARKET_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
     ("stocks", "*", "evidence"),
@@ -93,6 +95,12 @@ def is_public_market_read(path: str) -> bool:
     if path.startswith(PUBLIC_MARKET_READ_PREFIXES):
         return True
     segments = tuple(segment for segment in path.split("/") if segment)
+    if (
+        len(segments) == 3
+        and segments[0] == "evidence"
+        and segments[1].upper() in PUBLIC_EVIDENCE_SUBJECT_TYPES
+    ):
+        return True
     for template in PUBLIC_MARKET_READ_TEMPLATES:
         if len(segments) == len(template) and all(
             part == "*" or part == segment
