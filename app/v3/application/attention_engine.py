@@ -128,6 +128,29 @@ class AttentionEngineService:
         stop = _price(plan.get("stop_loss"))
         target = _price(plan.get("take_profit"))
         drafts: list[IntradayAttentionEvent] = []
+        # R4-P1-002：停牌 / stale / 不可信（R4-P0-001 未来事实降级）Quote
+        # 绝不产生确定性 STOP_HIT/TARGET_HIT/NEAR——价格触发整体跳过，
+        # 只发 DATA_QUALITY_DEGRADED（on-demand 与常驻 Loop 同一防线）。
+        suspended = bool(getattr(quote, "suspended", False))
+        stale = bool(getattr(quote, "stale", False))
+        quality = getattr(quote, "quality", None) or ""
+        untrusted = quality == "UNTRUSTED"
+        if suspended or stale or untrusted:
+            reason = (
+                "SUSPENDED" if suspended
+                else "UNTRUSTED_QUALITY" if untrusted
+                else "STALE_QUOTE"
+            )
+            drafts.append(self._draft(
+                event_type=AttentionEventType.DATA_QUALITY_DEGRADED,
+                dedupe_key=f"DATA_QUALITY_DEGRADED:{market}:{code}",
+                severity="WARNING",
+                facts={"reason": reason, "quality": quality,
+                       "suspended": suspended, "stale": stale,
+                       "last_price": last_price},
+                as_of=as_of, known_at=known_at, code=code, market=market,
+            ))
+            return await self._emit(drafts)
         if last_price is not None and stop is not None:
             if last_price <= stop:
                 drafts.append(self._draft(
