@@ -168,7 +168,12 @@ class ReadEntryDecisionContextService:
     async def execute(
         self, code: str, market: str, *, as_of: datetime
     ) -> dict[str, Any]:
-        known_at = self._clock()
+        # R5-P0-001/§8.1：as_of 是本次请求起点（request_started_at，T0）。
+        # 顶层 known_at 绝不在 fetch 前敲定——聚合完成后按 §7.1 重算：
+        # context_as_of = max(T0, 所有 component known_at)；
+        # context_known_at = max(所有 component known_at, 聚合完成时刻)。
+        request_started_at = as_of
+        component_known: list[datetime] = [request_started_at]
         bundle, security_id = await self._decision_bundle(code, market)
         quote = await self._safe(lambda: self._quote_service.get_quote_snapshot(
             code, as_of=as_of,
@@ -176,7 +181,18 @@ class ReadEntryDecisionContextService:
         structure = await self._safe(lambda: self._structure_service.get_snapshot(
             code, as_of=as_of,
         ))
-        facts = await self._eod_facts(security_id, code, market, as_of)
+        facts, fact_known_ats = await self._eod_facts(
+            security_id, code, market, as_of,
+        )
+        component_known.extend(fact_known_ats)
+        quote_known = getattr(quote, "known_at", None) if quote is not None else None
+        if quote_known is not None:
+            component_known.append(quote_known)
+        structure_known = getattr(structure, "known_at", None)
+        if structure is not None and structure_known is not None:
+            component_known.append(structure_known)
+        final_as_of = max(component_known)
+        final_known_at = max([*component_known, self._clock()])
 
         decision = None
         plan_row = None
@@ -227,8 +243,8 @@ class ReadEntryDecisionContextService:
             "mode": "ENTRY",
             "code": code,
             "market": market,
-            "as_of": as_of,
-            "known_at": known_at,
+            "as_of": final_as_of,
+            "known_at": final_known_at,
             "source": _SOURCE,
             "coverage": "L1" if quote is not None else "NONE",
             "stale": stale,
@@ -269,11 +285,13 @@ class ReadEntryDecisionContextService:
 
     async def _eod_facts(
         self, security_id: Any, code: str, market: str, as_of: datetime,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[datetime]]:
         """R4-P1-004：一次 UoW 会话补齐 §16 缺口字段。
 
         每个来源独立 try——单个 repo 失败降级 UNKNOWN 并回滚会话，
         不拖垮其余事实；无数据源的字段显式 NOT_AVAILABLE + reason。
+        返回 (facts, known_ats)：known_ats 供顶层 §59.3 聚合
+        context.known_at >= max(component known_at)。
         """
         facts: dict[str, Any] = {
             "fundamental": _not_available("NO_FUNDAMENTAL_SOURCE"),
@@ -285,6 +303,7 @@ class ReadEntryDecisionContextService:
             "latest_entry_assessment", "attention_events", "data_quality",
         ):
             facts.setdefault(field, _not_available("SOURCE_NOT_BOUND"))
+        known_ats: list[datetime] = []
         if security_id is None:
             for field in (
                 "market_regime", "feature_eod", "latest_recall",
@@ -292,11 +311,15 @@ class ReadEntryDecisionContextService:
                 "latest_entry_assessment", "attention_events", "data_quality",
             ):
                 facts[field] = _not_available("SECURITY_UNKNOWN")
-            return facts
+            return facts, known_ats
 
         async def grab(field: str, fetch: Callable, transform: Callable) -> None:
             try:
-                facts[field] = transform(await fetch())
+                raw = await fetch()
+                known = getattr(raw, "known_at", None)
+                if _aware(known) is not None:
+                    known_ats.append(known)
+                facts[field] = transform(raw)
             except Exception as exc:  # noqa: BLE001 - 单来源失败不拖垮整包
                 facts[field] = _unknown(f"{type(exc).__name__}: {exc}")
                 try:
@@ -358,7 +381,7 @@ class ReadEntryDecisionContextService:
                 ] or _not_available("NO_OPEN_ATTENTION_EVENTS"),
             )
             await grab("data_quality", lambda: uow.reads.data_quality(), _dump)
-        return facts
+        return facts, known_ats
 
     async def _decision_bundle(
         self, code: str, market: str,

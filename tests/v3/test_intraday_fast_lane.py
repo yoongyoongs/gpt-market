@@ -278,3 +278,23 @@ async def test_loop_runs_fast_lane_once_and_keeps_summary() -> None:
     assert bare.run_fast_lane_once.__self__ is not None
     unwired = await bare.run_fast_lane_once()
     assert unwired["status"] == "NOT_WIRED"
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_batch_delay_not_stale() -> None:
+    """R5-P0-001 §59.4 Case T4：批量 Quote 在 loop_start 后 1-5 秒陆续
+    返回是正常网络耗时——绝不因此判 stale/FUTURE，全部正常参与 Scanner。"""
+    quotes = (
+        _quote(
+            "000001", volume_ratio=2.5,
+            server_timestamp=NOW + timedelta(seconds=5),
+        ),
+        _quote("600000", server_timestamp=NOW + timedelta(seconds=2)),
+    )
+    provider = _FakeProvider(quotes, index=_quote("000001", 3000.0))
+    service = _service(provider, _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "AVAILABLE"
+    assert report["stale_quote_count"] == 0
+    assert report["candidate_count"] == 1
+    assert report["candidates"][0]["code"] == "000001"

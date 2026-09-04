@@ -98,8 +98,11 @@ class IntradayBarSeries(V3Contract):
     # 15m 实际 Tencent fallback / week 实际 aggregate:day:tencent"。
     # source = 数据取得路径（KlineResult.source，如 aggregate:day:tencent）；
     # upstream_source = 时戳来源（timestamp_source：eastmoney/tencent/fetch_time）。
+    # R5-P2-014：event_time=市场事件时点（data_timestamp），
+    # known_at=系统实际获得事实时点（server_timestamp），两者不得混用。
     source: str | None = None
     upstream_source: str | None = None
+    event_time: datetime | None = None
     known_at: datetime | None = None
     quality: str | None = None
     confidence: str | None = None

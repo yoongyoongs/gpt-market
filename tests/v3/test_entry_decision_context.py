@@ -226,6 +226,21 @@ async def test_response_carries_point_in_time_fields() -> None:
     assert report["plan_payload"]["entry_mode"] == "PULLBACK_ENTRY"
 
 
+@pytest.mark.asyncio
+async def test_context_as_of_covers_component_known_at() -> None:
+    """R5-P0-001 §59.1/§59.3 Case T1/T3：请求过程中刚获得的 Quote
+    （known_at = T0 + 0.12s）不判 FUTURE，且 context.as_of / known_at
+    必须 >= 所有 component known_at。"""
+    quote = _Quote(9.5)
+    quote.known_at = NOW + timedelta(milliseconds=120)
+    report = await _service(quote, _bundle()).execute(
+        code="000001", market="SZ", as_of=NOW,
+    )
+    assert report["as_of"] >= quote.known_at
+    assert report["known_at"] >= quote.known_at
+    assert report["stale"] is False
+
+
 # ---------- PostgreSQL 集成 ----------
 
 DATABASE_URL = os.getenv("V3_TEST_DATABASE_URL")
