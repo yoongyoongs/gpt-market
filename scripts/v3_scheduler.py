@@ -41,7 +41,7 @@ from app.v3.application.intraday_overlay import (
     IntradayScannerService,
 )
 from app.v3.application.deep_market_data import DeepMarketDataService
-from app.v3.jobs.intraday_loop import IntradayTriggerLoop
+from app.v3.jobs.intraday_loop import IntradayTriggerLoop, build_health_sink
 from app.v3.application.evaluate_evidence_recall_channels import (
     evidence_recall_channels,
 )
@@ -827,15 +827,26 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
         except Exception:
             return False
 
+    # R5-P1-007/§65：拆分 cadence（禁单一 300s）+ heartbeat 持久化
+    # （operational_health_events，API/Dashboard 跨进程可读）
     return IntradayTriggerLoop(
         uow_factory,
         IntradayMarketDataService(provider_manager),
         AttentionEngineService(uow_factory),
         _trading_day,
-        interval_seconds=float(os.getenv("V3_INTRADAY_INTERVAL_SECONDS", "300")),
+        trigger_interval=float(os.getenv("V3_TRIGGER_INTERVAL_SECONDS", "45")),
+        fast_lane_interval=float(
+            os.getenv("V3_FASTLANE_INTERVAL_SECONDS", "90")
+        ),
+        evidence_interval=float(os.getenv("V3_EVIDENCE_INTERVAL_SECONDS", "600")),
         clock=lambda: datetime.now(timezone.utc),
         fast_lane=fast_lane,
         health_snapshot=provider_manager.health,
+        health_sink=build_health_sink(
+            uow_factory,
+            environment=os.getenv("V3_ENVIRONMENT", "production"),
+            clock=lambda: datetime.now(timezone.utc),
+        ),
     ), provider_manager
 
 

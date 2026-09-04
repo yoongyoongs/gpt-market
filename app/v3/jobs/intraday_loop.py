@@ -3,19 +3,26 @@
 RT-01~03 的盘中能力此前只有 API/MCP 按需拉取——没人访问就没数据，
 AttentionEvent 的盘中评估没有触发点。本循环补上确定性触发：
 
-- 交易时段（XSHG 交易日 + 09:30-11:30 / 13:00-15:00 CST）内每
-  V3_INTRADAY_INTERVAL_SECONDS（默认 300，保守频率）评估一轮；
+- 交易时段（XSHG 交易日 + 09:30-11:30 / 13:00-15:00 CST）内按任务
+  独立 due-time 评估（R5-P1-007/§65 禁止单一 300s 控制所有任务）：
+    * Entry/Stop/Target Trigger：默认 45s（30–60s）；
+    * 全市场 Quote/Overlay/Scanner（Fast Lane）：默认 90s（30–120s）；
+    * Intraday Evidence：默认 600s（5–15min，任务本体由 R5-08 接线）；
 - 每轮：各 decision 最新 plan 的 stop/target × 实时 quote →
   AttentionEngineService.evaluate_entry_plan_levels（去抖由 engine 负责）；
 - 行情失败/quote 缺失：跳过该计划并如实计数，绝不伪造价格；
-- 不产生 Trade、不改 Decision——只落 AttentionEvent（engine append-only）。
+- 不产生 Trade、不改 Decision——只落 AttentionEvent（engine append-only）；
+- R4-P2-008：失败绝不静默——heartbeat 记录成功/错误时间线；
+- R5-P1-007/§65：heartbeat 不再只活在本进程内存——可选 health_sink
+  把心跳（含 per-lane 连续错误、quote 覆盖、池/候选/Deep 计数）节流
+  持久化到 operational_health_events，API/Dashboard 进程可读。
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import Any, Protocol
 
 from app.utils.time import SHANGHAI
@@ -27,6 +34,16 @@ TRADING_SESSIONS: tuple[tuple[time, time], ...] = (
     (time(13, 0), time(15, 0)),
 )
 IDLE_POLL_SECONDS = 60.0
+# R5-P1-007/§65：各任务独立 cadence（§65 冻结区间中值；禁单一 300s）
+DEFAULT_TRIGGER_INTERVAL = 45.0    # 30–60s
+DEFAULT_FASTLANE_INTERVAL = 90.0   # 30–120s
+DEFAULT_EVIDENCE_INTERVAL = 600.0  # 5–15min
+# heartbeat 持久化节流：同状态最多每 30s 落一条（错误强制落）
+HEARTBEAT_PERSIST_SECONDS = 30.0
+# Fast Lane 这些结局按"该轮失败"计（异常同样计）——部分市场可用不算失败
+_FASTLANE_FAILED_STATUSES = {"QUOTE_FAILED", "UNAVAILABLE_FOR_FULL_MARKET_SCAN"}
+# §65 验收阈值：连续失败达到 3 次，HTTP 状态接口必须可见 degraded
+DEGRADED_ERROR_THRESHOLD = 3
 
 
 def in_trading_session(
@@ -63,18 +80,29 @@ class IntradayTriggerLoop:
         engine: _AttentionEngine,
         is_trading_day: Callable[..., bool],
         *,
-        interval_seconds: float = 300.0,
+        trigger_interval: float = DEFAULT_TRIGGER_INTERVAL,
+        fast_lane_interval: float = DEFAULT_FASTLANE_INTERVAL,
+        evidence_interval: float = DEFAULT_EVIDENCE_INTERVAL,
         clock: Callable[[], datetime] | None = None,
         fast_lane: Any = None,
+        evidence_task: Callable[[], Any] | None = None,
         health_snapshot: Callable[[], dict] | None = None,
+        health_sink: Callable[[dict], Any] | None = None,
     ) -> None:
-        if interval_seconds <= 0:
-            raise ValueError("interval_seconds must be positive")
+        for name, value in (
+            ("trigger_interval", trigger_interval),
+            ("fast_lane_interval", fast_lane_interval),
+            ("evidence_interval", evidence_interval),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
         self._uow_factory = uow_factory
         self._quote_service = quote_service
         self._engine = engine
         self._is_trading_day = is_trading_day
-        self._interval = interval_seconds
+        self._trigger_interval = trigger_interval
+        self._fast_lane_interval = fast_lane_interval
+        self._evidence_interval = evidence_interval
         self._clock = clock or (
             lambda: datetime.now(datetime.now().astimezone().tzinfo)
         )
@@ -82,22 +110,39 @@ class IntradayTriggerLoop:
         # 与计划价格触发同一常驻循环；None 时退回纯 plan-trigger 模式。
         self._fast_lane = fast_lane
         self.last_fast_lane_summary: dict | None = None
+        # R5-P1-007/§65：Intraday Evidence 任务槽（R5-08 接线本体）。
+        self._evidence_task = evidence_task
         # R4-P2-008：循环失败绝不静默——heartbeat 记录成功/错误时间线，
         # 让"Worker 连续失败 2 小时但 Dashboard 看着在线"不可能再发生。
+        # R5-P1-007/§65：per-lane 连续错误 + Fast Lane 全市场覆盖/池计数
+        # 全部入 heartbeat；consecutive_errors = 各 lane 最大值。
         self.heartbeat: dict[str, Any] = {
             "last_success_at": None,
             "last_error_at": None,
             "last_error_type": None,
             "consecutive_errors": 0,
+            "trigger_consecutive_errors": 0,
+            "fast_lane_consecutive_errors": 0,
+            "evidence_consecutive_errors": 0,
             "last_plan_count": None,
             "last_evaluated_count": None,
             "last_quote_failed": None,
             "last_engine_failed": None,
             "last_fast_lane_status": None,
             "last_fast_lane_error": None,
+            "quote_expected": None,
+            "quote_actual": None,
+            "quote_coverage": None,
+            "active_pool_size": None,
+            "candidate_count": None,
+            "deep_count": None,
             "provider_health": None,
         }
         self._health_snapshot = health_snapshot
+        self._health_sink = health_sink
+        self._last_health_persist: datetime | None = None
+
+    # ---------- heartbeat 记账 ----------
 
     def _record_success(self, summary: dict) -> None:
         self.heartbeat.update({
@@ -106,20 +151,86 @@ class IntradayTriggerLoop:
             "last_evaluated_count": summary.get("evaluated"),
             "last_quote_failed": summary.get("quote_failed"),
             "last_engine_failed": summary.get("engine_failed"),
-            "consecutive_errors": 0,
+            "trigger_consecutive_errors": 0,
         })
         if self._health_snapshot is not None:
             try:
                 self.heartbeat["provider_health"] = self._health_snapshot()
             except Exception:  # noqa: BLE001 - 健康快照失败不阻断主循环
                 pass
+        self._sync_overall_errors()
 
-    def _record_error(self, exc: BaseException) -> None:
+    def _record_error(self, exc: BaseException, *, lane: str = "trigger") -> None:
         self.heartbeat.update({
             "last_error_at": self._clock().isoformat(),
             "last_error_type": type(exc).__name__,
-            "consecutive_errors": self.heartbeat["consecutive_errors"] + 1,
+            f"{lane}_consecutive_errors":
+                self.heartbeat[f"{lane}_consecutive_errors"] + 1,
         })
+        self._sync_overall_errors()
+
+    def _sync_overall_errors(self) -> None:
+        """§65：overall = 各 lane 连续错误最大值——单一 lane 连续失败
+        不被另一 lane 的成功掩盖（连续 3 次 Fast Lane 失败必须可见）。"""
+        self.heartbeat["consecutive_errors"] = max(
+            self.heartbeat["trigger_consecutive_errors"],
+            self.heartbeat["fast_lane_consecutive_errors"],
+            self.heartbeat["evidence_consecutive_errors"],
+        )
+
+    def _record_fast_lane(self, summary: dict) -> None:
+        """Fast Lane 一轮结果入 heartbeat（§65 必填字段全覆盖）。"""
+        status = summary.get("status")
+        self.heartbeat.update({
+            "last_fast_lane_status": status,
+            "last_fast_lane_error": summary.get("quote_error"),
+            "quote_expected": summary.get("quote_expected"),
+            "quote_actual": summary.get("quote_actual"),
+            "quote_coverage": summary.get("quote_coverage"),
+            "active_pool_size": summary.get("pool_size"),
+            "candidate_count": summary.get("candidate_count"),
+            "deep_count": len(summary.get("deep") or ()),
+        })
+        if status in _FASTLANE_FAILED_STATUSES:
+            self.heartbeat["fast_lane_consecutive_errors"] += 1
+            self.heartbeat["last_error_at"] = self._clock().isoformat()
+            self.heartbeat["last_error_type"] = f"FAST_LANE_{status}"
+        else:
+            self.heartbeat["fast_lane_consecutive_errors"] = 0
+        self._sync_overall_errors()
+
+    def _record_evidence(self, summary: dict) -> None:
+        self.heartbeat["last_evidence_status"] = summary.get("status")
+        self.heartbeat["evidence_consecutive_errors"] = (
+            0 if summary.get("status") == "AVAILABLE" else
+            self.heartbeat["evidence_consecutive_errors"] + 1
+        )
+        self._sync_overall_errors()
+
+    # ---------- heartbeat 持久化（跨进程可见，R5-P1-007/§65） ----------
+
+    async def _persist_health(self, *, force: bool = False) -> None:
+        """节流写心跳：同状态最多每 30s 一条；错误轮强制落库。
+        落库失败绝不阻断主循环（心跳丢失好过 Worker 停摆）。"""
+        if self._health_sink is None:
+            return
+        now = self._clock()
+        if (
+            not force and self._last_health_persist is not None
+            and (now - self._last_health_persist).total_seconds()
+            < HEARTBEAT_PERSIST_SECONDS
+        ):
+            return
+        self._last_health_persist = now
+        try:
+            await self._health_sink(dict(self.heartbeat))
+            self.heartbeat.pop("last_health_persist_error", None)
+        except Exception as exc:  # noqa: BLE001 - 心跳落库失败不阻断主循环
+            self.heartbeat["last_health_persist_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    # ---------- 单轮任务 ----------
 
     async def run_fast_lane_once(self) -> dict:
         """单轮 Fast Lane：全市场扫描 → 池 → Deep → Attention（§28 链）。"""
@@ -133,10 +244,22 @@ class IntradayTriggerLoop:
             self.heartbeat["last_fast_lane_error"] = (
                 f"{type(exc).__name__}: {exc}"
             )
+            self._record_error(exc, lane="fast_lane")
             raise
         self.last_fast_lane_summary = summary
-        self.heartbeat["last_fast_lane_status"] = summary.get("status")
-        self.heartbeat["last_fast_lane_error"] = summary.get("quote_error")
+        self._record_fast_lane(summary)
+        return summary
+
+    async def run_evidence_once(self) -> dict:
+        """R5-P1-007：Intraday Evidence 任务槽（R5-P1-008 接线本体）。"""
+        if self._evidence_task is None:
+            return {"status": "NOT_WIRED"}
+        try:
+            summary = await self._evidence_task()
+        except Exception as exc:  # noqa: BLE001 - 单 lane 失败不终止循环
+            self._record_error(exc, lane="evidence")
+            return {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
+        self._record_evidence(summary if isinstance(summary, dict) else {})
         return summary
 
     async def evaluate_once(self) -> dict:
@@ -183,31 +306,97 @@ class IntradayTriggerLoop:
             summary["skipped"] += getattr(evaluation, "skipped", 0) or 0
         return summary
 
-    async def run_forever(self) -> None:
-        """常驻循环：非交易时段低频空转，时段内按间隔评估。
+    # ---------- 常驻循环 ----------
 
-        R4-P2-008：单轮失败不再静默吞掉——成功/失败都进 heartbeat
-        （last_success_at / last_error_at / last_error_type / 计数），
+    async def run_forever(self) -> None:
+        """常驻循环：非交易时段低频空转，时段内各任务按独立 due-time 跑。
+
+        R4-P2-008：单轮失败不再静默吞掉——成功/失败都进 heartbeat，
         循环本身继续跑，绝不终止。
+        R5-P1-007/§65：Trigger / Fast Lane / Evidence 各自独立 cadence，
+        禁止单一 300s 控制所有任务；heartbeat 节流持久化（错误强制）。
         """
+        due_trigger = 0.0
+        due_fast_lane = 0.0
+        due_evidence = 0.0
         while True:
+            now_ts = self._clock().timestamp()
             local_now = self._clock().astimezone(SHANGHAI)
             try:
                 trading_day = bool(self._is_trading_day(local_now.date()))
             except Exception:  # noqa: BLE001 - 日历失败按非交易时段空转
                 trading_day = False
             if not trading_day or not in_trading_session(local_now.time()):
+                # 空转且重置 due——下一时段开盘各 lane 立即跑一轮
+                due_trigger = due_fast_lane = due_evidence = 0.0
+                self._last_health_persist = None
                 await asyncio.sleep(IDLE_POLL_SECONDS)
                 continue
-            try:
-                summary = await self.evaluate_once()
-            except Exception as exc:  # noqa: BLE001 - 单轮失败不终止常驻循环
-                self._record_error(exc)
-            else:
-                self._record_success(summary)
-            # R4-P1-003：同间隔跑 Fast Lane 全市场扫描；失败只记录不终止
-            try:
-                await self.run_fast_lane_once()
-            except Exception as exc:  # noqa: BLE001 - Fast Lane 失败不阻断计划触发
-                self._record_error(exc)
-            await asyncio.sleep(self._interval)
+            force_persist = False
+            if now_ts >= due_trigger:
+                try:
+                    summary = await self.evaluate_once()
+                except Exception as exc:  # noqa: BLE001 - 单轮失败不终止循环
+                    self._record_error(exc)
+                    force_persist = True
+                else:
+                    self._record_success(summary)
+                due_trigger = now_ts + self._trigger_interval
+            if now_ts >= due_fast_lane:
+                try:
+                    await self.run_fast_lane_once()
+                except Exception:  # noqa: BLE001 - Fast Lane 失败不阻断触发
+                    force_persist = True
+                due_fast_lane = now_ts + self._fast_lane_interval
+            if now_ts >= due_evidence:
+                await self.run_evidence_once()
+                due_evidence = now_ts + self._evidence_interval
+            if self.heartbeat["consecutive_errors"] > 0:
+                force_persist = True
+            await self._persist_health(force=force_persist)
+            await asyncio.sleep(IDLE_POLL_SECONDS)
+
+
+def build_health_sink(
+    uow_factory: Callable[[], Any],
+    *,
+    component: str = "intraday-worker",
+    capability: str = "intraday-trigger-loop",
+    environment: str = "production",
+    clock: Callable[[], datetime] | None = None,
+) -> Callable[[dict], Any]:
+    """R5-P1-007/§65：heartbeat → operational_health_events。
+
+    Worker 内存里的 heartbeat 不跨进程；本 sink 把每轮心跳映射为
+    OperationalHealthEventCreate 落库，API/Dashboard 进程经
+    /operations/worker-heartbeat 读取。永不抛错（心跳失败不阻断循环）。
+    """
+    from app.v3.domain.strategy import OperationalHealthEventCreate
+
+    now = clock or (lambda: datetime.now(timezone.utc))
+
+    def _status(heartbeat: dict) -> str:
+        # 不用 FAILED：策略仓库对 FAILED 有自动回滚旁路，worker 心跳
+        # 只表达"降级/健康"，避免误触 release 回滚。
+        if heartbeat.get("consecutive_errors", 0) >= DEGRADED_ERROR_THRESHOLD:
+            return "DEGRADED"
+        if heartbeat.get("consecutive_errors", 0) > 0:
+            return "DEGRADED"
+        return "HEALTHY"
+
+    async def sink(heartbeat: dict) -> None:
+        event = OperationalHealthEventCreate(
+            environment=environment,
+            component=component,
+            capability=capability,
+            status=_status(heartbeat),
+            error_type=heartbeat.get("last_error_type"),
+            circuit_state="CLOSED",
+            observed_at=now(),
+            metadata=dict(heartbeat),
+        )
+        async with uow_factory() as uow:
+            await uow.strategies.add_health_event(event)
+            await uow.commit()
+
+    return sink

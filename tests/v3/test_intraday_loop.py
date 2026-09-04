@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 
-from app.v3.jobs.intraday_loop import IntradayTriggerLoop, in_trading_session
+from app.v3.jobs.intraday_loop import (
+    IntradayTriggerLoop,
+    build_health_sink,
+    in_trading_session,
+)
 
 
 NOW = datetime(2026, 9, 3, 2, 0, tzinfo=timezone.utc)  # 北京时间 10:00 交易时段
@@ -157,9 +161,18 @@ def test_no_plans_is_zero_work() -> None:
 
 
 def test_invalid_interval_rejected() -> None:
+    """R5-P1-007：三条 lane 的 cadence 都必须为正——禁单一 300s。"""
     with pytest.raises(ValueError):
         IntradayTriggerLoop(
-            lambda: None, None, None, lambda value: True, interval_seconds=0,
+            lambda: None, None, None, lambda value: True, trigger_interval=0,
+        )
+    with pytest.raises(ValueError):
+        IntradayTriggerLoop(
+            lambda: None, None, None, lambda value: True, fast_lane_interval=-1,
+        )
+    with pytest.raises(ValueError):
+        IntradayTriggerLoop(
+            lambda: None, None, None, lambda value: True, evidence_interval=0,
         )
 
 
@@ -196,6 +209,21 @@ def _patch_sleep(monkeypatch, rounds=2):
     monkeypatch.setattr("app.v3.jobs.intraday_loop.asyncio.sleep", _fake_sleep)
 
 
+def _tick_sleep(monkeypatch, rounds, step):
+    """睡眠即推进时钟：clock 可被单轮多次调用（as_of/记账），但只在
+    sleep 边界前进——due-time 数学子确定。返回 state 供 clock 读取。"""
+    state = {"t": 0, "n": 0}
+
+    async def _fake_sleep(seconds):
+        state["t"] += step
+        state["n"] += 1
+        if state["n"] >= rounds:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("app.v3.jobs.intraday_loop.asyncio.sleep", _fake_sleep)
+    return state
+
+
 def test_run_forever_success_updates_heartbeat(monkeypatch) -> None:
     """时段内单轮成功 → last_success_at + 各计数 + provider_health 快照。"""
     loop, engine, _ = _loop([_plan(stop=9.0)], trading_day=True)
@@ -216,8 +244,8 @@ def test_run_forever_success_updates_heartbeat(monkeypatch) -> None:
 
 
 def test_run_forever_records_errors_not_silent(monkeypatch) -> None:
-    """UoW/评估抛错 → last_error_at/last_error_type/consecutive_errors，
-    循环继续跑（不终止、不静默）。"""
+    """UoW/评估抛错 → last_error_at/last_error_type/连续错误计数，
+    循环继续跑（不终止、不静默）。时钟每次 +50s 让 trigger lane 连跑两轮。"""
     class _BoomUow:
         ai_imports = None
 
@@ -231,18 +259,205 @@ def test_run_forever_records_errors_not_silent(monkeypatch) -> None:
         async def execute(self, *, as_of=None):
             return {"status": "AVAILABLE", "candidate_count": 0}
 
+    ticks = _tick_sleep(monkeypatch, rounds=2, step=50)
     loop = IntradayTriggerLoop(
         lambda: _BoomUow(), None, _FakeEngine(), lambda value: True,
-        clock=lambda: NOW, fast_lane=_OkLane(),
+        clock=lambda: NOW + timedelta(seconds=ticks["t"]),
+        fast_lane=_OkLane(),
     )
-    _patch_sleep(monkeypatch)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(loop.run_forever())
     assert loop.heartbeat["last_error_type"] == "RuntimeError"
     assert loop.heartbeat["last_error_at"] is not None
-    # 两轮循环（_patch_sleep rounds=2）各抛一次 → 连续错误计数 2
+    # 两轮 trigger（t=0、t=50，50 >= 45s cadence）各抛一次 → lane 计数 2
+    assert loop.heartbeat["trigger_consecutive_errors"] == 2
     assert loop.heartbeat["consecutive_errors"] == 2
     assert loop.heartbeat["last_fast_lane_status"] == "AVAILABLE"
+
+
+# ---------- R5-P1-007/§65：拆分 cadence + 共享 heartbeat ----------
+
+
+def test_split_cadence_due_times(monkeypatch) -> None:
+    """§65：Trigger（45s）/Fast Lane（90s）/Evidence（600s）各自独立
+    due-time——单一 300s 控制所有任务被禁止；快 lane 高频、慢 lane 低频。"""
+    from datetime import timedelta
+
+    ticks = _tick_sleep(monkeypatch, rounds=6, step=30)
+
+    class _CountingLane:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *, as_of=None):
+            self.calls += 1
+            return {"status": "AVAILABLE", "candidate_count": 0}
+
+    async def _evidence():
+        counters["evidence"] += 1
+        return {"status": "AVAILABLE"}
+
+    counters = {"evidence": 0}
+    lane = _CountingLane()
+    loop = IntradayTriggerLoop(
+        lambda: _FakeUow(_FakePlansRepo([])), None, _FakeEngine(),
+        lambda value: True,
+        clock=lambda: NOW + timedelta(seconds=ticks["t"]),
+        fast_lane=lane, evidence_task=_evidence,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    # trigger 45s：t=0/60/120 命中 3 次；fast lane 90s：t=0/90 命中 2 次；
+    # evidence 600s：t=0 命中 1 次——三 lane 节奏彻底解耦
+    assert loop.heartbeat["last_evaluated_count"] == 0
+    assert lane.calls == 2
+    assert counters["evidence"] == 1
+
+
+def test_fast_lane_three_consecutive_failures_mark_degraded(monkeypatch) -> None:
+    """§65 验收：连续 3 次 Fast Lane 失败 → consecutive_errors >= 3、
+    heartbeat 持久化事件 status=DEGRADED、last_error 可见。"""
+    from datetime import timedelta
+
+    class _BoomLane:
+        async def execute(self, *, as_of=None):
+            raise RuntimeError("scan down")
+
+    ticks = _tick_sleep(monkeypatch, rounds=3, step=100)  # fast lane 每轮到期
+    captured: list[dict] = []
+
+    async def sink(heartbeat):
+        captured.append(heartbeat)
+
+    loop = IntradayTriggerLoop(
+        lambda: _FakeUow(_FakePlansRepo([])), None, _FakeEngine(),
+        lambda value: True,
+        clock=lambda: NOW + timedelta(seconds=ticks["t"]),
+        fast_lane=_BoomLane(), health_sink=sink,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    assert loop.heartbeat["fast_lane_consecutive_errors"] >= 3
+    assert loop.heartbeat["consecutive_errors"] >= 3
+    assert loop.heartbeat["last_error_type"] == "RuntimeError"
+    # 错误轮强制落库：至少 3 条心跳，最后一条连续错误 >= 3
+    assert len(captured) >= 3
+    assert captured[-1]["consecutive_errors"] >= 3
+    assert captured[-1]["last_error_type"] == "RuntimeError"
+
+
+def test_fast_lane_failure_status_counts_as_error(monkeypatch) -> None:
+    """Fast Lane 不抛异常但报告 QUOTE_FAILED / UNAVAILABLE → 同样计入
+    该 lane 连续失败（失败不止是异常形态）。"""
+    from datetime import timedelta
+
+    class _SadLane:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *, as_of=None):
+            self.calls += 1
+            return {"status": "QUOTE_FAILED", "quote_error": "eastmoney down"}
+
+    ticks = _tick_sleep(monkeypatch, rounds=3, step=100)
+    loop = IntradayTriggerLoop(
+        lambda: _FakeUow(_FakePlansRepo([])), None, _FakeEngine(),
+        lambda value: True,
+        clock=lambda: NOW + timedelta(seconds=ticks["t"]),
+        fast_lane=_SadLane(),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    assert loop.heartbeat["fast_lane_consecutive_errors"] == 3
+    assert loop.heartbeat["consecutive_errors"] == 3
+    assert loop.heartbeat["last_error_type"] == "FAST_LANE_QUOTE_FAILED"
+    assert loop.heartbeat["last_fast_lane_error"] == "eastmoney down"
+
+
+def test_fast_lane_counts_populate_heartbeat(monkeypatch) -> None:
+    """§65 heartbeat 必填：quote_expected/actual/coverage、池/候选/Deep
+    计数从 Fast Lane summary 全量入 heartbeat。"""
+    from datetime import timedelta
+
+    class _OkLane:
+        async def execute(self, *, as_of=None):
+            return {
+                "status": "AVAILABLE",
+                "quote_expected": 5432, "quote_actual": 5432,
+                "quote_coverage": 1.0,
+                "pool_size": 12, "candidate_count": 7,
+                "deep": [{"code": "000001"}, {"code": "600000"}],
+            }
+
+    ticks = _tick_sleep(monkeypatch, rounds=2, step=100)
+    loop = IntradayTriggerLoop(
+        lambda: _FakeUow(_FakePlansRepo([])), None, _FakeEngine(),
+        lambda value: True,
+        clock=lambda: NOW + timedelta(seconds=ticks["t"]),
+        fast_lane=_OkLane(),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    assert loop.heartbeat["quote_expected"] == 5432
+    assert loop.heartbeat["quote_actual"] == 5432
+    assert loop.heartbeat["quote_coverage"] == 1.0
+    assert loop.heartbeat["active_pool_size"] == 12
+    assert loop.heartbeat["candidate_count"] == 7
+    assert loop.heartbeat["deep_count"] == 2
+    assert loop.heartbeat["fast_lane_consecutive_errors"] == 0
+
+
+def test_build_health_sink_maps_heartbeat_to_event() -> None:
+    """health_sink：heartbeat → OperationalHealthEventCreate 落库；
+    连续错误 → DEGRADED，健康 → HEALTHY；metadata 全量透传。"""
+
+    class _CaptureRepo:
+        def __init__(self):
+            self.events = []
+
+        async def add_health_event(self, command):
+            self.events.append(command)
+            return {"health_event_id": command.health_event_id,
+                    "automatic_rollback_event_id": None}
+
+    class _CaptureUow:
+        def __init__(self, repo):
+            self.strategies = repo
+            self.committed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            self.committed = True
+
+    repo = _CaptureRepo()
+    uow = _CaptureUow(repo)
+    sink = build_health_sink(lambda: uow, clock=lambda: NOW)
+    degraded = dict(IntradayTriggerLoop(
+        lambda: None, None, None, lambda value: True, clock=lambda: NOW,
+    ).heartbeat)
+    degraded.update({
+        "consecutive_errors": 3, "last_error_type": "RuntimeError",
+        "last_fast_lane_error": "scan down", "quote_expected": 5432,
+    })
+    asyncio.run(sink(degraded))
+    event = repo.events[0]
+    assert event.status == "DEGRADED"
+    assert event.component == "intraday-worker"
+    assert event.capability == "intraday-trigger-loop"
+    assert event.error_type == "RuntimeError"
+    assert event.metadata["consecutive_errors"] == 3
+    assert event.metadata["quote_expected"] == 5432
+    assert event.observed_at == NOW
+    healthy = dict(degraded)
+    healthy.update({"consecutive_errors": 0, "last_error_type": None})
+    asyncio.run(sink(healthy))
+    assert repo.events[1].status == "HEALTHY"
+    assert uow.committed is True
 
 
 def test_fast_lane_failure_recorded_in_heartbeat() -> None:
