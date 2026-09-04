@@ -1,0 +1,280 @@
+"""R4-P1-003：Intraday Fast Lane 生产接线（实时方案 §5 / 复验 §28）。
+
+- 全市场 Quote → Overlay → Scanner → IntradayAttentionCandidate →
+  Active Pool → 重点池 Deep → Attention 链路真实可跑；
+- Quote 失败如实 QUOTE_FAILED，绝不伪造候选；
+- stale Quote 不进扫描结果；池内 stale 走 DATA_QUALITY_DEGRADED；
+- 只读模式（MCP）不写 AttentionEvent。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from app.models import Quote
+from app.v3.application.intraday_fast_lane import IntradayFastLaneService
+from app.v3.application.intraday_overlay import (
+    ActiveIntradayUniverseService,
+    IntradayOverlayService,
+    IntradayScannerService,
+)
+
+NOW = datetime(2026, 9, 3, 2, 0, tzinfo=timezone.utc)  # 北京时间 10:00
+
+
+def _quote(code: str, price: float = 9.5, **overrides) -> Quote:
+    values = dict(
+        code=code, name="测试", market="SZ",
+        price=price, prev_close=9.20, open=9.21, high=9.60, low=9.18,
+        pct_change=3.26, change=0.30, volume=1_234_567, amount=11_500_000.0,
+        turnover_rate=2.5, volume_ratio=1.8, amplitude=2.39,
+        source="eastmoney", source_timestamp=NOW - timedelta(seconds=3),
+        data_timestamp=NOW - timedelta(seconds=3),
+        server_timestamp=NOW - timedelta(seconds=1),
+        age_seconds=1.0, stale=False, quality="LIVE",
+        timestamp_source="eastmoney", snapshot_id="snap-1",
+        confidence="HIGH", suspended=False,
+    )
+    values.update(overrides)
+    return Quote(**values)
+
+
+class _FakePage:
+    def __init__(self, items, as_of=NOW, next_cursor=None):
+        self.items = items
+        self.as_of = as_of
+        self.next_cursor = next_cursor
+
+
+class _FakeFeatures:
+    async def query(self, query):
+        return _FakePage((
+            {"code": "000001", "market": "SZ", "ma20": 9.0, "close": 9.5},
+            {"code": "600300", "market": "SH", "ma20": 10.0, "close": 10.2},
+        ))
+
+
+class _FakeRecalls:
+    def __init__(self, items=()):
+        self._items = items
+
+    async def read_results(self, **kwargs):
+        if not self._items:
+            return None
+        return _FakePage(tuple(self._items))
+
+
+class _FakeReads:
+    def __init__(self, watchlist=(), accounts=()):
+        self._watchlist = watchlist
+        self._accounts = accounts
+
+    async def watchlist_changes(self, limit: int) -> list[dict]:
+        return list(self._watchlist)
+
+    async def portfolio_overview(self, limit: int) -> dict:
+        return {"accounts": list(self._accounts)}
+
+
+class _FakeUow:
+    def __init__(self, reads, recalls=None):
+        self.features = _FakeFeatures()
+        self.recalls = recalls or _FakeRecalls()
+        self.reads = reads
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+class _FakeProvider:
+    def __init__(self, quotes=(), index=None, fail=False):
+        self._quotes = quotes
+        self._index = index
+        self._fail = fail
+
+    async def get_all_a_shares(self):
+        if self._fail:
+            raise RuntimeError("clist down")
+        return len(self._quotes), list(self._quotes)
+
+    async def get_index_quote(self, code, market):
+        if self._index is None:
+            raise RuntimeError("no index fixture")
+        return self._index
+
+
+class _FakeEngine:
+    def __init__(self):
+        self.anomaly_calls = []
+        self.dq_calls = []
+
+    async def record_intraday_anomalies(self, candidates, *, as_of):
+        self.anomaly_calls.append(candidates)
+        return SimpleNamespace(created=tuple(candidates), skipped=0)
+
+    async def record_data_quality(self, quotes, *, universe, as_of):
+        self.dq_calls.append((quotes, universe))
+        return SimpleNamespace(created=tuple(quotes), skipped=0)
+
+
+class _FakeDeep:
+    async def get_intraday_structure(self, code, *, as_of):
+        return SimpleNamespace(
+            weekly=SimpleNamespace(trend="DOWN"),
+            daily=SimpleNamespace(trend="UP"),
+            reversal_state="POSSIBLE",
+            conflict="WEEKLY_DOWN_DAILY_BOUNCE",
+        )
+
+
+def _service(provider, uow, *, engine=None, deep=None):
+    return IntradayFastLaneService(
+        lambda: uow, provider, IntradayOverlayService(),
+        IntradayScannerService(), ActiveIntradayUniverseService(),
+        engine=engine, deep_service=deep, clock=lambda: NOW,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_full_chain_runs() -> None:
+    """§28 最小验收：Quote→Overlay→Scanner→池→Deep→Attention 全链。"""
+    quotes = (
+        _quote("000001", volume_ratio=2.5),   # VOLUME_SURGE（阈值 2.0）
+        _quote("600000", volume_ratio=1.2),   # 无异常
+    )
+    provider = _FakeProvider(quotes, index=_quote("000001", 3000.0))
+    reads = _FakeReads(
+        watchlist=[{"security_market": "SH", "security_code": "600300",
+                    "current_state": "WATCHING"}],
+        accounts=[{"account_id": "a", "positions": [
+            {"security_market": "SZ", "security_code": "000001", "quantity": 100},
+            {"security_market": "SZ", "security_code": "999999", "quantity": 0},
+        ]}],
+    )
+    recalls = _FakeRecalls([SimpleNamespace(market="SH", code="600519")])
+    engine = _FakeEngine()
+    service = _service(
+        provider, _FakeUow(reads, recalls), engine=engine, deep=_FakeDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+
+    assert report["status"] == "AVAILABLE"
+    assert report["quote_count"] == 2
+    assert report["candidate_count"] == 1
+    assert report["candidates"][0]["code"] == "000001"
+    assert "VOLUME_SURGE" in report["candidates"][0]["reasons"]
+    # 池 = EOD 候选 + WATCHING + 持仓(quantity>0) + 盘中异常，去重合并
+    assert report["pool_size"] == 3
+    # Attention：scanner 异常写 INTRADAY_ANOMALY
+    assert report["attention"]["anomaly_created"] == 1
+    assert len(engine.anomaly_calls) == 1
+    # 重点池 Deep：候选 1 只 → 1 条摘要，结构字段透传
+    assert report["deep"][0]["code"] == "000001"
+    assert report["deep"][0]["weekly_trend"] == "DOWN"
+    assert report["deep"][0]["reversal_state"] == "POSSIBLE"
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_quote_failed_is_honest() -> None:
+    provider = _FakeProvider(fail=True)
+    engine = _FakeEngine()
+    service = _service(
+        provider, _FakeUow(_FakeReads()), engine=engine, deep=_FakeDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "QUOTE_FAILED"
+    assert "RuntimeError" in report["quote_error"]
+    assert report["candidate_count"] == 0
+    assert engine.anomaly_calls == []
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_stale_quote_scanned_out_but_dq_for_pool() -> None:
+    """stale 不进候选；池内 stale → DATA_QUALITY_DEGRADED。"""
+    quotes = (
+        _quote("000001", volume_ratio=2.5),                        # 正常候选
+        _quote("600300", market="SH", stale=True, volume_ratio=3.0),  # stale+池内
+    )
+    reads = _FakeReads(
+        watchlist=[{"security_market": "SH", "security_code": "600300",
+                    "current_state": "WATCHING"}],
+    )
+    engine = _FakeEngine()
+    service = _service(
+        _FakeProvider(quotes), _FakeUow(reads), engine=engine,
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["stale_quote_count"] == 1
+    assert all(item["code"] != "600300" for item in report["candidates"])
+    assert report["attention"]["data_quality_created"] == 1
+    dq_quotes, dq_universe = engine.dq_calls[0]
+    assert dq_quotes[0].code == "600300"
+    assert ("SH", "600300") in dq_universe
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_read_only_never_touches_engine() -> None:
+    """MCP 只读路径：engine=None 也必须完整跑通扫描。"""
+    quotes = (_quote("000001", volume_ratio=2.5),)
+    service = _service(_FakeProvider(quotes), _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "AVAILABLE"
+    assert report["candidate_count"] == 1
+    assert report["attention"] == {
+        "anomaly_created": 0, "data_quality_created": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_loop_runs_fast_lane_once_and_keeps_summary() -> None:
+    """常驻循环：Fast Lane 每间隔与计划触发同跑，摘要可见。"""
+    from app.v3.jobs.intraday_loop import IntradayTriggerLoop
+
+    class _FakeFastLane:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *, as_of=None):
+            self.calls += 1
+            return {"status": "AVAILABLE", "candidate_count": 7}
+
+    fast_lane = _FakeFastLane()
+
+    class _NoopRepo:
+        async def active_price_trigger_plans(self):
+            return ()
+
+    class _LoopUow:
+        ai_imports = _NoopRepo()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _Engine:
+        async def evaluate_entry_plan_levels(self, **kwargs):
+            raise AssertionError("no plans → engine must not be called")
+
+    loop = IntradayTriggerLoop(
+        lambda: _LoopUow(), None, _Engine(), lambda day: True,
+        clock=lambda: NOW, fast_lane=fast_lane,
+    )
+    summary = await loop.run_fast_lane_once()
+    assert fast_lane.calls == 1
+    assert summary["candidate_count"] == 7
+    assert loop.last_fast_lane_summary == summary
+    # 未接线时诚实 NOT_WIRED
+    bare = IntradayTriggerLoop(
+        lambda: _LoopUow(), None, _Engine(), lambda day: True, clock=lambda: NOW,
+    )
+    assert bare.run_fast_lane_once.__self__ is not None
+    unwired = await bare.run_fast_lane_once()
+    assert unwired["status"] == "NOT_WIRED"

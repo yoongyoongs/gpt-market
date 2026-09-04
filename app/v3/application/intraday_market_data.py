@@ -24,6 +24,50 @@ from app.v3.domain.intraday import (
 _DEFAULT_PERIODS = ("1m", "5m", "15m", "60m", "day", "week")
 
 
+def map_quote_snapshot(quote: Any, as_of: datetime) -> IntradayQuoteSnapshot:
+    """Legacy Quote → V3 快照（R4-P0-001 Future Guard 内置）。
+
+    known_at/event_time 晚于 as_of 的事实绝不冒充新鲜价：显式降级
+    stale + UNTRUSTED + stale_reason。全市场批量与单只走同一映射。
+    """
+    snapshot = IntradayQuoteSnapshot(
+        code=quote.code,
+        market=quote.market,
+        name=quote.name,
+        last_price=quote.price,
+        open=quote.open,
+        high=quote.high,
+        low=quote.low,
+        prev_close=quote.prev_close,
+        change=quote.change,
+        change_pct=quote.pct_change,
+        volume=quote.volume,
+        amount=quote.amount,
+        turnover_rate=quote.turnover_rate,
+        volume_ratio=quote.volume_ratio,
+        suspended=quote.suspended,
+        event_time=quote.data_timestamp,
+        fetch_time=quote.server_timestamp,
+        known_at=quote.server_timestamp,
+        as_of=as_of,
+        source=quote.source,
+        upstream_source=quote.timestamp_source,
+        quality=quote.quality,
+        stale=quote.stale,
+        confidence=quote.confidence,
+    )
+    stale_reason: str | None = None
+    if snapshot.known_at > as_of:
+        stale_reason = "FUTURE_KNOWN_AT"
+    elif snapshot.event_time > as_of:
+        stale_reason = "FUTURE_EVENT_TIME"
+    if stale_reason is not None:
+        snapshot = snapshot.model_copy(update={
+            "stale": True, "quality": "UNTRUSTED", "stale_reason": stale_reason,
+        })
+    return snapshot
+
+
 class _MarketProvider(Protocol):
     async def get_quote(self, code: str) -> Any: ...
     async def get_kline(
@@ -43,44 +87,14 @@ class IntradayMarketDataService:
     async def get_quote_snapshot(self, code: str, *, as_of: datetime) -> IntradayQuoteSnapshot:
         require_aware(as_of, "as_of")
         quote = await self._provider.get_quote(code)
-        snapshot = IntradayQuoteSnapshot(
-            code=quote.code,
-            market=quote.market,
-            name=quote.name,
-            last_price=quote.price,
-            open=quote.open,
-            high=quote.high,
-            low=quote.low,
-            prev_close=quote.prev_close,
-            change=quote.change,
-            change_pct=quote.pct_change,
-            volume=quote.volume,
-            amount=quote.amount,
-            turnover_rate=quote.turnover_rate,
-            volume_ratio=quote.volume_ratio,
-            suspended=quote.suspended,
-            event_time=quote.data_timestamp,
-            fetch_time=quote.server_timestamp,
-            known_at=quote.server_timestamp,
-            as_of=as_of,
-            source=quote.source,
-            upstream_source=quote.timestamp_source,
-            quality=quote.quality,
-            stale=quote.stale,
-            confidence=quote.confidence,
-        )
-        # R4-P0-001：PIT 纪律 known_at <= as_of——上游返回"未来"事实
-        # （时钟偏差或真泄漏）时绝不当作新鲜价，显式降级 stale + 原因。
-        stale_reason: str | None = None
-        if snapshot.known_at > as_of:
-            stale_reason = "FUTURE_KNOWN_AT"
-        elif snapshot.event_time > as_of:
-            stale_reason = "FUTURE_EVENT_TIME"
-        if stale_reason is not None:
-            snapshot = snapshot.model_copy(update={
-                "stale": True, "quality": "UNTRUSTED", "stale_reason": stale_reason,
-            })
-        return snapshot
+        return map_quote_snapshot(quote, as_of)
+
+    async def get_quote_snapshots(
+        self, quotes: Any, *, as_of: datetime,
+    ) -> list[IntradayQuoteSnapshot]:
+        """批量映射（R4-P1-003 Fast Lane 全市场快照走同一 Future Guard）。"""
+        require_aware(as_of, "as_of")
+        return [map_quote_snapshot(quote, as_of) for quote in quotes]
 
     async def get_intraday_bars(
         self,

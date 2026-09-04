@@ -161,21 +161,61 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
         """V3 EOD 流水线最近一次各 job 运行状态（只读）。"""
         return await _pipeline_latest().execute()
 
+    def _fast_lane_read_only() -> Any:
+        """R4-P1-003：MCP INTRADAY 扫描（只读，绝不写 AttentionEvent）。"""
+        if "fast_lane" not in _cache:
+            from app.v3.application.intraday_fast_lane import (
+                IntradayFastLaneService,
+            )
+            from app.v3.application.intraday_overlay import (
+                ActiveIntradayUniverseService,
+                IntradayOverlayService,
+                IntradayScannerService,
+            )
+
+            _cache["fast_lane"] = IntradayFastLaneService(
+                uow_factory,
+                root_container.provider_manager,
+                IntradayOverlayService(),
+                IntradayScannerService(),
+                ActiveIntradayUniverseService(),
+                engine=None,  # 只读扫描：不发 Attention
+                feature_limit=2000,
+                deep_limit=10,
+                clock=_utcnow,
+            )
+        return _cache["fast_lane"]
+
     @_tool
     async def v3_scan_opportunities(
         mode: str = "EOD",
         recall_run_id: str | None = None,
         limit: int = 50,
     ) -> dict:
-        """V3 机会扫描结果读取。mode=EOD 读最近已发布 raw opportunities；
-        INTRADAY 快线扫描尚未接入，诚实返回 NOT_AVAILABLE。"""
+        """V3 机会扫描。mode=EOD 读最近已发布 raw opportunities；
+        mode=INTRADAY 实时全市场快线扫描（Quote→Overlay→Scanner→池→Deep，
+        只读事实，不落 Attention）。"""
         normalized = mode.strip().upper()
         if normalized == "INTRADAY":
+            report = await _fast_lane_read_only().execute()
+            if report.get("status") == "QUOTE_FAILED":
+                return {
+                    "source": "scan-opportunities-v1",
+                    "mode": "INTRADAY", "status": "QUOTE_FAILED",
+                    "detail": report.get("quote_error"),
+                }
+            max_items = max(1, min(limit, 200))
             return {
                 "source": "scan-opportunities-v1",
                 "mode": "INTRADAY",
-                "status": "NOT_AVAILABLE",
-                "detail": "intraday scan pipeline is not wired yet",
+                "status": "AVAILABLE",
+                "as_of": report.get("as_of"),
+                "quote_count": report.get("quote_count"),
+                "stale_quote_count": report.get("stale_quote_count"),
+                "candidate_count": report.get("candidate_count"),
+                "candidates": report.get("candidates", [])[:max_items],
+                "pool_size": report.get("pool_size"),
+                "deep": report.get("deep", []),
             }
         if normalized != "EOD":
             return {
