@@ -219,3 +219,70 @@ async def test_data_quality_degraded_for_stale_universe_quote() -> None:
         [_quote(9.5)], universe={("SZ", "000001")}, as_of=NOW,
     )
     assert fresh.created == ()
+
+# ---------- R4-P1-002：stale/suspended Quote 不得触发价格 Attention ----------
+
+
+@pytest.mark.asyncio
+async def test_stale_quote_never_creates_stop_hit() -> None:
+    """R4-P1-002 §27：stale quote + 价格破 stop → 绝不 STOP_HIT，
+    只允许 DATA_QUALITY_DEGRADED。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    stale = _quote(8.5).model_copy(update={"stale": True, "quality": "STALE"})
+    report = await engine.evaluate_entry_plan_levels(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_PLAN, quote=stale, as_of=NOW,
+    )
+    types = {event.event_type for event in report.created}
+    assert AttentionEventType.STOP_HIT not in types
+    assert AttentionEventType.STOP_NEAR not in types
+    assert types == {AttentionEventType.DATA_QUALITY_DEGRADED}
+    assert report.created[0].facts["reason"] == "STALE_QUOTE"
+
+
+@pytest.mark.asyncio
+async def test_suspended_quote_never_creates_target_hit() -> None:
+    """R4-P1-002 §27：停牌 + 价格达标 → 绝不 TARGET_HIT。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    suspended = _quote(12.5).model_copy(update={"suspended": True})
+    report = await engine.evaluate_entry_plan_levels(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_PLAN, quote=suspended, as_of=NOW,
+    )
+    types = {event.event_type for event in report.created}
+    assert AttentionEventType.TARGET_HIT not in types
+    assert AttentionEventType.TARGET_NEAR not in types
+    assert types == {AttentionEventType.DATA_QUALITY_DEGRADED}
+    assert report.created[0].facts["reason"] == "SUSPENDED"
+
+
+@pytest.mark.asyncio
+async def test_untrusted_future_quote_never_creates_hits() -> None:
+    """R4-P0-001 联动：未来事实降级 UNTRUSTED 的 Quote 不产生确定性触发。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    untrusted = _quote(8.5).model_copy(update={
+        "stale": True, "quality": "UNTRUSTED",
+    })
+    report = await engine.evaluate_entry_plan_levels(
+        entry_plan_id=uuid4(), security_id=uuid4(), code="000001",
+        market="SZ", plan=_PLAN, quote=untrusted, as_of=NOW,
+    )
+    types = {event.event_type for event in report.created}
+    assert types == {AttentionEventType.DATA_QUALITY_DEGRADED}
+    assert report.created[0].facts["reason"] == "UNTRUSTED_QUALITY"
+
+
+@pytest.mark.asyncio
+async def test_fresh_quote_still_triggers_hits() -> None:
+    """Gate 只挡坏数据：新鲜 Quote 的 STOP_HIT 照常工作。"""
+    repo = _FakeAttentionRepo()
+    engine = _engine(repo)
+    plan_id = uuid4()
+    report = await engine.evaluate_entry_plan_levels(
+        entry_plan_id=plan_id, security_id=uuid4(), code="000001",
+        market="SZ", plan=_PLAN, quote=_quote(8.9), as_of=NOW,
+    )
+    assert report.created[0].event_type == AttentionEventType.STOP_HIT
