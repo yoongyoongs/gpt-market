@@ -298,3 +298,64 @@ async def test_fast_lane_batch_delay_not_stale() -> None:
     assert report["stale_quote_count"] == 0
     assert report["candidate_count"] == 1
     assert report["candidates"][0]["code"] == "000001"
+
+
+@pytest.mark.asyncio
+async def test_deep_covers_pool_when_scanner_empty() -> None:
+    """R5-P1-002 §61 Case A：Scanner 为空，Portfolio/Watchlist/EOD
+    仍必须进 Deep；Portfolio 按冻结优先级排第一。"""
+    quotes = (_quote("999999"),)  # 无异常 → scanner 空
+    provider = _FakeProvider(quotes, index=_quote("000001", 3000.0))
+    reads = _FakeReads(
+        watchlist=[{"security_market": "SH", "security_code": "600000",
+                    "current_state": "WATCHING"}],
+        accounts=[{"account_id": "a", "positions": [
+            {"security_market": "SZ", "security_code": "000001",
+             "quantity": 100},
+        ]}],
+    )
+    recalls = _FakeRecalls([SimpleNamespace(market="SH", code="600519")])
+    service = _service(
+        provider, _FakeUow(reads, recalls), deep=_FakeDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "AVAILABLE"
+    assert report["candidate_count"] == 0
+    assert report["pool_size"] == 3
+    deep_codes = [item["code"] for item in report["deep"]]
+    assert set(deep_codes) == {"000001", "600000", "600519"}
+    assert report["deep"][0]["code"] == "000001"
+    assert report["deep"][0]["sources"] == ["PORTFOLIO"]
+
+
+@pytest.mark.asyncio
+async def test_deep_limit_prunes_by_frozen_priority() -> None:
+    """§61：deep_limit 裁剪按冻结优先级——Portfolio > Watchlist > EOD；
+    本例 EOD 候选被裁掉，绝不只喂 Scanner 候选。"""
+    quotes = (
+        _quote("000001"),                                  # 持仓
+        _quote("600000", market="SH"),                     # Watchlist
+        _quote("600519", market="SH"),                     # EOD 候选
+        _quote("300001", volume_ratio=2.5),                # Scanner 异常
+    )
+    provider = _FakeProvider(quotes, index=_quote("000001", 3000.0))
+    reads = _FakeReads(
+        watchlist=[{"security_market": "SH", "security_code": "600000",
+                    "current_state": "WATCHING"}],
+        accounts=[{"account_id": "a", "positions": [
+            {"security_market": "SZ", "security_code": "000001",
+             "quantity": 100},
+        ]}],
+    )
+    recalls = _FakeRecalls([SimpleNamespace(market="SH", code="600519")])
+    service = IntradayFastLaneService(
+        lambda: _FakeUow(reads, recalls), provider,
+        IntradayOverlayService(), IntradayScannerService(),
+        ActiveIntradayUniverseService(), deep_service=_FakeDeep(),
+        deep_limit=2, clock=lambda: NOW,
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["pool_size"] == 4
+    assert len(report["deep"]) == 2
+    assert report["deep"][0]["code"] == "000001"   # PORTFOLIO
+    assert report["deep"][1]["code"] == "600000"   # WATCHLIST
