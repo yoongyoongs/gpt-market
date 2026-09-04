@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.utils.time import SHANGHAI
 from app.v3.application.calculate_features import CalculateSecurityFeatureService
 from app.v3.domain.evidence import EvidenceReadQuery
 
@@ -231,7 +232,12 @@ class ReadPositionContextService:
             return _unknown("CALENDAR_NOT_BOUND")
         try:
             start = date.fromisoformat(str(first_buy)[:10])
-            end = as_of.astimezone().date() if as_of.tzinfo else as_of.date()
+            # R4-P2-009：交易日归属必须按 Asia/Shanghai，服务器本地时区
+            # （如 UTC）在北京时间凌晨附近会偏一天
+            end = (
+                as_of.astimezone(SHANGHAI).date()
+                if as_of.tzinfo else as_of.date()
+            )
         except ValueError:
             return _unknown("INVALID_TRADE_TIME")
         if (end - start).days > HOLDING_SESSION_MAX_DAYS:

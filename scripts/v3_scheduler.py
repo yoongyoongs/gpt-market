@@ -791,8 +791,11 @@ async def run_scheduler(args: argparse.Namespace) -> int:
             return 0
 
 
-def build_intraday_loop(database) -> IntradayTriggerLoop:
-    """RT §21：现有 worker 容器内的盘中触发循环（不新增容器）。"""
+def build_intraday_loop(database) -> tuple[Any, Any]:
+    """RT §21：现有 worker 容器内的盘中触发循环（不新增容器）。
+
+    返回 (loop, provider_manager)——R4-P2-008 要求常驻收口时显式关闭
+    Provider 连接，调用方需要拿到引用。"""
     settings = Settings(_env_file=None, v3_database_url=os.getenv("V3_DATABASE_URL"))
     uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)  # noqa: E731
     calendar = ExchangeCalendarsAShareCalendar()
@@ -832,7 +835,8 @@ def build_intraday_loop(database) -> IntradayTriggerLoop:
         interval_seconds=float(os.getenv("V3_INTRADAY_INTERVAL_SECONDS", "300")),
         clock=lambda: datetime.now(timezone.utc),
         fast_lane=fast_lane,
-    )
+        health_snapshot=provider_manager.health,
+    ), provider_manager
 
 
 async def run_resident(args: argparse.Namespace) -> int:
@@ -841,11 +845,26 @@ async def run_resident(args: argparse.Namespace) -> int:
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
     _, _, database = build_orchestrators(database_url)
-    intraday_task = asyncio.create_task(build_intraday_loop(database).run_forever())
+    intraday_loop, provider_manager = build_intraday_loop(database)
+    intraday_task = asyncio.create_task(intraday_loop.run_forever())
     try:
         return await run_scheduler(args)
     finally:
+        # R4-P2-008：优雅收口——cancel 后 await 让循环到达退出点；
+        # Provider 与数据库连接显式关闭，不依赖 OS 进程回收。
         intraday_task.cancel()
+        try:
+            await intraday_task
+        except BaseException:  # noqa: BLE001 - CancelledError/收尾异常不外泄
+            pass
+        try:
+            await provider_manager.close()
+        except Exception:  # noqa: BLE001 - 关闭失败不掩盖主流程返回值
+            pass
+        try:
+            await database.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def main() -> int:
@@ -863,12 +882,18 @@ async def _run_intraday_once() -> int:
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
     _, _, database = build_orchestrators(database_url)
-    loop = build_intraday_loop(database)
+    loop, provider_manager = build_intraday_loop(database)
     try:
         summary = await loop.evaluate_once()
         # R4-P1-003：--intraday-once 同样跑一轮 Fast Lane 全市场扫描
         summary["fast_lane"] = await loop.run_fast_lane_once()
+        # R4-P2-008：单次运行同样吐 heartbeat，运维一眼看到成败计数
+        summary["heartbeat"] = dict(loop.heartbeat)
     finally:
+        try:
+            await provider_manager.close()
+        except Exception:  # noqa: BLE001 - 关闭失败不掩盖主流程输出
+            pass
         await database.close()
     print(json.dumps(summary, ensure_ascii=False, default=str), flush=True)
     return 0

@@ -180,3 +180,83 @@ def test_run_forever_sleeps_outside_session(monkeypatch) -> None:
         asyncio.run(loop.run_forever())
     assert slept == [60.0, 60.0]
     assert engine.calls == []
+
+
+# ---------- R4-P2-008：heartbeat 运行状态，失败绝不静默 ----------
+
+
+def _patch_sleep(monkeypatch, rounds=2):
+    state = {"n": 0}
+
+    async def _fake_sleep(seconds):
+        state["n"] += 1
+        if state["n"] >= rounds:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("app.v3.jobs.intraday_loop.asyncio.sleep", _fake_sleep)
+
+
+def test_run_forever_success_updates_heartbeat(monkeypatch) -> None:
+    """时段内单轮成功 → last_success_at + 各计数 + provider_health 快照。"""
+    loop, engine, _ = _loop([_plan(stop=9.0)], trading_day=True)
+    _patch_sleep(monkeypatch)
+    loop._health_snapshot = lambda: {"eastmoney": {"consecutive_failures": 0}}
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    assert loop.heartbeat["last_success_at"] is not None
+    assert loop.heartbeat["last_plan_count"] == 1
+    assert loop.heartbeat["last_evaluated_count"] == 1
+    assert loop.heartbeat["last_quote_failed"] == 0
+    assert loop.heartbeat["last_engine_failed"] == 0
+    assert loop.heartbeat["consecutive_errors"] == 0
+    assert loop.heartbeat["provider_health"] == {
+        "eastmoney": {"consecutive_failures": 0},
+    }
+    assert loop.heartbeat["last_fast_lane_status"] == "NOT_WIRED"
+
+
+def test_run_forever_records_errors_not_silent(monkeypatch) -> None:
+    """UoW/评估抛错 → last_error_at/last_error_type/consecutive_errors，
+    循环继续跑（不终止、不静默）。"""
+    class _BoomUow:
+        ai_imports = None
+
+        async def __aenter__(self):
+            raise RuntimeError("db down")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _OkLane:
+        async def execute(self, *, as_of=None):
+            return {"status": "AVAILABLE", "candidate_count": 0}
+
+    loop = IntradayTriggerLoop(
+        lambda: _BoomUow(), None, _FakeEngine(), lambda value: True,
+        clock=lambda: NOW, fast_lane=_OkLane(),
+    )
+    _patch_sleep(monkeypatch)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(loop.run_forever())
+    assert loop.heartbeat["last_error_type"] == "RuntimeError"
+    assert loop.heartbeat["last_error_at"] is not None
+    # 两轮循环（_patch_sleep rounds=2）各抛一次 → 连续错误计数 2
+    assert loop.heartbeat["consecutive_errors"] == 2
+    assert loop.heartbeat["last_fast_lane_status"] == "AVAILABLE"
+
+
+def test_fast_lane_failure_recorded_in_heartbeat() -> None:
+    """Fast Lane 抛错：异常照常上抛（run_forever 兜底），heartbeat 记录。"""
+    class _BoomLane:
+        async def execute(self, *, as_of=None):
+            raise RuntimeError("scan down")
+
+    loop = IntradayTriggerLoop(
+        lambda: _FakeUow(_FakePlansRepo([])), None, _FakeEngine(),
+        lambda value: True, clock=lambda: NOW, fast_lane=_BoomLane(),
+    )
+    with pytest.raises(RuntimeError):
+        asyncio.run(loop.run_fast_lane_once())
+    assert loop.heartbeat["last_fast_lane_status"] == "ERROR"
+    assert "RuntimeError" in loop.heartbeat["last_fast_lane_error"]
+    assert loop.heartbeat["last_fast_lane_error"].find("scan down") > 0
