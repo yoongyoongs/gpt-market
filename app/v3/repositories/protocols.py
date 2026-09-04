@@ -47,11 +47,13 @@ from app.v3.domain.market_data import (
 from app.v3.domain.recall import (
     PerformanceObservation,
     RawOpportunity,
+    RawOpportunityReadItem,
     RawOpportunityReadPage,
     RecallChannel,
     RecallFeatureView,
     RecallMissEvaluation,
     RecallMissReadPage,
+    RecallReadItem,
     RecallReadPage,
     RecallResult,
     RecallRun,
@@ -155,6 +157,14 @@ class RecallRepository(Protocol):
         limit: int,
         cursor: str | None,
     ) -> RawOpportunityReadPage | None: ...
+
+    async def latest_recall_for_security(
+        self, *, market: str, code: str, limit: int = 5,
+    ) -> tuple[RecallReadItem, ...] | None: ...
+
+    async def latest_raw_opportunity_for_security(
+        self, *, market: str, code: str, limit: int = 5,
+    ) -> tuple[RawOpportunityReadItem, ...] | None: ...
 
     async def pending_observations(
         self, *, as_of: datetime, limit: int

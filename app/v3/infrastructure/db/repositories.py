@@ -2087,6 +2087,99 @@ class SQLAlchemyRecallRepository:
             )
         return RecallMissReadPage(items=items, next_cursor=next_cursor)
 
+    async def latest_recall_for_security(
+        self, *, market: str, code: str, limit: int = 5,
+    ) -> tuple[RecallReadItem, ...] | None:
+        """R5-P1-006/§64：按 security 精确读最新 Published run 的 Recall
+        结果——禁止"取前 200 条再客户端找，找不到当作不存在"。"""
+        run_model = await self._read_run(None)
+        if run_model is None:
+            return None
+        rows = (
+            await self._session.execute(
+                select(RecallResultModel, RecallChannelModel)
+                .join(
+                    RecallChannelModel,
+                    RecallChannelModel.channel_id == RecallResultModel.channel_id,
+                )
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id == RecallResultModel.security_id,
+                )
+                .where(
+                    RecallResultModel.recall_run_id == run_model.recall_run_id,
+                    SecurityModel.market == market,
+                    SecurityModel.code == code,
+                )
+                .order_by(
+                    RecallChannelModel.code, RecallResultModel.channel_rank,
+                )
+                .limit(limit)
+            )
+        ).all()
+        return tuple(
+            RecallReadItem(
+                recall_result_id=result.recall_result_id,
+                security_id=result.security_id,
+                market=security.market,
+                code=security.code,
+                name=security.name,
+                channel_code=channel.code,
+                channel_version=channel.version,
+                channel_rank=result.channel_rank,
+                strength=float(result.strength),
+                reasons=tuple(result.reasons),
+                matched_features=result.matched_features,
+                coverage=float(result.coverage),
+            )
+            for result, channel, security in rows
+        )
+
+    async def latest_raw_opportunity_for_security(
+        self, *, market: str, code: str, limit: int = 5,
+    ) -> tuple[RawOpportunityReadItem, ...] | None:
+        """R5-P1-006/§64：按 security 精确读最新 Published run 的
+        Raw Opportunity。"""
+        run_model = await self._read_run(None)
+        if run_model is None:
+            return None
+        rows = (
+            await self._session.execute(
+                select(RawOpportunityModel, SecurityModel)
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id == RawOpportunityModel.security_id,
+                )
+                .where(
+                    RawOpportunityModel.recall_run_id == run_model.recall_run_id,
+                    SecurityModel.market == market,
+                    SecurityModel.code == code,
+                )
+                .order_by(RawOpportunityModel.as_of.desc())
+                .limit(limit)
+            )
+        ).all()
+        return tuple(
+            RawOpportunityReadItem(
+                raw_opportunity_id=raw.raw_opportunity_id,
+                security_id=raw.security_id,
+                market=security.market,
+                code=security.code,
+                name=security.name,
+                as_of=raw.as_of,
+                known_at=raw.known_at,
+                recall_result_ids=tuple(
+                    UUID(value) for value in raw.recall_result_ids
+                ),
+                channel_codes=tuple(raw.channel_codes),
+                reason_summary={
+                    key: tuple(value)
+                    for key, value in raw.reason_summary.items()
+                },
+            )
+            for raw, security in rows
+        )
+
     async def _read_run(self, recall_run_id: UUID | None) -> RecallRunModel | None:
         statement = select(RecallRunModel)
         if recall_run_id is not None:

@@ -15,8 +15,12 @@
 R4-P1-004：聚合完整事实包（复验 §16）——在原有 decision/plan/quote/
 structure 之上补 market_regime / feature_eod / latest_recall /
 latest_raw_opportunity / latest_action / latest_entry_assessment /
-attention_events / data_quality；无数据源的字段（fundamental / evidence）
+attention_events / data_quality；无数据源的字段（fundamental）
 显式 NOT_AVAILABLE + reason，绝不静默缺省。
+
+R5-P1-006（§64）：Evidence 真实调用 Evidence Read（retrieve_view 按
+subject 精确匹配），latest_recall / latest_raw_opportunity 改为
+Security-specific 查询（SQL 端过滤，禁止取前 200 条客户端找）。
 
 本服务只读，不创建 Decision / Trade，不改变任何状态。
 """
@@ -28,10 +32,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Protocol
 
 from app.v3.domain.action import EntryReadiness
+from app.v3.domain.evidence import EvidenceReadQuery
 from app.v3.domain.entry_plan import EntryPlanPayload, PlanCondition
 
 _SOURCE = "entry-decision-context-v1"
-_FACT_LIMIT = 200
 
 
 def _not_available(reason: str) -> dict[str, str]:
@@ -69,16 +73,36 @@ def _jsonify(value: Any) -> Any:
     return value
 
 
-def _match_security(page: Any, market: str, code: str) -> Any:
-    """翻页结果里找本证券（read_results/read_raw 无证券过滤参数）。"""
-    if page is None:
-        return None
-    for item in getattr(page, "items", ()) or ():
-        if getattr(item, "market", None) == market and getattr(
-            item, "code", None,
-        ) == code:
-            return _dump(item)
-    return None
+def _item_bundle(missing_reason: str, run_reason: str) -> Callable:
+    """R5-P1-006/§64：Security-specific 读取结果打包——
+    None（无 Published run）与空（run 内无此券）区分报告，绝不混同。"""
+    def transform(items: Any) -> Any:
+        if items is None:
+            return _not_available(run_reason)
+        if not items:
+            return _not_available(missing_reason)
+        return {
+            "status": "AVAILABLE",
+            "count": len(items),
+            "items": [_dump(item) for item in items],
+        }
+    return transform
+
+
+def _evidence_bundle(page: Any, known_ats: list[datetime]) -> Any:
+    """R5-P1-006/§64：Evidence 真实聚合——retrieve_view 按 subject
+    精确匹配（DIRECT/CONFIRMED_LINK），绝不再返回
+    NO_EVIDENCE_READ_API 占位；record.known_at 纳入顶层聚合。"""
+    views = getattr(page, "views", ()) or ()
+    if not views:
+        return _not_available("NO_EVIDENCE_FOR_SECURITY")
+    items = []
+    for view in views:
+        known = _aware(getattr(view.record, "known_at", None))
+        if known is not None:
+            known_ats.append(known)
+        items.append(_dump(view))
+    return {"status": "AVAILABLE", "count": len(items), "items": items}
 
 
 def _latest_action(pipeline: Any) -> Any:
@@ -295,12 +319,12 @@ class ReadEntryDecisionContextService:
         """
         facts: dict[str, Any] = {
             "fundamental": _not_available("NO_FUNDAMENTAL_SOURCE"),
-            "evidence": _not_available("NO_EVIDENCE_READ_API"),
         }
         for field in (
             "market_regime", "feature_eod", "latest_recall",
             "latest_raw_opportunity", "latest_action",
             "latest_entry_assessment", "attention_events", "data_quality",
+            "evidence",
         ):
             facts.setdefault(field, _not_available("SOURCE_NOT_BOUND"))
         known_ats: list[datetime] = []
@@ -309,6 +333,7 @@ class ReadEntryDecisionContextService:
                 "market_regime", "feature_eod", "latest_recall",
                 "latest_raw_opportunity", "latest_action",
                 "latest_entry_assessment", "attention_events", "data_quality",
+                "evidence",
             ):
                 facts[field] = _not_available("SECURITY_UNKNOWN")
             return facts, known_ats
@@ -348,20 +373,35 @@ class ReadEntryDecisionContextService:
             )
             await grab(
                 "latest_recall",
-                lambda: uow.recalls.read_results(
-                    recall_run_id=None, channel_code=None,
-                    limit=_FACT_LIMIT, cursor=None,
+                lambda: uow.recalls.latest_recall_for_security(
+                    market=market, code=code,
                 ),
-                lambda page: _match_security(page, market, code)
-                or _not_available("NOT_IN_LATEST_RECALL_RESULTS"),
+                _item_bundle(
+                    "NOT_IN_LATEST_RECALL_RESULTS", "NO_PUBLISHED_RECALL_RUN",
+                ),
             )
             await grab(
                 "latest_raw_opportunity",
-                lambda: uow.recalls.read_raw(
-                    recall_run_id=None, limit=_FACT_LIMIT, cursor=None,
+                lambda: uow.recalls.latest_raw_opportunity_for_security(
+                    market=market, code=code,
                 ),
-                lambda page: _match_security(page, market, code)
-                or _not_available("NOT_IN_LATEST_RAW_PAGE"),
+                _item_bundle(
+                    "NOT_IN_LATEST_RAW_OPPORTUNITY",
+                    "NO_PUBLISHED_RECALL_RUN",
+                ),
+            )
+            # R5-P1-006/§64：Evidence 真实调用现有 Evidence Read 能力，
+            # 按 subject（SECURITY:{market}:{code}）精确匹配。
+            await grab(
+                "evidence",
+                lambda: uow.evidence.retrieve_view(query=EvidenceReadQuery(
+                    subject_type="SECURITY",
+                    subject_id=f"{market}:{code}",
+                    as_of=as_of,
+                    include_candidates=False,
+                    limit=50,
+                )),
+                lambda page: _evidence_bundle(page, known_ats),
             )
             await grab(
                 "latest_action",
