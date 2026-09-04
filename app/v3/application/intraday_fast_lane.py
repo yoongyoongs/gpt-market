@@ -73,6 +73,20 @@ def _index_return(snapshot: Any) -> float | None:
     return price / prev - 1
 
 
+# R5-P1-002/§61：Deep 优先级冻结——Portfolio > Watchlist（当前有效态）
+# > EOD Candidate > Intraday Candidate。条目带多来源时取最高优先级。
+_DEEP_PRIORITY = ("PORTFOLIO", "WATCHLIST", "EOD_CANDIDATE", "INTRADAY_ATTENTION")
+
+
+def _deep_priority(entry: Any) -> int:
+    ranks = [
+        _DEEP_PRIORITY.index(source)
+        for source in getattr(entry, "sources", ())
+        if source in _DEEP_PRIORITY
+    ]
+    return min(ranks) if ranks else len(_DEEP_PRIORITY)
+
+
 class IntradayFastLaneService:
     def __init__(
         self,
@@ -176,8 +190,11 @@ class IntradayFastLaneService:
                 attention["data_quality_created"] = len(degraded.created)
         report["attention"] = attention
 
-        # 重点池 Deep：前 deep_limit 只候选的分钟结构摘要（fetch-time 事实）
-        report["deep"] = await self._deep_summaries(candidates, as_of)
+        # R5-P1-002/§61：Deep 输入必须是 merged Active Pool（不是 Scanner
+        # 候选）——Scanner 为空时 Portfolio/Watchlist/EOD 仍获深度刷新；
+        # 受 deep_limit 时按冻结优先级裁剪（fetch-time 事实，不落库）。
+        ranked_pool = sorted(pool, key=_deep_priority)
+        report["deep"] = await self._deep_summaries(ranked_pool, as_of)
         return report
 
     async def _load_state(self) -> tuple[dict[str, Any], str | None, set, set, set]:
@@ -256,25 +273,27 @@ class IntradayFastLaneService:
         return _index_return(map_quote_snapshot(index_quote, as_of))
 
     async def _deep_summaries(
-        self, candidates: tuple[Any, ...], as_of: datetime,
+        self, pool: tuple[Any, ...], as_of: datetime,
     ) -> list[dict[str, Any]]:
-        if self._deep is None or not candidates:
+        if self._deep is None or not pool:
             return []
         summaries: list[dict[str, Any]] = []
-        for candidate in candidates[: self._deep_limit]:
+        for entry in pool[: self._deep_limit]:
             try:
                 structure = await self._deep.get_intraday_structure(
-                    candidate.code, as_of=as_of,
+                    entry.code, as_of=as_of,
                 )
             except Exception as exc:  # noqa: BLE001 - 单票 Deep 失败隔离
                 summaries.append({
-                    "code": candidate.code, "market": candidate.market,
+                    "code": entry.code, "market": entry.market,
+                    "sources": list(getattr(entry, "sources", ())),
                     "status": "UNKNOWN",
                     "reason": f"{type(exc).__name__}: {exc}",
                 })
                 continue
             summaries.append({
-                "code": candidate.code, "market": candidate.market,
+                "code": entry.code, "market": entry.market,
+                "sources": list(getattr(entry, "sources", ())),
                 "status": "AVAILABLE",
                 "weekly_trend": getattr(
                     getattr(structure, "weekly", None), "trend", None,
