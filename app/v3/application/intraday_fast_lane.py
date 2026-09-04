@@ -31,6 +31,11 @@ _FEATURE_FIELDS = (
 )
 _INDEX_CODE = "000001"  # 上证指数：相对强度基准
 _PAGE_LIMIT = 200  # FeatureQuery.limit 合同上限
+# R5-P1-004/§62：全市场 Coverage Gate——部分市场绝不冒充全市场扫描。
+# coverage >= 0.9 → AVAILABLE；0.5 ~ 0.9 → PARTIAL；< 0.5 →
+# UNAVAILABLE_FOR_FULL_MARKET_SCAN。
+_FULL_MARKET_PARTIAL_RATIO = 0.9
+_FULL_MARKET_UNAVAILABLE_RATIO = 0.5
 
 
 class _FeaturesRepo(Protocol):
@@ -116,24 +121,53 @@ class IntradayFastLaneService:
     async def execute(self, *, as_of: datetime | None = None) -> dict[str, Any]:
         as_of = as_of or self._clock()
         report: dict[str, Any] = {"source": _SOURCE, "as_of": as_of}
-        features, features_error, eod, watchlist, portfolio = await self._load_state()
-        if features_error is not None:
-            report["features_error"] = features_error
+        features, eod, watchlist, portfolio, sources = await self._load_state()
+        report["sources"] = sources
+        if sources["features"]["status"] != "AVAILABLE":
+            report["features_error"] = sources["features"].get("error")
+            report["overlay_status"] = "DEGRADED"
 
-        # 全市场 Quote（东财 clist 批量）→ V3 快照（含 Future Guard）
+        # 全市场 Quote（东财 clist 批量）→ V3 快照（含 R5-01 时间语义）
         try:
-            _, raw_quotes = await self._quote_provider.get_all_a_shares()
+            expected_count, raw_quotes = (
+                await self._quote_provider.get_all_a_shares()
+            )
         except Exception as exc:  # noqa: BLE001 - 行情失败如实上报，绝不伪造
             report.update({
                 "status": "QUOTE_FAILED",
                 "quote_error": f"{type(exc).__name__}: {exc}",
-                "quote_count": 0, "candidate_count": 0,
+                "quote_expected": 0, "quote_actual": 0,
+                "quote_missing": 0, "quote_coverage": None,
+                "candidate_count": 0,
                 "pool_size": len(eod | watchlist | portfolio),
             })
             return report
         snapshots = [map_quote_snapshot(quote, as_of) for quote in raw_quotes]
-        report["status"] = "AVAILABLE"
-        report["quote_count"] = len(snapshots)
+        # R5-P1-004/§62：Coverage Gate——丢弃 total、静默丢行后宣称
+        # 全市场扫描完成是谎言；expected/actual/missing/coverage 全透传。
+        expected = int(expected_count or 0)
+        quote_count = len(snapshots)
+        missing = max(0, expected - quote_count)
+        coverage = (quote_count / expected) if expected > 0 else None
+        if coverage is None:
+            status = "AVAILABLE"  # provider 未报告 expected，无法判定缺失
+        elif coverage < _FULL_MARKET_UNAVAILABLE_RATIO:
+            status = "UNAVAILABLE_FOR_FULL_MARKET_SCAN"
+        elif coverage < _FULL_MARKET_PARTIAL_RATIO:
+            status = "PARTIAL"
+        else:
+            status = "AVAILABLE"
+        report.update({
+            "status": status,
+            "quote_expected": expected,
+            "quote_actual": quote_count,
+            "quote_count": quote_count,  # 兼容旧消费方（MCP scan）
+            "quote_missing": missing,
+            "quote_coverage": (
+                round(coverage, 4) if coverage is not None else None
+            ),
+            "full_market_complete": status == "AVAILABLE",
+        })
         report["stale_quote_count"] = sum(1 for item in snapshots if item.stale)
 
         index_return = await self._load_index_return(as_of)
@@ -197,71 +231,110 @@ class IntradayFastLaneService:
         report["deep"] = await self._deep_summaries(ranked_pool, as_of)
         return report
 
-    async def _load_state(self) -> tuple[dict[str, Any], str | None, set, set, set]:
+    async def _load_state(
+        self,
+    ) -> tuple[dict[str, Any], set, set, set, dict[str, dict[str, Any]]]:
         """一次 UoW 会话读全：特征翻页 + EOD 候选 + Watchlist + 持仓。
 
-        特征查询失败不阻断扫描（Overlay 对缺特征的票诚实降级）；池来源
-        失败同理——Fast Lane 的主体是实时事实，历史投影缺失只记录。
+        R5-P1-003/§62.4：四个来源独立 try——单源失败只标记该源 FAILED
+        并 rollback 会话，绝不把其它来源一起清空（"特征失败不阻断
+        Recall/Watchlist/Portfolio"必须有实现支撑）。会话本身建不起来
+        → 四源全部 FAILED，如实上报。
         """
         features: dict[str, Any] = {}
-        features_error: str | None = None
         eod: set[tuple[str, str]] = set()
         watchlist: set[tuple[str, str]] = set()
         portfolio: set[tuple[str, str]] = set()
+        sources: dict[str, dict[str, Any]] = {}
+
+        def _ok(name: str, count: int) -> None:
+            sources[name] = {"status": "AVAILABLE", "count": count}
+
+        def _fail(name: str, exc: Exception) -> None:
+            sources[name] = {
+                "status": "FAILED",
+                "error": f"{type(exc).__name__}: {exc}",
+                "count": 0,
+            }
+
         try:
             async with self._uow_factory() as uow:
-                cursor: str | None = None
-                for _ in range(max(1, self._feature_limit // _PAGE_LIMIT)):
-                    page = await uow.features.query(FeatureQuery(
-                        sort_by=FeatureSortField.AMOUNT, descending=True,
-                        fields=_FEATURE_FIELDS, limit=_PAGE_LIMIT, cursor=cursor,
-                    ))
-                    if page is None:
-                        break
-                    for item in page.items:
-                        code = item.get("code")
-                        if code:
-                            features[code] = SimpleNamespace(
-                                features=item, as_of=page.as_of,
-                            )
-                    cursor = page.next_cursor
-                    if cursor is None or not page.items:
-                        break
-                recall_page = await uow.recalls.read_results(
-                    recall_run_id=None, channel_code=None,
-                    limit=_PAGE_LIMIT, cursor=None,
-                )
-                if recall_page is not None:
-                    eod = {
-                        (item.market, item.code) for item in recall_page.items
-                    }
-                for row in await uow.reads.watchlist_changes(limit=500):
-                    if row.get("current_state") == "WATCHING" and row.get(
-                        "security_market",
-                    ) and row.get("security_code"):
-                        watchlist.add(
-                            (row["security_market"], row["security_code"])
-                        )
-                overview = await uow.reads.portfolio_overview(limit=200)
-                for account in overview.get("accounts", ()):
-                    for position in account.get("positions", ()):
-                        if (position.get("quantity") or 0) > 0:
-                            portfolio.add((
-                                position.get("security_market"),
-                                position.get("security_code"),
+                try:
+                    cursor: str | None = None
+                    for _ in range(max(1, self._feature_limit // _PAGE_LIMIT)):
+                        page = await uow.features.query(FeatureQuery(
+                            sort_by=FeatureSortField.AMOUNT, descending=True,
+                            fields=_FEATURE_FIELDS, limit=_PAGE_LIMIT,
+                            cursor=cursor,
+                        ))
+                        if page is None:
+                            break
+                        for item in page.items:
+                            code = item.get("code")
+                            if code:
+                                features[code] = SimpleNamespace(
+                                    features=item, as_of=page.as_of,
+                                )
+                        cursor = page.next_cursor
+                        if cursor is None or not page.items:
+                            break
+                    _ok("features", len(features))
+                except Exception as exc:  # noqa: BLE001 - Overlay 降级
+                    await uow.rollback()
+                    _fail("features", exc)
+                try:
+                    recall_page = await uow.recalls.read_results(
+                        recall_run_id=None, channel_code=None,
+                        limit=_PAGE_LIMIT, cursor=None,
+                    )
+                    if recall_page is not None:
+                        eod = {
+                            (item.market, item.code)
+                            for item in recall_page.items
+                        }
+                    _ok("eod", len(eod))
+                except Exception as exc:  # noqa: BLE001 - EOD 源独立降级
+                    await uow.rollback()
+                    _fail("eod", exc)
+                try:
+                    for row in await uow.reads.watchlist_changes(limit=500):
+                        if row.get("current_state") == "WATCHING" and row.get(
+                            "security_market",
+                        ) and row.get("security_code"):
+                            watchlist.add((
+                                row["security_market"], row["security_code"],
                             ))
-        except Exception as exc:  # noqa: BLE001 - 历史投影缺失不阻断实时链
-            features_error = f"{type(exc).__name__}: {exc}"
-            portfolio = {
-                (market, code) for market, code in portfolio if market and code
-            }
+                    _ok("watchlist", len(watchlist))
+                except Exception as exc:  # noqa: BLE001 - Watchlist 独立降级
+                    await uow.rollback()
+                    _fail("watchlist", exc)
+                try:
+                    overview = await uow.reads.portfolio_overview(limit=200)
+                    for account in overview.get("accounts", ()):
+                        for position in account.get("positions", ()):
+                            if (position.get("quantity") or 0) > 0:
+                                portfolio.add((
+                                    position.get("security_market"),
+                                    position.get("security_code"),
+                                ))
+                    _ok("portfolio", len(portfolio))
+                except Exception as exc:  # noqa: BLE001 - 持仓独立降级
+                    await uow.rollback()
+                    _fail("portfolio", exc)
+        except Exception as exc:  # noqa: BLE001 - 会话级失败如实全标
+            for name in ("features", "eod", "watchlist", "portfolio"):
+                sources.setdefault(name, {
+                    "status": "FAILED",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "count": 0,
+                })
         portfolio = {
             (market, code) for market, code in portfolio if market and code
         }
         watchlist = {
             (market, code) for market, code in watchlist if market and code
         }
-        return features, features_error, eod, watchlist, portfolio
+        return features, eod, watchlist, portfolio, sources
 
     async def _load_index_return(self, as_of: datetime) -> float | None:
         try:

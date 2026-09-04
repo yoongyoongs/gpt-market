@@ -91,6 +91,9 @@ class _FakeUow:
     async def __aexit__(self, *args):
         return None
 
+    async def rollback(self):
+        return None
+
 
 class _FakeProvider:
     def __init__(self, quotes=(), index=None, fail=False):
@@ -359,3 +362,110 @@ async def test_deep_limit_prunes_by_frozen_priority() -> None:
     assert len(report["deep"]) == 2
     assert report["deep"][0]["code"] == "000001"   # PORTFOLIO
     assert report["deep"][1]["code"] == "600000"   # WATCHLIST
+
+
+@pytest.mark.asyncio
+async def test_partial_market_coverage_is_not_available() -> None:
+    """R5-P1-004 §62.2：expected=100 / actual=50 → coverage=0.5，
+    status=PARTIAL、full_market_complete=false，绝不冒充全市场完成。"""
+    quotes = tuple(
+        _quote(f"{600000 + i}") for i in range(50)
+    )
+
+    class _PartialProvider(_FakeProvider):
+        async def get_all_a_shares(self):
+            return 100, list(self._quotes)
+
+    service = _service(_PartialProvider(quotes), _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "PARTIAL"
+    assert report["quote_expected"] == 100
+    assert report["quote_actual"] == 50
+    assert report["quote_missing"] == 50
+    assert report["quote_coverage"] == 0.5
+    assert report["full_market_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_severely_short_market_marks_unavailable() -> None:
+    """§62.2：coverage < 0.5 → UNAVAILABLE_FOR_FULL_MARKET_SCAN。"""
+    quotes = tuple(_quote(f"{600000 + i}") for i in range(30))
+
+    class _SevereProvider(_FakeProvider):
+        async def get_all_a_shares(self):
+            return 100, list(self._quotes)
+
+    service = _service(_SevereProvider(quotes), _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["status"] == "UNAVAILABLE_FOR_FULL_MARKET_SCAN"
+    assert report["quote_coverage"] == 0.3
+    assert report["full_market_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_feature_repo_failure_does_not_empty_other_sources() -> None:
+    """R5-P1-003 §62.4：Feature Repo FAILED → Overlay DEGRADED，
+    但 Watchlist/Portfolio/EOD 照常加载，池不被清空。"""
+    quotes = (_quote("000001"),)
+
+    class _BrokenFeatures:
+        async def query(self, query):
+            raise RuntimeError("feature repo down")
+
+    class _UowWithBrokenFeatures(_FakeUow):
+        def __init__(self, reads, recalls=None):
+            super().__init__(reads, recalls)
+            self.features = _BrokenFeatures()
+
+    reads = _FakeReads(
+        watchlist=[{"security_market": "SH", "security_code": "600000",
+                    "current_state": "WATCHING"}],
+        accounts=[{"account_id": "a", "positions": [
+            {"security_market": "SZ", "security_code": "000001",
+             "quantity": 100},
+        ]}],
+    )
+    recalls = _FakeRecalls([SimpleNamespace(market="SH", code="600519")])
+    service = _service(
+        _FakeProvider(quotes, index=None),
+        _UowWithBrokenFeatures(reads, recalls), deep=_FakeDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["sources"]["features"]["status"] == "FAILED"
+    assert "RuntimeError" in report["sources"]["features"]["error"]
+    assert report["overlay_status"] == "DEGRADED"
+    assert report["sources"]["watchlist"]["status"] == "AVAILABLE"
+    assert report["sources"]["portfolio"]["status"] == "AVAILABLE"
+    assert report["sources"]["eod"]["status"] == "AVAILABLE"
+    assert report["pool_size"] == 3
+
+
+@pytest.mark.asyncio
+async def test_session_failure_marks_all_sources_failed_but_quotes_still_scan() -> None:
+    """§62.4 极端：UoW 会话都建不起来 → 四源 FAILED，全市场 Quote
+    与 Scanner 照跑（实时链不依赖历史投影）。"""
+    class _SessionlessFactory:
+        def __call__(self):
+            class _Boom:
+                async def __aenter__(self):
+                    raise RuntimeError("db down")
+
+                async def __aexit__(self, *args):
+                    return None
+
+            return _Boom()
+
+    quotes = (_quote("000001", volume_ratio=2.5),)
+    service = _service(
+        _FakeProvider(quotes, index=None), _SessionlessFactory(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert all(
+        sources["status"] == "FAILED"
+        for sources in report["sources"].values()
+    )
+    assert report["status"] == "AVAILABLE"
+    assert report["quote_actual"] == 1
+    # 池只剩 Scanner 异常候选（历史投影全失效）——实时链照常工作
+    assert report["pool_size"] == 1
+    assert report["deep"] == []  # 未接 deep service
