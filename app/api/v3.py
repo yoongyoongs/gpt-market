@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -725,6 +725,29 @@ async def portfolio_position(account_id: UUID, security_id: UUID):
     return position
 
 
+# R4-P0-001：实时决策上下文只回答 NOW（CURRENT_ONLY）。时钟偏差容忍 5 分钟；
+# 显著历史/未来 as_of 一律 400——历史判断必须走 immutable ContextPack /
+# Deterministic Replay，绝不给"混合时点"的假历史上下文。
+_CURRENT_ONLY_TOLERANCE = timedelta(minutes=5)
+
+
+def _require_current_as_of(as_of: datetime | None) -> datetime:
+    now = datetime.now(timezone.utc)
+    if as_of is None:
+        return now
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    if abs((now - as_of).total_seconds()) > _CURRENT_ONLY_TOLERANCE.total_seconds():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CURRENT_ONLY_CONTEXT: realtime decision context answers now "
+                "only; historical analysis must use ContextPack / Replay"
+            ),
+        )
+    return as_of
+
+
 @router.get("/stocks/{code}/decision-context")
 async def entry_decision_context(
     code: str,
@@ -735,9 +758,11 @@ async def entry_decision_context(
 
     聚合最新 Decision/EntryPlan + 实时 Quote + 分钟结构；
     Trigger/Cancel 只做客观评估；缺关键实时数据绝不 READY。
+    R4-P0-001：CURRENT_ONLY——只支持当前时点，拒绝历史 as_of。
     """
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+    effective_as_of = _require_current_as_of(as_of)
     # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback + 健康降级）
     bars_service = IntradayMarketDataService(container.provider_manager)
     service = ReadEntryDecisionContextService(
@@ -746,7 +771,7 @@ async def entry_decision_context(
         IntradayStructureSnapshotService(bars_service),
     )
     return await service.execute(
-        code, market, as_of=as_of or datetime.now(timezone.utc),
+        code, market, as_of=effective_as_of,
     )
 
 
@@ -823,13 +848,14 @@ async def portfolio_position_decision_context(
     完整 Position Context + objective_sell_facts（stop/target 客观事实，
     只陈述、绝无建议）；NEW-CTX-001：stop/target 判断优先实时 Quote，
     FEATURE_LKG 仅作独立 EOD 事实并列返回。卖出决策由 AI/人做，
-    成交必须走 Trade Draft。
+    成交必须走 Trade Draft。R4-P0-001：CURRENT_ONLY——拒绝历史 as_of。
     """
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+    effective_as_of = _require_current_as_of(as_of)
     service = ReadPositionDecisionContextService(_position_context_service())
     return await service.execute(
-        account_id, code, market, as_of=as_of or datetime.now(timezone.utc),
+        account_id, code, market, as_of=effective_as_of,
     )
 
 

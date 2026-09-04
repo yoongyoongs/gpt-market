@@ -56,6 +56,9 @@ class IntradayQuoteSnapshot(V3Contract):
     upstream_source: str
     quality: str
     stale: bool
+    # R4-P0-001：未来事实（known_at/event_time > as_of）绝不冒充新鲜价，
+    # 降级为 stale 并显式给出原因
+    stale_reason: str | None = None
     confidence: str = "MEDIUM"
 
     @model_validator(mode="before")

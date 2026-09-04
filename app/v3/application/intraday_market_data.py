@@ -43,7 +43,7 @@ class IntradayMarketDataService:
     async def get_quote_snapshot(self, code: str, *, as_of: datetime) -> IntradayQuoteSnapshot:
         require_aware(as_of, "as_of")
         quote = await self._provider.get_quote(code)
-        return IntradayQuoteSnapshot(
+        snapshot = IntradayQuoteSnapshot(
             code=quote.code,
             market=quote.market,
             name=quote.name,
@@ -69,6 +69,18 @@ class IntradayMarketDataService:
             stale=quote.stale,
             confidence=quote.confidence,
         )
+        # R4-P0-001：PIT 纪律 known_at <= as_of——上游返回"未来"事实
+        # （时钟偏差或真泄漏）时绝不当作新鲜价，显式降级 stale + 原因。
+        stale_reason: str | None = None
+        if snapshot.known_at > as_of:
+            stale_reason = "FUTURE_KNOWN_AT"
+        elif snapshot.event_time > as_of:
+            stale_reason = "FUTURE_EVENT_TIME"
+        if stale_reason is not None:
+            snapshot = snapshot.model_copy(update={
+                "stale": True, "quality": "UNTRUSTED", "stale_reason": stale_reason,
+            })
+        return snapshot
 
     async def get_intraday_bars(
         self,
