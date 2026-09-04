@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -46,6 +46,74 @@ from app.v3.infrastructure.db.models import (
     WatchlistModel,
 )
 from app.v3.repositories.errors import RepositoryConflictError, RepositoryNotFoundError
+
+# R5-P1-005/§60：Resident Monitor 的 Entry 计划只接受这些现态。
+# TRIGGERED/HOLDING 归持仓侧（POSITION），SLOW/DOWNGRADED/INVALIDATED/
+# CLOSED 不再监控。
+_ACTIVE_WATCHLIST_STATES = (
+    WatchlistState.WATCHING.value,
+    WatchlistState.WAIT_ENTRY.value,
+    WatchlistState.ACTION_READY.value,
+)
+
+
+def _filter_active_plans(
+    latest: dict[UUID, "EntryPlanModel"],
+    decisions: "Iterable[DecisionModel]",
+    security_by_id: dict[UUID, "SecurityModel"],
+    active_watchlist: set[UUID],
+    held_security_ids: set[UUID],
+    now: datetime,
+) -> list[dict]:
+    """R5-P1-005/§60：Active Plan 冻结定义（纯函数，便于独立验收）。
+
+    - 每个 security 只取当前 Decision（最新 as_of）的最新版本 Plan——
+      历史 Decision 的 Plan 即使带 stop/target 也不进入 Resident Monitor；
+    - 仅 ENTRY_WATCHLIST（Watchlist 现态 ∈ _ACTIVE_WATCHLIST_STATES）
+      或 POSITION（持仓现态投影 quantity > 0）的 security 保留；
+    - effective_from 未生效（未来计划）排除。
+    """
+    current_decision_id: dict[UUID, UUID] = {}  # security_id -> decision_id
+    for decision in sorted(decisions, key=lambda d: d.as_of):
+        current_decision_id[decision.security_id] = decision.decision_id
+    result = []
+    for security_id, decision_id in current_decision_id.items():
+        security = security_by_id.get(security_id)
+        if security is None:
+            continue
+        sources: list[str] = []
+        if security_id in active_watchlist:
+            sources.append("ENTRY_WATCHLIST")
+        if security_id in held_security_ids:
+            sources.append("POSITION")
+        if not sources:
+            continue
+        plan = latest[decision_id]
+        if plan.effective_from > now:
+            continue  # 未来生效计划不进入 Resident Monitor
+        payload = plan.plan or {}
+        stop = payload.get("stop_loss")
+        target = payload.get("take_profit")
+        if stop is None and isinstance(payload.get("stop"), dict):
+            stop = payload["stop"].get("price")
+        if target is None:
+            targets = payload.get("targets") or []
+            if targets and isinstance(targets[0], dict):
+                target = targets[0].get("price")
+        if stop is None and target is None:
+            continue
+        result.append({
+            "entry_plan_id": plan.entry_plan_id,
+            "decision_id": decision_id,
+            "security_id": security.security_id,
+            "code": security.code,
+            "market": security.market,
+            "stop_loss": stop,
+            "take_profit": target,
+            "plan_source": "+".join(sources),
+            "plan": payload,
+        })
+    return result
 from app.v3.domain.entry_plan import EntryPlanPayload
 from app.v3.domain.position_review import PositionReviewPayload
 
@@ -580,11 +648,18 @@ class SQLAlchemyAIResultImportRepository:
         )
 
     async def active_price_trigger_plans(self) -> tuple[dict, ...]:
-        """RT §21 盘中循环：每个 decision 最新版本 plan 中带 stop/target 的行。
+        """RT §21 盘中循环 + R5-P1-005/§60：Resident Monitor 只监控
+        当前有效 EntryPlan（Active Plan 定义见 _filter_active_plans）。
 
-        只陈述存储事实（code/market/plan 载荷），stop/target 判定交给
-        AttentionEngineService；plan JSONB 为 RT-06 类型化结构
-        （stop.price / targets[].price），兼容历史 stop_loss/take_profit 顶层键。
+        - ENTRY_WATCHLIST：security 当前 Watchlist state ∈
+          {WATCHING, WAIT_ENTRY, ACTION_READY}；
+        - POSITION：security 持仓现态投影 quantity > 0；
+        - 每个 security 只取当前 Decision（最新 as_of）的最新版本 Plan。
+
+        历史 Decision / CLOSED / INVALIDATED Watchlist 不再产生
+        STOP_HIT / TARGET_HIT / ENTRY_TRIGGER_MET。plan JSONB 为
+        RT-06 类型化结构（stop.price / targets[].price），兼容历史
+        stop_loss/take_profit 顶层键。
         """
         plans = (
             await self._session.scalars(
@@ -598,46 +673,42 @@ class SQLAlchemyAIResultImportRepository:
             latest[row.decision_id] = row
         if not latest:
             return ()
-        joined = (
-            await self._session.execute(
-                select(DecisionModel, SecurityModel)
-                .join(
-                    SecurityModel,
-                    SecurityModel.security_id == DecisionModel.security_id,
+        decisions = (
+            await self._session.scalars(
+                select(DecisionModel).where(
+                    DecisionModel.decision_id.in_(latest)
                 )
-                .where(DecisionModel.decision_id.in_(latest))
             )
         ).all()
-        security_by_decision = {
-            decision.decision_id: security for decision, security in joined
-        }
-        result = []
-        for decision_id, plan in latest.items():
-            security = security_by_decision.get(decision_id)
-            if security is None:
-                continue
-            payload = plan.plan or {}
-            stop = payload.get("stop_loss")
-            target = payload.get("take_profit")
-            if stop is None and isinstance(payload.get("stop"), dict):
-                stop = payload["stop"].get("price")
-            if target is None:
-                targets = payload.get("targets") or []
-                if targets and isinstance(targets[0], dict):
-                    target = targets[0].get("price")
-            if stop is None and target is None:
-                continue
-            result.append({
-                "entry_plan_id": plan.entry_plan_id,
-                "decision_id": decision_id,
-                "security_id": security.security_id,
-                "code": security.code,
-                "market": security.market,
-                "stop_loss": stop,
-                "take_profit": target,
-                "plan": payload,
-            })
-        return tuple(result)
+        securities = (
+            await self._session.scalars(
+                select(SecurityModel).where(
+                    SecurityModel.security_id.in_({
+                        decision.security_id for decision in decisions
+                    })
+                )
+            )
+        ).all()
+        security_by_id = {s.security_id: s for s in securities}
+        active_watchlist = set(
+            await self._session.scalars(
+                select(WatchlistModel.security_id).where(
+                    WatchlistModel.state.in_(_ACTIVE_WATCHLIST_STATES)
+                )
+            )
+        )
+        held_security_ids = set(
+            await self._session.scalars(
+                select(PositionProjectionModel.security_id).where(
+                    PositionProjectionModel.quantity > 0
+                )
+            )
+        )
+        return tuple(_filter_active_plans(
+            latest, decisions, security_by_id,
+            active_watchlist, held_security_ids,
+            datetime.now(timezone.utc),
+        ))
 
     async def read_decision_state(self, security_id: UUID):
         decisions = (
