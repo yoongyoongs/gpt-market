@@ -2097,7 +2097,7 @@ class SQLAlchemyRecallRepository:
             return None
         rows = (
             await self._session.execute(
-                select(RecallResultModel, RecallChannelModel)
+                select(RecallResultModel, RecallChannelModel, SecurityModel)
                 .join(
                     RecallChannelModel,
                     RecallChannelModel.channel_id == RecallResultModel.channel_id,

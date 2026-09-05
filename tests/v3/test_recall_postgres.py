@@ -35,7 +35,10 @@ from tests.v3.test_phase3_feature_postgres import make_revision
 
 DATABASE_URL = os.getenv("V3_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="V3_TEST_DATABASE_URL is not configured")
-NOW = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
+# 2026-09-11：必须晚于套件中其他发布 Recall run 的测试（product_e2e 09-01、
+# mature_recall_observations 09-10）——latest_recall_for_security 读的是
+# "全局最新 PUBLISHED run"，共享测试库里更晚的 run 会把它顶掉（2026-09-05 实测）。
+NOW = datetime(2026, 9, 11, 8, tzinfo=timezone.utc)
 
 
 class Calendar:
