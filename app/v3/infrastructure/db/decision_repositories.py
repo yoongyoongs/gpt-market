@@ -45,6 +45,8 @@ from app.v3.infrastructure.db.models import (
     WatchlistEventModel,
     WatchlistModel,
 )
+from app.v3.domain.entry_plan import EntryPlanPayload
+from app.v3.domain.position_review import PositionReviewPayload
 from app.v3.repositories.errors import RepositoryConflictError, RepositoryNotFoundError
 
 # R5-P1-005/§60：Resident Monitor 的 Entry 计划只接受这些现态。
@@ -114,8 +116,6 @@ def _filter_active_plans(
             "plan": payload,
         })
     return result
-from app.v3.domain.entry_plan import EntryPlanPayload
-from app.v3.domain.position_review import PositionReviewPayload
 
 
 class SQLAlchemyAIResultImportRepository:
