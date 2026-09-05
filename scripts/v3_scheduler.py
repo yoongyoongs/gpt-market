@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import re
+from typing import Any
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -664,12 +665,17 @@ def _annotate_catchup_runs(trade_date, pending_dates, runs: list[dict]) -> list[
     return annotated
 
 
+def _utcnow() -> datetime:
+    """时钟缝：测试冻结时间用（monkeypatch module._utcnow）。"""
+    return datetime.now(timezone.utc)
+
+
 async def run_once(output: Path) -> dict:
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
     calendar = ExchangeCalendarsAShareCalendar()
-    now = datetime.now(timezone.utc)
+    now = _utcnow()
     local = now.astimezone(SHANGHAI)
     report: dict = {
         "started_at": now.isoformat(),
