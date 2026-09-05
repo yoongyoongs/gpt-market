@@ -140,8 +140,16 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     run_once 的 JSON 报表序列化绝不能崩（真实每日任务曾因此 FAILED）。"""
     import asyncio
     import json
+    from datetime import timezone
 
     module = _scheduler_module()
+
+    # 固定到周三交易日：run_once 用 module._utcnow 取时钟，不冻结的话
+    # 周末/节假日跑套件时 trading_day=False → report 无 catchup 键（日期依赖）。
+    monkeypatch.setattr(
+        module, "_utcnow",
+        lambda: datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc),  # 周三
+    )
 
     class _FakeOrchestrator:
         async def execute(self, **kwargs):
@@ -150,9 +158,7 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     class _FakeSession:
         # UoW 内的真实 repo 会执行 scalar 查询：桩定返回主链最近成功日
         async def scalar(self, stmt):
-            from datetime import date
-
-            return date.today().isoformat()
+            return "2026-09-01"
 
         async def rollback(self):
             pass
