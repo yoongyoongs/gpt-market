@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -142,12 +142,16 @@ async def test_empty_history_is_explicit() -> None:
 # ---------- §65 HTTP 验收：状态接口可见 degraded/last_error/连续错误 ----------
 
 
-def _http_client(monkeypatch, rows):
+def _http_client(monkeypatch, rows, *, now=None):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from app.api.v3 import router
     from app.container import container
+
+    # F6-06：endpoint 真实时钟 + 交易时段谓词。freshness 判定要稳定，
+    # 冻结时钟由 rows 的 observed_at 与 now 参数共同控制。
+    frozen = now or datetime.now(timezone.utc)
 
     class _V3:
         enabled = True
@@ -170,6 +174,25 @@ def _http_client(monkeypatch, rows):
 
     # monkeypatch 保证请求期间替换生效、用后自动还原
     monkeypatch.setattr(container, "v3", _V3())
+    monkeypatch.setattr(
+        "app.api.v3.ReadWorkerHeartbeatService",
+        lambda uow, **kwargs: ReadWorkerHeartbeatService(
+            uow,
+            clock=lambda: frozen,
+            trading_session=kwargs.get("trading_session"),
+        ),
+    )
+    # 时段判定确定化：恒为交易时段（阈值 = 交易时段阈值 1800s）
+    class _FakeStatus:
+        def __init__(self, **kwargs):
+            pass
+
+        def execute_sync(self):
+            return {"session": "OPEN"}
+
+    monkeypatch.setattr(
+        "app.api.v3.MarketIntradayStatusService", _FakeStatus,
+    )
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -178,8 +201,9 @@ def _http_client(monkeypatch, rows):
 def test_http_status_endpoint_shows_three_fast_lane_failures(monkeypatch) -> None:
     """§65：连续 3 次 Fast Lane 失败 → HTTP GET /operations/worker-heartbeat
     可见 degraded=true / last_error / consecutive_errors >= 3。"""
+    now = datetime.now(timezone.utc)
     rows = [
-        _row("intraday-trigger-loop", "DEGRADED", NOW, {
+        _row("intraday-trigger-loop", "DEGRADED", now, {
             "consecutive_errors": 3, "last_error_type": "RuntimeError",
             "last_fast_lane_error": "RuntimeError: scan down",
             "last_fast_lane_status": "ERROR",
@@ -201,11 +225,34 @@ def test_http_status_endpoint_shows_three_fast_lane_failures(monkeypatch) -> Non
 
 
 def test_http_healthy_worker_not_degraded(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
     client = _http_client(monkeypatch, [
-        _row("intraday-trigger-loop", "HEALTHY", NOW, _LOOP_META_HEALTHY),
-    ])
+        _row("intraday-trigger-loop", "HEALTHY", now, _LOOP_META_HEALTHY),
+    ], now=now)
     response = client.get("/api/v3/operations/worker-heartbeat")
     assert response.status_code == 200
     body = response.json()
     assert body["degraded"] is False
+    assert body["heartbeat_stale"] is False
     assert body["consecutive_errors"] == 0
+
+
+def test_http_stale_two_hour_old_healthy_heartbeat(monkeypatch) -> None:
+    """F6-06/Case H：最后心跳 2 小时前（HEALTHY）→ 交易时段内必须
+    STALE/DEGRADED，绝不再显示健康。"""
+    now = datetime.now(timezone.utc)
+    client = _http_client(monkeypatch, [
+        _row(
+            "intraday-trigger-loop", "HEALTHY",
+            now - timedelta(hours=2), _LOOP_META_HEALTHY,
+        ),
+    ], now=now)
+    response = client.get("/api/v3/operations/worker-heartbeat")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["heartbeat_stale"] is True
+    assert body["degraded"] is True
+    view = body["capabilities"]["intraday-trigger-loop"]
+    assert view["status"] == "STALE"
+    assert view["heartbeat_age_seconds"] >= 7200
+    assert view["degraded"] is True

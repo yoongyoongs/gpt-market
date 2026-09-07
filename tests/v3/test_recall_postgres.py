@@ -148,21 +148,34 @@ async def test_recall_run_atomic_publish_replay_full_observations_and_immutabili
         # R5-P1-006/§64：Security-specific 精确读取——命中与未命中都要
         # 如实（命中=该券最新 Published run 结果；未命中=空 tuple，非 None）。
         probe = result_first.items[0]
+        # F6-10/§18：返回 RecallSecurityBundle——run 元数据 + 全 channel
+        # 条目（不 limit 截断）；run 内无此券 = items 为空 + run 仍在。
         per_recall = await uow.recalls.latest_recall_for_security(
             market=probe.market, code=probe.code,
         )
-        assert per_recall is not None and len(per_recall) == 1
-        assert per_recall[0].security_id == probe.security_id
-        assert per_recall[0].code == probe.code
+        assert per_recall is not None and per_recall.run is not None
+        assert len(per_recall.items) == 1
+        assert per_recall.items[0].security_id == probe.security_id
+        assert per_recall.items[0].code == probe.code
+        assert per_recall.run.recall_run_id == first.recall_run_id
+        assert per_recall.run.known_at >= per_recall.run.as_of
+        assert per_recall.run.strategy_version
+        assert 0.0 <= per_recall.run.coverage <= 1.0
         per_raw = await uow.recalls.latest_raw_opportunity_for_security(
             market=raw_page.items[0].market, code=raw_page.items[0].code,
         )
-        assert per_raw is not None and len(per_raw) == 1
-        assert per_raw[0].raw_opportunity_id == raw_page.items[0].raw_opportunity_id
+        assert per_raw is not None and per_raw.run is not None
+        assert len(per_raw.items) == 1
+        assert per_raw.items[0].raw_opportunity_id == (
+            raw_page.items[0].raw_opportunity_id
+        )
         miss = await uow.recalls.latest_recall_for_security(
             market="SH", code="999999",
         )
-        assert miss == ()
+        # 未命中 = run 存在但该券无条目（items 空且 run 元数据仍在）
+        assert miss is not None and miss.run is not None
+        assert miss.items == ()
+        assert miss.run.recall_run_id == first.recall_run_id
     assert result_second is not None
     assert result_first.items[0].security_id != result_second.items[0].security_id
     assert raw_page is not None and len(raw_page.items) == 2

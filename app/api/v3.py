@@ -1246,12 +1246,31 @@ async def read_worker_heartbeat(
     component: str = Query(default="intraday-worker", min_length=1, max_length=128),
     limit: int = Query(default=20, ge=1, le=200),
 ):
-    """R5-P1-007/§65：Worker heartbeat 跨进程读取——API/Dashboard 进程
-    从 operational_health_events 聚合 Worker 最近心跳（degraded /
-    last_error / consecutive_errors 必须直接可见）。"""
+    """R5-P1-007/§65 + F6-06：Worker heartbeat 跨进程读取——API/Dashboard
+    进程从 operational_health_events 聚合 Worker 最近心跳（degraded /
+    last_error / consecutive_errors 必须直接可见）；交易时段内心跳
+    停更超过阈值 → STALE/DEGRADED（旧 HEALTHY 不再永久显示健康）。"""
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+
+    def _trading_session() -> bool:
+        calendar = ExchangeCalendarsAShareCalendar()
+
+        def _trading_day(value):
+            try:
+                return bool(calendar.is_trading_day(value))
+            except Exception:  # noqa: BLE001 - 日历越界按非交易时段
+                return False
+
+        status = MarketIntradayStatusService(
+            clock=lambda: datetime.now(timezone.utc),
+            is_trading_day=_trading_day,
+        ).execute_sync()
+        return status.get("session") in {"OPEN", "LUNCH_BREAK"}
+
     service = ReadWorkerHeartbeatService(
-        _uow, clock=lambda: datetime.now(timezone.utc),
+        _uow,
+        clock=lambda: datetime.now(timezone.utc),
+        trading_session=_trading_session,
     )
     return await service.execute(component, limit)

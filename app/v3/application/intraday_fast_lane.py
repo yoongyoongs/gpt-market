@@ -1,18 +1,32 @@
-"""R4-P1-003：Intraday Fast Lane 生产接线（实时方案 §5 / 复验 §28）。
+"""Intraday Fast Lane 生产接线（实时方案 §5 / R4-P1-003 / R5 / F6 第六轮）。
 
 盘中链路：全市场 Quote → L1 Overlay → Lightweight Scanner →
 IntradayAttentionCandidate → Active Intraday Universe → 重点池
-DeepMarketData → Attention。
+DeepMarketData → Attention → DataQualityAggregator。
 
-- 数据源全部来自既有 UoW 仓储与 ProviderManager（get_all_a_shares
-  批量快照 + get_index_quote 相对指数），不新造数据通道；
-- Overlay 只用最近一次 Published EOD Feature 轻量叠加（FeatureQuery
-  上限 200/页，此处按 cursor 翻页，总量受 feature_limit 约束）；
-- Scanner stale Quote 绝不入选；Deep 只抓前 deep_limit 只重点候选
-  （fetch-time 事实，不落库）；
+F6 第六轮冻结语义：
+
+- Coverage 语义彻底拆开（F6-05/P1-08）：availability（AVAILABLE/PARTIAL/
+  UNAVAILABLE）与 full_market_complete 分离——90% 只能 PARTIAL 且
+  full_market_complete=false；expected=0/actual=0 → coverage=UNKNOWN、
+  UNAVAILABLE、full_market_complete=false，绝不冒充完整市场；
+- DataQualityAggregator（F6-04/P1-09）：quote/feature coverage、四源
+  status、index quality、deep 结果统一聚合 GOOD/DEGRADED/UNAVAILABLE，
+  下游只透传，禁止把 DEGRADED 恢复成 AVAILABLE；
+- Deep Production Contract（F6-02/P0-P1-03）：真实消费
+  DeepMarketDataService 的 periods["5m"/"15m"/"60m"] 结构，
+  trend/support/resistance 原样输出，绝不读不存在的 weekly/daily；
+- Index Quality Gate（F6-08/P1-12）：指数 Quote stale/UNTRUSTED/
+  suspended → index_return=None，绝不制造 STRONG_VS_INDEX；
+- Overlay Levels（F6-08/P1-13）：真实 EOD Levels（prev_high_20d/
+  prev_low_20d/support/resistance）经 levels_loader 接入；无 loader 或
+  加载失败 → 显式 NOT_AVAILABLE，绝不假装支持。
+
+- 数据源全部来自既有 UoW 仓储与 ProviderManager，不新造数据通道；
+- Scanner stale Quote 绝不入选；Deep 只抓前 deep_limit 只重点候选；
 - Attention：scanner 异常 → INTRADAY_ANOMALY；stale Quote ∩ 池内 →
-  DATA_QUALITY_DEGRADED（engine 统一 Gate，R4-P1-002）；
-- emit_attention=False 时只读（MCP scan 用），绝不写 AttentionEvent。
+  DATA_QUALITY_DEGRADED（engine 统一 Gate）；
+- emit_attention（engine=None）时只读（MCP scan 用），绝不写 AttentionEvent。
 """
 
 from __future__ import annotations
@@ -21,10 +35,13 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Protocol
 
+from app.v3.application.data_quality_aggregator import (
+    aggregate_data_quality,
+)
 from app.v3.application.intraday_market_data import map_quote_snapshot
 from app.v3.domain.features import FeatureQuery, FeatureSortField
 
-_SOURCE = "intraday-fast-lane-v1"
+_SOURCE = "intraday-fast-lane-v2"
 _FEATURE_FIELDS = (
     "code", "market", "name", "close", "ma5", "ma10", "ma20", "ma60",
     "return_20d", "coverage", "stale",
@@ -38,11 +55,13 @@ _RAW_PAGE_ROUNDS = 2
 _WATCHLIST_LIMIT = 5000
 # R5-P2-013：进入 Active Pool 的 Watchlist 现态（与 R5-02 一致）
 _ACTIVE_WATCHLIST_STATES = {"WATCHING", "WAIT_ENTRY", "ACTION_READY"}
-# R5-P1-004/§62：全市场 Coverage Gate——部分市场绝不冒充全市场扫描。
-# coverage >= 0.9 → AVAILABLE；0.5 ~ 0.9 → PARTIAL；< 0.5 →
-# UNAVAILABLE_FOR_FULL_MARKET_SCAN。
+# R5-P1-004/§62 + F6-05：全市场 Coverage Gate——部分市场绝不冒充全市场
+# 扫描。coverage >= 0.9 → AVAILABLE；0.5 ~ 0.9 → PARTIAL；< 0.5 →
+# UNAVAILABLE_FOR_FULL_MARKET_SCAN；expected=0 → UNAVAILABLE（无期望
+# 无法宣称任何覆盖）。full_market_complete = actual == expected（严格）。
 _FULL_MARKET_PARTIAL_RATIO = 0.9
 _FULL_MARKET_UNAVAILABLE_RATIO = 0.5
+_DEEP_PERIODS = ("5m", "15m", "60m")
 
 
 class _FeaturesRepo(Protocol):
@@ -116,10 +135,16 @@ class IntradayFastLaneService:
         *,
         engine: _Engine | None = None,
         deep_service: Any = None,
+        levels_loader: Any = None,
         feature_limit: int = 6000,
         deep_limit: int = 10,
         clock: Any = None,
     ) -> None:
+        """levels_loader（F6-08）：async (as_of) -> dict[code, levels dict]。
+
+        由 V3RuntimeFactory 统一注入（v3.market_bars 最新 QFQ DAY
+        revision 20 日窗口）；None/失败 → levels 显式 NOT_AVAILABLE。
+        """
         self._uow_factory = uow_factory
         self._quote_provider = quote_provider
         self._overlay = overlay_service
@@ -127,6 +152,7 @@ class IntradayFastLaneService:
         self._pool_service = pool_service
         self._engine = engine
         self._deep = deep_service
+        self._levels_loader = levels_loader
         self._feature_limit = feature_limit
         self._deep_limit = deep_limit
         self._clock = clock or (lambda: datetime.now().astimezone())
@@ -148,22 +174,30 @@ class IntradayFastLaneService:
         except Exception as exc:  # noqa: BLE001 - 行情失败如实上报，绝不伪造
             report.update({
                 "status": "QUOTE_FAILED",
+                "data_quality": aggregate_data_quality(
+                    quote_status="QUOTE_FAILED", source_statuses=sources,
+                ),
                 "quote_error": f"{type(exc).__name__}: {exc}",
                 "quote_expected": 0, "quote_actual": 0,
                 "quote_missing": 0, "quote_coverage": None,
+                "full_market_complete": False,
                 "candidate_count": 0,
                 "pool_size": len(eod | watchlist | portfolio),
             })
             return report
         snapshots = [map_quote_snapshot(quote, as_of) for quote in raw_quotes]
-        # R5-P1-004/§62：Coverage Gate——丢弃 total、静默丢行后宣称
-        # 全市场扫描完成是谎言；expected/actual/missing/coverage 全透传。
+        # R5-P1-004/§62 + F6-05：Coverage Gate——expected/actual/missing/
+        # coverage 全透传；availability 与 full_market_complete 分离：
+        # - expected=0 → coverage UNKNOWN(None)、UNAVAILABLE、不完整；
+        # - 0.5~0.9 → PARTIAL；>=0.9 → AVAILABLE；<0.5 → UNAVAILABLE；
+        # - full_market_complete = (expected>0 且 actual==expected)。
         expected = int(expected_count or 0)
         quote_count = len(snapshots)
         missing = max(0, expected - quote_count)
         coverage = (quote_count / expected) if expected > 0 else None
-        if coverage is None:
-            status = "AVAILABLE"  # provider 未报告 expected，无法判定缺失
+        full_complete = expected > 0 and quote_count >= expected
+        if expected == 0:
+            status = "UNAVAILABLE_FOR_FULL_MARKET_SCAN"
         elif coverage < _FULL_MARKET_UNAVAILABLE_RATIO:
             status = "UNAVAILABLE_FOR_FULL_MARKET_SCAN"
         elif coverage < _FULL_MARKET_PARTIAL_RATIO:
@@ -179,7 +213,7 @@ class IntradayFastLaneService:
             "quote_coverage": (
                 round(coverage, 4) if coverage is not None else None
             ),
-            "full_market_complete": status == "AVAILABLE",
+            "full_market_complete": full_complete,
         })
         report["stale_quote_count"] = sum(1 for item in snapshots if item.stale)
         # R5-P2-011/§63：L1 Overlay 全市场覆盖率必须可见——低位埋伏依赖
@@ -190,11 +224,22 @@ class IntradayFastLaneService:
             round(len(features) / expected, 4) if expected > 0 else None
         )
 
-        index_return = await self._load_index_return(as_of)
+        # F6-08/P1-12：Index Quality Gate——stale/UNTRUSTED/suspended 指数
+        # 绝不参与相对强度（否则不可信 benchmark 制造 STRONG_VS_INDEX）。
+        index_return, index_quality = await self._load_index_return(as_of)
+        report["index_quality"] = index_quality
+        if index_quality["status"] != "AVAILABLE":
+            index_return = None
+
+        # F6-08/P1-13：真实 EOD Levels 接入 Overlay（levels_loader 注入）。
+        levels, levels_status = await self._load_levels(as_of)
+        report["levels"] = levels_status
+
         overlays = {
             snapshot.code: self._overlay.build(
                 code=snapshot.code, market=snapshot.market,
                 quote=snapshot, feature=features.get(snapshot.code),
+                levels=levels.get(snapshot.code),
                 index_return=index_return, as_of=as_of,
             )
             for snapshot in snapshots
@@ -245,10 +290,30 @@ class IntradayFastLaneService:
         report["attention"] = attention
 
         # R5-P1-002/§61：Deep 输入必须是 merged Active Pool（不是 Scanner
-        # 候选）——Scanner 为空时 Portfolio/Watchlist/EOD 仍获深度刷新；
-        # 受 deep_limit 时按冻结优先级裁剪（fetch-time 事实，不落库）。
+        # 候选）；受 deep_limit 时按冻结优先级裁剪（fetch-time 事实，不落库）。
         ranked_pool = sorted(pool, key=_deep_priority)
-        report["deep"] = await self._deep_summaries(ranked_pool, as_of)
+        deep = await self._deep_summaries(ranked_pool, as_of)
+        report["deep"] = deep
+
+        # F6-04：唯一聚合质量状态——由 quote/feature coverage、四源
+        # status、index quality、deep 结果共同决定；下游只透传。
+        report["data_quality"] = aggregate_data_quality(
+            quote_status=status,
+            quote_expected=expected,
+            quote_coverage=coverage,
+            feature_status=sources["features"]["status"],
+            feature_coverage=(
+                report["feature_coverage"]
+                if report["feature_coverage"] is not None else None
+            ),
+            feature_actual=len(features),
+            source_statuses=sources,
+            index_status=index_quality["status"],
+            deep_requested=self._deep is not None and bool(ranked_pool),
+            deep_statuses=tuple(
+                item["status"] for item in deep if item.get("status")
+            ),
+        )
         return report
 
     async def _load_state(
@@ -257,9 +322,11 @@ class IntradayFastLaneService:
         """一次 UoW 会话读全：特征翻页 + EOD 候选 + Watchlist + 持仓。
 
         R5-P1-003/§62.4：四个来源独立 try——单源失败只标记该源 FAILED
-        并 rollback 会话，绝不把其它来源一起清空（"特征失败不阻断
-        Recall/Watchlist/Portfolio"必须有实现支撑）。会话本身建不起来
-        → 四源全部 FAILED，如实上报。
+        并 rollback 会话，绝不把其它来源一起清空（Case I：Feature 失败
+        不清池）。会话本身建不起来 → 四源全部 FAILED，如实上报。
+
+        F6-10/P2-03：Feature/Raw 翻页第一页确定 run，后续页 pin 同一
+        run——绝不 Page1=RunA/Page2=RunB。
         """
         features: dict[str, Any] = {}
         eod: set[tuple[str, str]] = set()
@@ -281,14 +348,29 @@ class IntradayFastLaneService:
             async with self._uow_factory() as uow:
                 try:
                     cursor: str | None = None
+                    pinned_feature_run: Any = None
                     for _ in range(max(1, self._feature_limit // _PAGE_LIMIT)):
-                        page = await uow.features.query(FeatureQuery(
+                        query = FeatureQuery(
                             sort_by=FeatureSortField.AMOUNT, descending=True,
                             fields=_FEATURE_FIELDS, limit=_PAGE_LIMIT,
                             cursor=cursor,
-                        ))
+                        )
+                        if pinned_feature_run is not None:
+                            query = FeatureQuery(
+                                sort_by=FeatureSortField.AMOUNT,
+                                descending=True,
+                                fields=_FEATURE_FIELDS, limit=_PAGE_LIMIT,
+                                cursor=cursor,
+                                feature_run_id=pinned_feature_run,
+                            )
+                        page = await uow.features.query(query)
                         if page is None:
                             break
+                        # F6-10：第一页确定 run_id，后续页 pin 同一 run
+                        if pinned_feature_run is None:
+                            pinned_feature_run = getattr(
+                                page, "feature_run_id", None,
+                            )
                         for item in page.items:
                             code = item.get("code")
                             if code:
@@ -305,14 +387,22 @@ class IntradayFastLaneService:
                 try:
                     # R5-P2-012/§63：EOD 来源 = latest Raw Opportunity
                     # （正式候选池），不再是 Recall channel hits 前 200。
+                    # F6-10：第一页确定 run_id，后续页 pin 同一 run。
                     cursor: str | None = None
+                    pinned_raw_run: Any = None
                     for _ in range(_RAW_PAGE_ROUNDS):
                         raw_page = await uow.recalls.read_raw(
-                            recall_run_id=None, limit=_RAW_PAGE_LIMIT,
+                            recall_run_id=pinned_raw_run, limit=_RAW_PAGE_LIMIT,
                             cursor=cursor,
                         )
                         if raw_page is None:
                             break
+                        if pinned_raw_run is None:
+                            # F6-10：RawOpportunityReadPage.run 携带 run 事实
+                            run_meta = getattr(raw_page, "run", None)
+                            pinned_raw_run = getattr(
+                                run_meta, "recall_run_id", None,
+                            )
                         for item in raw_page.items:
                             if item.market and item.code:
                                 eod.add((item.market, item.code))
@@ -367,18 +457,57 @@ class IntradayFastLaneService:
         }
         return features, eod, watchlist, portfolio, sources
 
-    async def _load_index_return(self, as_of: datetime) -> float | None:
+    async def _load_index_return(
+        self, as_of: datetime,
+    ) -> tuple[float | None, dict[str, Any]]:
+        """F6-08：指数 Quote 质量门。stale/UNTRUSTED/suspended/失败 →
+        (None, 非 AVAILABLE 状态)，relative_index 一律 UNKNOWN。"""
         try:
             index_quote = await self._quote_provider.get_index_quote(
                 _INDEX_CODE, "SH",
             )
-        except Exception:  # noqa: BLE001 - 指数失败只影响相对强度一个指标
-            return None
-        return _index_return(map_quote_snapshot(index_quote, as_of))
+        except Exception as exc:  # noqa: BLE001 - 指数失败只影响相对强度
+            return None, {"status": "UNAVAILABLE", "reason": f"{type(exc).__name__}: {exc}"}
+        snapshot = map_quote_snapshot(index_quote, as_of)
+        if snapshot.stale:
+            return None, {"status": "STALE", "reason": "INDEX_QUOTE_STALE"}
+        if getattr(snapshot, "quality", None) == "UNTRUSTED":
+            return None, {"status": "UNTRUSTED", "reason": "INDEX_QUOTE_UNTRUSTED"}
+        if getattr(snapshot, "suspended", False):
+            return None, {"status": "UNAVAILABLE", "reason": "INDEX_SUSPENDED"}
+        return _index_return(snapshot), {"status": "AVAILABLE"}
+
+    async def _load_levels(
+        self, as_of: datetime,
+    ) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
+        """F6-08/P1-13：真实 EOD Levels（prev_high_20d/prev_low_20d/
+        support/resistance）接入 Overlay。无 loader 或失败 → 显式
+        NOT_AVAILABLE——绝不"代码宣称支持但生产永远传 None"。"""
+        if self._levels_loader is None:
+            return {}, {
+                "status": "NOT_AVAILABLE", "reason": "NO_LEVELS_SOURCE",
+            }
+        try:
+            levels = await self._levels_loader(as_of)
+        except Exception as exc:  # noqa: BLE001 - Levels 失败不阻断扫描
+            return {}, {
+                "status": "NOT_AVAILABLE",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        if not levels:
+            return {}, {
+                "status": "NOT_AVAILABLE", "reason": "NO_PUBLISHED_DAILY_BARS",
+            }
+        return levels, {"status": "AVAILABLE", "count": len(levels)}
 
     async def _deep_summaries(
         self, pool: tuple[Any, ...], as_of: datetime,
     ) -> list[dict[str, Any]]:
+        """F6-02/P0-P1-03：真实消费 DeepMarketDataService 的
+        IntradayStructure.periods["5m"/"15m"/"60m"]——每周期 trend/
+        support/resistance/status 原样透传 + 扁平 trend_<period> 别名，
+        整票 status = 任一周期 AVAILABLE 即 AVAILABLE。绝不读生产对象
+        上不存在的 weekly/daily/reversal_state/conflict。"""
         if self._deep is None or not pool:
             return []
         summaries: list[dict[str, Any]] = []
@@ -395,17 +524,40 @@ class IntradayFastLaneService:
                     "reason": f"{type(exc).__name__}: {exc}",
                 })
                 continue
+            periods_view: dict[str, dict[str, Any]] = {}
+            flat: dict[str, Any] = {}
+            available = False
+            for period in _DEEP_PERIODS:
+                data = (getattr(structure, "periods", None) or {}).get(period) or {}
+                structure_info = data.get("structure") or {}
+                status = data.get("status", "UNKNOWN")
+                if status == "AVAILABLE":
+                    available = True
+                periods_view[period] = {
+                    "status": status,
+                    "trend": structure_info.get("trend"),
+                    "support": structure_info.get("support"),
+                    "resistance": structure_info.get("resistance"),
+                    "bar_count": data.get("bar_count"),
+                    "stale": data.get("stale"),
+                    "provisional": data.get("provisional"),
+                    "precision": data.get("precision"),
+                    "reason": data.get("reason"),
+                    "source": data.get("source"),
+                    "upstream_source": data.get("upstream_source"),
+                    "known_at": data.get("known_at"),
+                    "quality": data.get("quality"),
+                    "fallback_used": data.get("fallback_used"),
+                }
+                if period in ("5m", "15m", "60m"):
+                    flat[f"trend_{period}"] = structure_info.get("trend")
             summaries.append({
                 "code": entry.code, "market": entry.market,
                 "sources": list(getattr(entry, "sources", ())),
-                "status": "AVAILABLE",
-                "weekly_trend": getattr(
-                    getattr(structure, "weekly", None), "trend", None,
-                ),
-                "daily_trend": getattr(
-                    getattr(structure, "daily", None), "trend", None,
-                ),
-                "reversal_state": getattr(structure, "reversal_state", None),
-                "conflict": getattr(structure, "conflict", None),
+                "status": "AVAILABLE" if available else "UNKNOWN",
+                "known_at": getattr(structure, "known_at", None),
+                "source": getattr(structure, "source", None),
+                "periods": periods_view,
+                **flat,
             })
         return summaries

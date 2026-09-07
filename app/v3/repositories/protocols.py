@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from types import TracebackType
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.v3.contracts.agent import AgentTask
@@ -125,6 +126,35 @@ class FeatureRepository(Protocol):
 
     async def features_for_run(self, feature_run_id: UUID) -> tuple[RecallFeatureView, ...]: ...
 
+    async def daily_levels(
+        self, *, as_of: datetime, lookback: int = 20,
+    ) -> dict[str, dict[str, float]]: ...
+
+
+@dataclass(frozen=True)
+class RecallRunMeta:
+    """F6-10/§18：Security-specific 读取必须携带 run 级元数据——
+    绝不让调用方拿到无 provenance 的裸结果条目。"""
+
+    recall_run_id: UUID
+    as_of: datetime
+    known_at: datetime
+    strategy_version: str
+    coverage: float
+
+
+@dataclass(frozen=True)
+class RecallSecurityBundle:
+    """F6-10：latest_*_for_security 返回值 = run 元数据 + 该券全部条目
+    （全 channel，不再 limit 截断）。run=None 表示无 Published run。"""
+
+    run: RecallRunMeta | None
+    items: tuple[Any, ...]
+
+    @property
+    def known_at(self) -> datetime | None:
+        return self.run.known_at if self.run is not None else None
+
 
 class RecallRepository(Protocol):
     async def resolve_channels(
@@ -159,12 +189,12 @@ class RecallRepository(Protocol):
     ) -> RawOpportunityReadPage | None: ...
 
     async def latest_recall_for_security(
-        self, *, market: str, code: str, limit: int = 5,
-    ) -> tuple[RecallReadItem, ...] | None: ...
+        self, *, market: str, code: str,
+    ) -> RecallSecurityBundle | None: ...
 
     async def latest_raw_opportunity_for_security(
-        self, *, market: str, code: str, limit: int = 5,
-    ) -> tuple[RawOpportunityReadItem, ...] | None: ...
+        self, *, market: str, code: str,
+    ) -> RecallSecurityBundle | None: ...
 
     async def pending_observations(
         self, *, as_of: datetime, limit: int

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, case, exists, func, or_, select, update
@@ -144,6 +145,21 @@ from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
 )
+from app.v3.repositories.protocols import (
+    RecallRunMeta,
+    RecallSecurityBundle,
+)
+
+
+def _recall_run_meta(run_model: Any) -> RecallRunMeta:
+    """F6-10：RecallRunModel → run 级 provenance 元数据。"""
+    return RecallRunMeta(
+        recall_run_id=run_model.recall_run_id,
+        as_of=run_model.as_of,
+        known_at=run_model.known_at,
+        strategy_version=run_model.strategy_version,
+        coverage=float(run_model.coverage),
+    )
 
 
 class SQLAlchemyAgentTaskRepository:
@@ -1640,6 +1656,100 @@ class SQLAlchemyFeatureRepository:
         ).scalars().all()
         return tuple(self._feature(model) for model in models)
 
+    async def daily_levels(
+        self, *, as_of: datetime, lookback: int = 20,
+    ) -> dict[str, dict[str, float]]:
+        """F6-08/P1-13：全市场 EOD Levels（FastLane Overlay 接入）。
+
+        每只证券取最新 PUBLISHED QFQ DAY revision（known_at <= as_of），
+        取 bar_time <= as_of 的最近 lookback 根日 K（market_bars 有
+        NOT provisional 约束），公式与 support-resistance-20d-v1 一致：
+        support=min(low)、resistance=max(high)、prev_high_20d=max(high)、
+        prev_low_20d=min(low)。bars 不足 lookback 的证券不返回（上层
+        如实 NOT_AVAILABLE，绝不给伪水平位）。key = code（A股股票代码
+        前缀跨市场不重叠，与 Overlay/Scanner 的 code 键一致）。
+        """
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id.label("revision_id"),
+                func.row_number().over(
+                    partition_by=BarSeriesRevisionModel.security_id,
+                    order_by=(
+                        BarSeriesRevisionModel.known_at.desc(),
+                        BarSeriesRevisionModel.revision_id.desc(),
+                    ),
+                ).label("revision_rank"),
+            )
+            .where(
+                BarSeriesRevisionModel.period == "DAY",
+                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.status == "PUBLISHED",
+                BarSeriesRevisionModel.known_at <= as_of,
+                SecurityModel.market.in_(("SH", "SZ", "BJ")),
+                SecurityModel.security_id == BarSeriesRevisionModel.security_id,
+            )
+            .subquery()
+        )
+        revision_rows = (
+            await self._session.execute(
+                select(ranked.c.revision_id).where(ranked.c.revision_rank == 1)
+            )
+        ).all()
+        revision_ids = [row[0] for row in revision_rows]
+        if not revision_ids:
+            return {}
+        bar_ranked = (
+            select(
+                MarketBarModel.revision_id.label("revision_id"),
+                MarketBarModel.high.label("high"),
+                MarketBarModel.low.label("low"),
+                func.row_number().over(
+                    partition_by=MarketBarModel.revision_id,
+                    order_by=MarketBarModel.bar_time.desc(),
+                ).label("bar_rank"),
+            )
+            .where(
+                MarketBarModel.revision_id.in_(revision_ids),
+                MarketBarModel.bar_time <= as_of,
+            )
+            .subquery()
+        )
+        rows = (
+            await self._session.execute(
+                select(
+                    SecurityModel.code, SecurityModel.market,
+                    bar_ranked.c.high, bar_ranked.c.low,
+                )
+                .join(
+                    BarSeriesRevisionModel,
+                    BarSeriesRevisionModel.revision_id == bar_ranked.c.revision_id,
+                )
+                .join(
+                    SecurityModel,
+                    SecurityModel.security_id == BarSeriesRevisionModel.security_id,
+                )
+                .where(bar_ranked.c.bar_rank <= lookback)
+            )
+        ).all()
+        windows: dict[tuple[str, str], list[tuple[float, float]]] = {}
+        for code, market, high, low in rows:
+            windows.setdefault((market, code), []).append(
+                (float(high), float(low))
+            )
+        levels: dict[str, dict[str, float]] = {}
+        for (_market, code), pairs in windows.items():
+            if len(pairs) < lookback:
+                continue  # bars 不足 → 不返回，上层如实 NOT_AVAILABLE
+            highs = [high for high, _ in pairs]
+            lows = [low for _, low in pairs]
+            levels[code] = {
+                "prev_high_20d": max(highs),
+                "prev_low_20d": min(lows),
+                "support": min(lows),
+                "resistance": max(highs),
+            }
+        return levels
+
     @staticmethod
     def _run(model: FeatureRunModel) -> FeatureRun:
         return FeatureRun(
@@ -2088,10 +2198,12 @@ class SQLAlchemyRecallRepository:
         return RecallMissReadPage(items=items, next_cursor=next_cursor)
 
     async def latest_recall_for_security(
-        self, *, market: str, code: str, limit: int = 5,
-    ) -> tuple[RecallReadItem, ...] | None:
-        """R5-P1-006/§64：按 security 精确读最新 Published run 的 Recall
-        结果——禁止"取前 200 条再客户端找，找不到当作不存在"。"""
+        self, *, market: str, code: str,
+    ) -> RecallSecurityBundle | None:
+        """R5-P1-006/§64 + F6-10/§18：按 security 精确读最新 Published
+        run 的 Recall 结果——禁止"取前 200 条再客户端找，找不到当作
+        不存在"；返回 run 元数据 + **全部 channel 命中**（不再 limit=5
+        截断，EntryDecisionContext 需要完整 channel 证据）。"""
         run_model = await self._read_run(None)
         if run_model is None:
             return None
@@ -2114,32 +2226,34 @@ class SQLAlchemyRecallRepository:
                 .order_by(
                     RecallChannelModel.code, RecallResultModel.channel_rank,
                 )
-                .limit(limit)
             )
         ).all()
-        return tuple(
-            RecallReadItem(
-                recall_result_id=result.recall_result_id,
-                security_id=result.security_id,
-                market=security.market,
-                code=security.code,
-                name=security.name,
-                channel_code=channel.code,
-                channel_version=channel.version,
-                channel_rank=result.channel_rank,
-                strength=float(result.strength),
-                reasons=tuple(result.reasons),
-                matched_features=result.matched_features,
-                coverage=float(result.coverage),
-            )
-            for result, channel, security in rows
+        return RecallSecurityBundle(
+            run=_recall_run_meta(run_model),
+            items=tuple(
+                RecallReadItem(
+                    recall_result_id=result.recall_result_id,
+                    security_id=result.security_id,
+                    market=security.market,
+                    code=security.code,
+                    name=security.name,
+                    channel_code=channel.code,
+                    channel_version=channel.version,
+                    channel_rank=result.channel_rank,
+                    strength=float(result.strength),
+                    reasons=tuple(result.reasons),
+                    matched_features=result.matched_features,
+                    coverage=float(result.coverage),
+                )
+                for result, channel, security in rows
+            ),
         )
 
     async def latest_raw_opportunity_for_security(
-        self, *, market: str, code: str, limit: int = 5,
-    ) -> tuple[RawOpportunityReadItem, ...] | None:
-        """R5-P1-006/§64：按 security 精确读最新 Published run 的
-        Raw Opportunity。"""
+        self, *, market: str, code: str,
+    ) -> RecallSecurityBundle | None:
+        """R5-P1-006/§64 + F6-10：按 security 精确读最新 Published run
+        的 Raw Opportunity——同样携带 run 元数据、不截断。"""
         run_model = await self._read_run(None)
         if run_model is None:
             return None
@@ -2156,28 +2270,30 @@ class SQLAlchemyRecallRepository:
                     SecurityModel.code == code,
                 )
                 .order_by(RawOpportunityModel.as_of.desc())
-                .limit(limit)
             )
         ).all()
-        return tuple(
-            RawOpportunityReadItem(
-                raw_opportunity_id=raw.raw_opportunity_id,
-                security_id=raw.security_id,
-                market=security.market,
-                code=security.code,
-                name=security.name,
-                as_of=raw.as_of,
-                known_at=raw.known_at,
-                recall_result_ids=tuple(
-                    UUID(value) for value in raw.recall_result_ids
-                ),
-                channel_codes=tuple(raw.channel_codes),
-                reason_summary={
-                    key: tuple(value)
-                    for key, value in raw.reason_summary.items()
-                },
-            )
-            for raw, security in rows
+        return RecallSecurityBundle(
+            run=_recall_run_meta(run_model),
+            items=tuple(
+                RawOpportunityReadItem(
+                    raw_opportunity_id=raw.raw_opportunity_id,
+                    security_id=raw.security_id,
+                    market=security.market,
+                    code=security.code,
+                    name=security.name,
+                    as_of=raw.as_of,
+                    known_at=raw.known_at,
+                    recall_result_ids=tuple(
+                        UUID(value) for value in raw.recall_result_ids
+                    ),
+                    channel_codes=tuple(raw.channel_codes),
+                    reason_summary={
+                        key: tuple(value)
+                        for key, value in raw.reason_summary.items()
+                    },
+                )
+                for raw, security in rows
+            ),
         )
 
     async def _read_run(self, recall_run_id: UUID | None) -> RecallRunModel | None:

@@ -34,13 +34,7 @@ from app.providers.tencent import TencentProvider
 from app.services.data_quality import DataQualityService
 from app.utils.time import SHANGHAI
 from app.v3.application.attention_engine import AttentionEngineService
-from app.v3.application.intraday_fast_lane import IntradayFastLaneService
 from app.v3.application.intraday_market_data import IntradayMarketDataService
-from app.v3.application.intraday_overlay import (
-    ActiveIntradayUniverseService,
-    IntradayOverlayService,
-    IntradayScannerService,
-)
 from app.v3.application.deep_market_data import DeepMarketDataService
 from app.v3.application.intraday_event_poll import IntradayEventPollService
 from app.v3.jobs.intraday_loop import IntradayTriggerLoop, build_health_sink
@@ -706,21 +700,46 @@ async def run_once(output: Path) -> dict:
     # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
     # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
     effective_v3 = resolution.get("effective_mode") == "V3"
+    # F6-09/§17：V2 Live + V3 Research Shadow 产品裁决——用户要求正式
+    # 策略保持 V2，但 V3 每个交易日实际跑低位埋伏候选用于观察效果。
+    # V3_RESEARCH_SHADOW_ENABLED=true 且有效 Release 非 V3 时，主链
+    # 照常包含 full-recall（Recall/Raw Opportunity 数据事实每日刷新，
+    # 供 FastLane EOD 源与 Research 观察），但：
+    # - 正式 Release 解析结果不变（effective_mode 仍为 V2）；
+    # - 不产生任何 Trade/TradeDraft（Recall 只写 Recall/Observation）；
+    # - release_gate.strategy_chain 如实标注 SHADOW_RESEARCH_EXECUTED，
+    #   绝不假装是正式 V3 Release 激活。
+    # 该语义不与 Baseline 冲突：Release Gate 管的是"正式策略激活"，
+    # Research Recall 只是数据事实链的延伸；若未来 Baseline 明确禁止，
+    # 关闭该 env 即回到纯 Gate 行为（DESIGN_CONFLICT 不成立）。
+    research_shadow = (
+        not effective_v3
+        and os.getenv("V3_RESEARCH_SHADOW_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     report["release_gate"] = {
         "data_chain": "EXECUTED",
-        "strategy_chain": "EXECUTED" if effective_v3 else "SKIPPED",
+        "strategy_chain": (
+            "EXECUTED" if effective_v3
+            else "SHADOW_RESEARCH_EXECUTED" if research_shadow
+            else "SKIPPED"
+        ),
+        "research_shadow": research_shadow,
         "reason": resolution.get("reason"),
     }
     if report["trading_day"]:
         trade_date = latest_completed_session(calendar, now)
         # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
         # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全。
-        # 终端标记：策略链启用时取 full-recall（NEW-OPS-002）；V2 期间
-        # full-recall 被 Gate 跳过，终端标记退回数据链终端 evidence-increment，
-        # 否则 catch-up 列表永远追不平。
+        # 终端标记：策略链启用（含 F6-09 Research Shadow）时取
+        # full-recall（NEW-OPS-002）；V2 且无 Shadow 时 full-recall 被
+        # Gate 跳过，终端标记退回数据链终端 evidence-increment，否则
+        # catch-up 列表永远追不平。
+        strategy_chain_active = effective_v3 or research_shadow
         last_key = await _latest_main_success_key(
             database,
-            terminal_job="full-recall" if effective_v3 else "evidence-increment",
+            terminal_job="full-recall" if strategy_chain_active
+            else "evidence-increment",
         )
         last_completed = date.fromisoformat(last_key) if last_key else None
         pending = catchup_trade_dates(
@@ -735,7 +754,7 @@ async def run_once(output: Path) -> dict:
         report["catchup_mode"] = (
             "operational" if any(day < trade_date for day in pending) else "same-day"
         )
-        main_job_ids = None if effective_v3 else DATA_CHAIN_JOB_IDS
+        main_job_ids = None if strategy_chain_active else DATA_CHAIN_JOB_IDS
         report["main"] = _annotate_catchup_runs(
             trade_date,
             pending,
@@ -811,22 +830,18 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
     provider_manager = ProviderManager(
         EastmoneyProvider(settings), TencentProvider(settings, DataQualityService()),
     )
-    # R4-P1-003：Fast Lane 全量接线——Overlay/Scanner/Active Pool/Deep
-    # 与计划价格触发共用同一 ProviderManager 与 UoW
-    fast_lane = IntradayFastLaneService(
+    # R4-P1-003 + F6-01：Fast Lane 与 MCP 复用同一 Runtime Factory——
+    # 能力（feature_limit/Deep/Levels/Coverage/Quality）完全一致，
+    # Worker 唯一差异 = engine=AttentionEngine（允许写 Attention）。
+    from app.v3.runtime import build_v3_runtime
+
+    runtime = build_v3_runtime(
         uow_factory,
         provider_manager,
-        IntradayOverlayService(),
-        IntradayScannerService(),
-        ActiveIntradayUniverseService(),
         engine=AttentionEngineService(uow_factory),
-        deep_service=DeepMarketDataService(
-            provider_manager, source="legacy-provider",
-        ),
-        feature_limit=int(os.getenv("V3_FASTLANE_FEATURE_LIMIT", "6000")),
-        deep_limit=int(os.getenv("V3_FASTLANE_DEEP_LIMIT", "10")),
         clock=lambda: datetime.now(timezone.utc),
     )
+    fast_lane = runtime.fast_lane
 
     def _trading_day(value):
         try:
