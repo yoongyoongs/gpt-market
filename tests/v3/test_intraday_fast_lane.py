@@ -760,3 +760,129 @@ async def test_feature_coverage_reported() -> None:
     assert report["feature_expected"] == 2
     assert report["feature_actual"] == 2  # fake feature 两只
     assert report["feature_coverage"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_coverage_dedupes_by_market_code() -> None:
+    """FC-02 阻断点 4：Coverage 按唯一 (market, code) 证券计数——raw 行数
+    达标但存在重复+缺漏时，绝不冒充完整市场。5553 行 = 5453 唯一 + 100 重复，
+    expected=5553 → unique<expected → full_market_complete=False。"""
+    base = [_quote(f"{i:06d}") for i in range(5553)]
+    quotes = base[:5453] + base[:100]  # 前 100 只重复出现
+    provider = _FakeProvider(tuple(quotes), expected=5553)
+    service = _service(provider, _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["raw_quote_count"] == 5553
+    assert report["unique_quote_count"] == 5453
+    assert report["duplicate_quote_count"] == 100
+    assert report["quote_actual"] == 5453
+    assert report["quote_missing"] == 100
+    assert report["quote_coverage"] == round(5453 / 5553, 4)
+    assert report["full_market_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_full_market_complete_requires_exact_unique() -> None:
+    """FC-02 阻断点 4.2：full_market_complete 必须 unique==expected 严格
+    相等——旧实现的 >= 会在上游重复行把 actual 推过 expected 时谎报完整。"""
+    base = [_quote(f"{i:06d}") for i in range(5553)]
+    # 100 只重复：raw=5653 > expected=5553，旧 >= 语义会误判完整
+    quotes = base + base[:100]
+    provider = _FakeProvider(tuple(quotes), expected=5553)
+    service = _service(provider, _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["raw_quote_count"] == 5653
+    assert report["unique_quote_count"] == 5553
+    assert report["duplicate_quote_count"] == 100
+    assert report["quote_missing"] == 0
+    assert report["full_market_complete"] is True  # unique==expected 严格成立
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_dedup_respects_market_dimension() -> None:
+    """FC-02：去重键是 (market, code)——同 code 不同 market 是两只证券，
+    不得互吞；同 (market, code) 重复才折叠。"""
+    quotes = (
+        _quote("000001", market="SZ"),
+        _quote("000001", market="SZ"),   # 重复 → 折叠
+        _quote("000001", market="SH"),   # 同 code 不同市场 → 保留
+    )
+    provider = _FakeProvider(quotes, expected=2)
+    service = _service(provider, _FakeUow(_FakeReads()))
+    report = await service.execute(as_of=NOW)
+    assert report["raw_quote_count"] == 3
+    assert report["unique_quote_count"] == 2
+    assert report["duplicate_quote_count"] == 1
+    assert report["full_market_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_deep_partial_period_unknown_is_degraded_not_good() -> None:
+    """FC-03 阻断点 3：5m AVAILABLE 但 15m/60m UNKNOWN → 整票不冒充
+    AVAILABLE，data_quality 必须落到 DEGRADED 而非 GOOD。"""
+    from app.v3.application.data_quality_aggregator import (
+        aggregate_data_quality,
+    )
+
+    class _HalfDeep:
+        async def get_intraday_structure(self, code, *, as_of):
+            return SimpleNamespace(
+                code=code, as_of=as_of, known_at=NOW,
+                source="legacy-provider",
+                periods={
+                    "5m": {
+                        "status": "AVAILABLE", "bar_count": 32,
+                        "stale": False,
+                        "structure": {"trend": "UP", "support": 9.9,
+                                      "resistance": 10.5},
+                        "source": "legacy-provider",
+                        "upstream_source": "eastmoney",
+                        "known_at": NOW, "quality": "OK",
+                        "fallback_used": False,
+                    },
+                    "15m": {"status": "UNKNOWN",
+                            "reason": "NO_MINUTE_BARS"},
+                    "60m": {"status": "UNKNOWN",
+                            "reason": "NO_MINUTE_BARS"},
+                },
+            )
+
+    quotes = (_quote("000001", volume_ratio=2.5),)
+    provider = _FakeProvider(quotes, index=None)
+    service = _service(
+        provider, _FakeUow(_FakeReads()), deep=_HalfDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["deep"], "重点池应有 deep summary"
+    summary = report["deep"][0]
+    assert summary["status"] == "AVAILABLE"  # 展示语义：任一周期可用
+    assert summary["period_statuses"] == {
+        "5m": "AVAILABLE", "15m": "UNKNOWN", "60m": "UNKNOWN",
+    }
+    # 聚合语义：周期级 UNKNOWN 必须 DEGRADED
+    assert report["data_quality"] == "DEGRADED"
+    # 直接锚定聚合器行为：同输入手工复算一致
+    assert aggregate_data_quality(
+        quote_status="AVAILABLE", quote_expected=1, quote_coverage=1.0,
+        feature_status="AVAILABLE", feature_coverage=1.0, feature_actual=1,
+        source_statuses={}, index_status="AVAILABLE",
+        deep_requested=True,
+        deep_statuses=("AVAILABLE", "AVAILABLE", "UNKNOWN", "UNKNOWN"),
+    ) == "DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_deep_all_periods_available_is_good() -> None:
+    """FC-03 反例：全部周期 AVAILABLE 仍 GOOD——周期级判定不误伤。"""
+    quotes = (_quote("000001", volume_ratio=2.5),)
+    provider = _FakeProvider(
+        quotes, index=_quote("000300", price=3003.0, prev_close=3000.0),
+    )
+    service = _service(
+        provider, _FakeUow(_FakeReads()), deep=_FakeDeep(),
+    )
+    report = await service.execute(as_of=NOW)
+    assert report["deep"][0]["period_statuses"] == {
+        "5m": "AVAILABLE", "15m": "AVAILABLE", "60m": "AVAILABLE",
+    }
+    assert report["data_quality"] == "GOOD"

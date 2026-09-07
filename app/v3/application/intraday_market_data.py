@@ -67,6 +67,9 @@ def map_quote_snapshot(
         upstream_source=quote.timestamp_source,
         quality=quote.quality,
         stale=quote.stale,
+        # FC-04：fallback_used 显式判定（与 Kline provenance 同一规则），
+        # 非首选上游（tencent fallback / aggregate / cache 等）如实标记
+        fallback_used=quote.source != _PRIMARY_SOURCE,
         confidence=quote.confidence,
     )
     if now is None:

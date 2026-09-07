@@ -185,17 +185,30 @@ class IntradayFastLaneService:
                 "pool_size": len(eod | watchlist | portfolio),
             })
             return report
-        snapshots = [map_quote_snapshot(quote, as_of) for quote in raw_quotes]
-        # R5-P1-004/§62 + F6-05：Coverage Gate——expected/actual/missing/
-        # coverage 全透传；availability 与 full_market_complete 分离：
+        snapshots_all = [
+            map_quote_snapshot(quote, as_of) for quote in raw_quotes
+        ]
+        # R5-P1-004/§62 + F6-05 + FC-02：Coverage Gate——expected/actual/
+        # missing/coverage 全透传；availability 与 full_market_complete 分离：
+        # - Coverage 按唯一 (market, code) 证券计数，不按返回行数——上游
+        #   重复行/翻页失败造成的"行数达标、证券缺漏"不再冒充完整市场；
         # - expected=0 → coverage UNKNOWN(None)、UNAVAILABLE、不完整；
         # - 0.5~0.9 → PARTIAL；>=0.9 → AVAILABLE；<0.5 → UNAVAILABLE；
-        # - full_market_complete = (expected>0 且 actual==expected)。
+        # - full_market_complete = (expected>0 且 unique==expected 严格相等)
+        #   ——翻页失败丢行必然 unique<expected，完整性自然被阻断。
+        unique_snapshots: dict[tuple[str, str], Any] = {}
+        for snapshot in snapshots_all:
+            unique_snapshots.setdefault(
+                (snapshot.market, snapshot.code), snapshot
+            )
+        snapshots = list(unique_snapshots.values())
         expected = int(expected_count or 0)
-        quote_count = len(snapshots)
-        missing = max(0, expected - quote_count)
-        coverage = (quote_count / expected) if expected > 0 else None
-        full_complete = expected > 0 and quote_count >= expected
+        raw_count = len(snapshots_all)
+        unique_count = len(snapshots)
+        duplicate_count = raw_count - unique_count
+        missing = max(0, expected - unique_count)
+        coverage = (unique_count / expected) if expected > 0 else None
+        full_complete = expected > 0 and unique_count == expected
         if expected == 0:
             status = "UNAVAILABLE_FOR_FULL_MARKET_SCAN"
         elif coverage < _FULL_MARKET_UNAVAILABLE_RATIO:
@@ -207,8 +220,11 @@ class IntradayFastLaneService:
         report.update({
             "status": status,
             "quote_expected": expected,
-            "quote_actual": quote_count,
-            "quote_count": quote_count,  # 兼容旧消费方（MCP scan）
+            "quote_actual": unique_count,
+            "quote_count": unique_count,  # 兼容旧消费方（MCP scan）
+            "raw_quote_count": raw_count,
+            "unique_quote_count": unique_count,
+            "duplicate_quote_count": duplicate_count,
             "quote_missing": missing,
             "quote_coverage": (
                 round(coverage, 4) if coverage is not None else None
@@ -295,8 +311,10 @@ class IntradayFastLaneService:
         deep = await self._deep_summaries(ranked_pool, as_of)
         report["deep"] = deep
 
-        # F6-04：唯一聚合质量状态——由 quote/feature coverage、四源
-        # status、index quality、deep 结果共同决定；下游只透传。
+        # F6-04 + FC-03：唯一聚合质量状态——由 quote/feature coverage、
+        # 四源 status、index quality、deep 结果共同决定；下游只透传。
+        # Deep 聚合吃周期级 status：任一重点证券任一必要周期 UNKNOWN/
+        # FAILED → DEGRADED，绝不因"另一周期 AVAILABLE"聚合成 GOOD。
         report["data_quality"] = aggregate_data_quality(
             quote_status=status,
             quote_expected=expected,
@@ -310,8 +328,15 @@ class IntradayFastLaneService:
             source_statuses=sources,
             index_status=index_quality["status"],
             deep_requested=self._deep is not None and bool(ranked_pool),
-            deep_statuses=tuple(
-                item["status"] for item in deep if item.get("status")
+            deep_statuses=(
+                tuple(item["status"] for item in deep if item.get("status"))
+                + tuple(
+                    period_status
+                    for item in deep
+                    for period_status in (
+                        item.get("period_statuses") or {}
+                    ).values()
+                )
             ),
         )
         return report
@@ -506,8 +531,9 @@ class IntradayFastLaneService:
         """F6-02/P0-P1-03：真实消费 DeepMarketDataService 的
         IntradayStructure.periods["5m"/"15m"/"60m"]——每周期 trend/
         support/resistance/status 原样透传 + 扁平 trend_<period> 别名，
-        整票 status = 任一周期 AVAILABLE 即 AVAILABLE。绝不读生产对象
-        上不存在的 weekly/daily/reversal_state/conflict。"""
+        整票 status = 任一周期 AVAILABLE 即 AVAILABLE（展示语义），
+        period_statuses 携带周期级事实供 DataQuality 聚合（FC-03）。
+        绝不读生产对象上不存在的 weekly/daily/reversal_state/conflict。"""
         if self._deep is None or not pool:
             return []
         summaries: list[dict[str, Any]] = []
@@ -555,6 +581,12 @@ class IntradayFastLaneService:
                 "code": entry.code, "market": entry.market,
                 "sources": list(getattr(entry, "sources", ())),
                 "status": "AVAILABLE" if available else "UNKNOWN",
+                # FC-03：周期级状态显式透出——DataQuality 聚合按周期判定，
+                # "任一周期 AVAILABLE 就整票 GOOD"不再可能掩盖部分周期坏掉。
+                "period_statuses": {
+                    period: view["status"]
+                    for period, view in periods_view.items()
+                },
                 "known_at": getattr(structure, "known_at", None),
                 "source": getattr(structure, "source", None),
                 "periods": periods_view,

@@ -50,9 +50,10 @@ class DeepMarketDataService:
     ) -> IntradayStructure:
         """F6-07/P1-11：known_at 必须在网络 fetch 完成之后确定。
 
-        每周期 dict 透传 source/upstream_source/known_at/quality/
-        fallback_used/provisional/stale（§3.2）；聚合 known_at = 各周期
-        known_at 的 max——绝不预先生成 known_at。
+        每周期 dict 透传 source/upstream_source/event_time/known_at/
+        quality/fallback_used/provisional/stale（§3.2 + FC-04：event_time
+        = 上游 data_timestamp，与 Quote/Kline provenance 全链统一）；
+        聚合 known_at = 各周期 known_at 的 max——绝不预先生成 known_at。
         """
         periods: dict[str, dict[str, Any]] = {}
         for period in self._periods:
@@ -115,6 +116,7 @@ class DeepMarketDataService:
                 "stale": None,
                 "source": self._source,
                 "upstream_source": None,
+                "event_time": None,
                 "known_at": self._clock(),
                 "quality": "UNTRUSTED",
                 "fallback_used": False,
@@ -134,6 +136,9 @@ class DeepMarketDataService:
                 "stale": result.stale,
                 "source": self._source,
                 "upstream_source": upstream,
+                # FC-04：event_time = 上游行情时点（data_timestamp）——
+                # 与 Quote/Kline provenance 同一语义，全链统一
+                "event_time": getattr(result, "data_timestamp", None),
                 "known_at": known_at,
                 "quality": "UNTRUSTED" if stale else "OK",
                 "fallback_used": upstream != self._primary_source,
@@ -151,6 +156,9 @@ class DeepMarketDataService:
             "structure": self._structure(bars),
             "source": self._source,
             "upstream_source": upstream,
+            # FC-04：event_time = 上游行情时点（data_timestamp）；
+            # first/last_bar_time 是窗口边界，两者不是同一 Contract 字段
+            "event_time": getattr(result, "data_timestamp", None),
             "known_at": known_at,
             "quality": "UNTRUSTED" if stale else "OK",
             "fallback_used": upstream != self._primary_source,

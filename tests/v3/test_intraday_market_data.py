@@ -437,3 +437,24 @@ async def test_future_event_time_quote_marked_untrusted():
     assert snapshot.stale is True
     assert snapshot.quality == "UNTRUSTED"
     assert snapshot.stale_reason == "FUTURE_EVENT_TIME"
+
+
+@pytest.mark.asyncio
+async def test_quote_snapshot_fallback_used_is_explicit() -> None:
+    """FC-04 阻断点 5：fallback_used 必须是显式 Contract 字段——首选源
+    eastmoney → False，非首选上游 → True，绝不让调用方从 source 推断。"""
+    from app.v3.application.intraday_market_data import map_quote_snapshot
+
+    primary = map_quote_snapshot(_quote(source="eastmoney"), NOW)
+    fallback = map_quote_snapshot(
+        _quote(source="tencent", timestamp_source="eastmoney"), NOW
+    )
+    assert primary.fallback_used is False
+    assert fallback.fallback_used is True
+    # 未来事实降级不改写 fallback 事实：两字段独立
+    degraded = map_quote_snapshot(
+        _quote(source="tencent", server_timestamp=NOW + timedelta(hours=9)),
+        NOW, now=NOW,
+    )
+    assert degraded.fallback_used is True
+    assert degraded.quality == "UNTRUSTED"

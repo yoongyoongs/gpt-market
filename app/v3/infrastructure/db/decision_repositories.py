@@ -16,6 +16,11 @@ from app.v3.domain.ai_import import (
     ImportStatus,
 )
 from app.v3.domain.hashing import canonical_hash
+from app.v3.domain.portfolio import (
+    EffectiveTradeState,
+    TradeCorrectionStep,
+    apply_trade_correction_chain,
+)
 from app.v3.domain.decision import (
     DecisionCorrectionCommand,
     WatchlistState,
@@ -41,6 +46,7 @@ from app.v3.infrastructure.db.models import (
     ReviewModel,
     SecurityModel,
     TaskRunModel,
+    TradeCorrectionModel,
     TradeLedgerModel,
     WatchlistProposalModel,
     WatchlistEventModel,
@@ -84,20 +90,28 @@ def _filter_active_plans(
     held_security_ids: set[UUID],
     now: datetime,
     plan_by_id: dict[UUID, "EntryPlanModel"] | None = None,
-    trade_binding: dict[UUID, tuple[UUID, int]] | None = None,
+    trade_binding: dict[tuple[UUID, UUID], tuple[UUID, int]] | None = None,
     is_trading_day: Any = None,
 ) -> list[dict]:
-    """F6-03/第六轮 §7-§10：Active Plan 冻结定义（纯函数，独立验收）。
+    """F6-03/第六轮 §7-§10 + FC-01：Active Plan 冻结定义（纯函数）。
 
     - **真正最新 Decision**：先按 security 取最新 as_of 的 Decision，
       再看它有没有 Plan——最新 Decision 无 Plan → 该 security 本轮
       无 Active Plan（NO_ACTIVE_ENTRY_PLAN），绝不回退旧 Decision 的
       旧 Plan（P0-P1-05 复现场景）；
-    - **Trade-bound Position Plan**（P0-P1-04）：POSITION 来源优先用
-      TradeLedger.entry_plan_id 绑定的 Plan（真实成交按 Plan A 买入后，
-      即使后来产生 Decision B/Plan B，后台仍监控 Plan A）；持仓无
-      Trade 绑定 → 显式 NO_TRADE_PLAN_BINDING 跳过，绝不悄悄换成最新
-      Decision Plan；
+    - **Trade-bound Position Plan**（P0-P1-04 + FC-01）：POSITION 来源
+      只认 TradeLedger.entry_plan_id 绑定的 Plan，且按
+      (account_id, security_id) 维度解析——多账户各自绑定各自监控；
+      绑定 Plan 取修正链（Correction/Reverse）后的**有效成交**最新
+      BUY，被 REVERSE 或修正为 SELL 的成交不再充当绑定；持仓无
+      Trade 绑定 → 显式 NO_TRADE_PLAN_BINDING 跳过，绝不悄悄换成
+      最新 Decision Plan；
+    - **POSITION 与 ENTRY_WATCHLIST 分离**（FC-01）：两者各自产生
+      独立 monitoring record——TRADE_BOUND record 带 account_id、
+      plan_source="POSITION"；ENTRY_WATCHLIST record 用当前
+      Decision Plan、plan_binding="DECISION"。同一证券两来源并存时
+      输出两条各语义明确的 record，绝不合成
+      "ENTRY_WATCHLIST+POSITION + DECISION binding"；
     - **trigger-only 合法**（P1-06）：stop/target/triggers/cancels
       任一存在即进入 Resident Monitor，不再要求必须有 stop/target；
     - **生命周期**（P1-07）：effective_from 未生效排除；非
@@ -114,61 +128,87 @@ def _filter_active_plans(
         security = security_by_id.get(security_id)
         if security is None:
             continue
-        sources: list[str] = []
-        if security_id in active_watchlist:
-            sources.append("ENTRY_WATCHLIST")
-        if security_id in held_security_ids:
-            sources.append("POSITION")
-        if not sources:
+        in_watchlist = security_id in active_watchlist
+        in_position = security_id in held_security_ids
+        if not in_watchlist and not in_position:
             continue
-        binding = trade_binding.get(security_id)
-        if binding is not None:
-            # F6-03：持仓以 Trade-bound Plan 为准（最新 BUY 成交绑定的
-            # Plan），不替换成最新 Decision Plan；已成交不受
-            # max_wait_sessions 生命周期约束。
+        # FC-01：POSITION 只认 Trade-bound Plan，按 (account_id,
+        # security_id) 维度展开（多账户各监控各自绑定）；绑定 Plan 缺失
+        # 的账户按 NO_TRADE_PLAN_BINDING 跳过，绝不回退 Decision Plan。
+        for (account_id, bound_security_id), binding in sorted(
+            trade_binding.items()
+        ):
+            if bound_security_id != security_id:
+                continue
             plan = plan_by_id.get(binding[0])
             if plan is None:
                 continue  # 绑定的 Plan 已不存在：NO_TRADE_PLAN_BINDING
-            binding_label = "TRADE_BOUND"
-        else:
-            if "POSITION" in sources and "ENTRY_WATCHLIST" not in sources:
-                # 持仓但无 Trade 绑定：显式缺失，不回退最新 Decision Plan
-                continue
-            plan = latest.get(decision_id)
-            if plan is None:
-                continue  # 最新 Decision 无 Plan → NO_ACTIVE_ENTRY_PLAN
-            binding_label = "DECISION"
-        if plan.effective_from > now:
-            continue  # 未来生效计划不进入 Resident Monitor
-        payload = plan.plan or {}
-        stop = payload.get("stop_loss")
-        target = payload.get("take_profit")
-        if stop is None and isinstance(payload.get("stop"), dict):
-            stop = payload["stop"].get("price")
-        if target is None:
-            targets = payload.get("targets") or []
-            if targets and isinstance(targets[0], dict):
-                target = targets[0].get("price")
-        has_trigger = bool(payload.get("triggers"))
-        has_cancel = bool(payload.get("cancels"))
-        if stop is None and target is None and not has_trigger and not has_cancel:
-            continue  # 四类皆无：无可监控事实
-        if binding_label != "TRADE_BOUND":
-            if _plan_wait_expired(plan, payload, now, is_trading_day):
-                continue  # max_wait_sessions 已过期：不再作为 current plan
-        result.append({
-            "entry_plan_id": plan.entry_plan_id,
-            "decision_id": decision_id,
-            "security_id": security.security_id,
-            "code": security.code,
-            "market": security.market,
-            "stop_loss": stop,
-            "take_profit": target,
-            "plan_source": "+".join(sources),
-            "plan_binding": binding_label,
-            "plan": payload,
-        })
+            record = _monitor_record(
+                plan, decision_id, security, "POSITION", "TRADE_BOUND",
+                now, is_trading_day, account_id=account_id,
+            )
+            if record is not None:
+                result.append(record)
+        if in_position and not in_watchlist:
+            continue  # 持仓但无 Trade 绑定：显式缺失，不回退最新 Decision Plan
+        if not in_watchlist:
+            continue
+        plan = latest.get(decision_id)
+        if plan is None:
+            continue  # 最新 Decision 无 Plan → NO_ACTIVE_ENTRY_PLAN
+        record = _monitor_record(
+            plan, decision_id, security, "ENTRY_WATCHLIST", "DECISION",
+            now, is_trading_day,
+        )
+        if record is not None:
+            result.append(record)
     return result
+
+
+def _monitor_record(
+    plan: "EntryPlanModel",
+    decision_id: UUID,
+    security: "SecurityModel",
+    plan_source: str,
+    binding_label: str,
+    now: datetime,
+    is_trading_day: Any,
+    account_id: UUID | None = None,
+) -> dict | None:
+    """单条 monitoring record 的公共事实门：effective_from / 四类可监控
+    事实（stop/target/triggers/cancels）/ max_wait_sessions 生命周期
+    （TRADE_BOUND 已成交不受约束）。无可监控事实或已过期 → None。"""
+    if plan.effective_from > now:
+        return None  # 未来生效计划不进入 Resident Monitor
+    payload = plan.plan or {}
+    stop = payload.get("stop_loss")
+    target = payload.get("take_profit")
+    if stop is None and isinstance(payload.get("stop"), dict):
+        stop = payload["stop"].get("price")
+    if target is None:
+        targets = payload.get("targets") or []
+        if targets and isinstance(targets[0], dict):
+            target = targets[0].get("price")
+    has_trigger = bool(payload.get("triggers"))
+    has_cancel = bool(payload.get("cancels"))
+    if stop is None and target is None and not has_trigger and not has_cancel:
+        return None  # 四类皆无：无可监控事实
+    if binding_label != "TRADE_BOUND":
+        if _plan_wait_expired(plan, payload, now, is_trading_day):
+            return None  # max_wait_sessions 已过期：不再作为 current plan
+    return {
+        "entry_plan_id": plan.entry_plan_id,
+        "decision_id": decision_id,
+        "security_id": security.security_id,
+        "code": security.code,
+        "market": security.market,
+        "stop_loss": stop,
+        "take_profit": target,
+        "plan_source": plan_source,
+        "plan_binding": binding_label,
+        "account_id": account_id,
+        "plan": payload,
+    }
 
 
 def _plan_wait_expired(
@@ -761,10 +801,14 @@ class SQLAlchemyAIResultImportRepository:
         - **先取每个 security 真正最新 Decision**，再看它有没有 Plan——
           最新 Decision 无 Plan → NO_ACTIVE_ENTRY_PLAN，绝不回退旧
           Decision 的旧 Plan（第六轮 P0-P1-05 复现后冻结）；
-        - **POSITION 来源优先 Trade-bound Plan**（TradeLedger.entry_plan_id
-          绑定）：真实成交按 Plan A 买入后，即使后来产生 Decision B/
-          Plan B，后台仍监控 Plan A；持仓无绑定 → NO_TRADE_PLAN_BINDING
-          跳过，绝不悄悄替换（P0-P1-04）；
+        - **POSITION 来源只认 Trade-bound Plan**（TradeLedger.entry_plan_id
+          绑定 + FC-01）：真实成交按 Plan A 买入后，即使后来产生
+          Decision B/Plan B，后台仍监控 Plan A；绑定按
+          (account_id, security_id) 维度、取修正链（Correction/Reverse）
+          后仍有效的最新 BUY 成交；持仓无绑定 → NO_TRADE_PLAN_BINDING
+          跳过，绝不悄悄替换（P0-P1-04）；POSITION 与 ENTRY_WATCHLIST
+          分离产生各自语义的 record，绝不合成为 DECISION binding 的
+          复合来源（FC-01）；
         - ENTRY_WATCHLIST：security 当前 Watchlist state ∈
           {WATCHING, WAIT_ENTRY, ACTION_READY}；
         - trigger-only / cancel-only / stop-only / target-only 均为合法
@@ -815,9 +859,10 @@ class SQLAlchemyAIResultImportRepository:
                 )
             )
         )
-        # F6-03/P0-P1-04：Trade-bound 绑定 = 每 held security 最新一笔
-        # 带 entry_plan_id 的 BUY 成交。
-        trade_binding: dict[UUID, tuple[UUID, int | None]] = {}
+        # F6-03/P0-P1-04 + FC-01：Trade-bound 绑定 = 每 (account_id,
+        # security_id) 维度上修正链后仍有效的最新一笔 BUY 成交
+        # （REVERSE / 修正为 SELL 的成交不充当绑定）。
+        trade_binding: dict[tuple[UUID, UUID], tuple[UUID, int | None]] = {}
         if held_security_ids:
             trades = (
                 await self._session.scalars(
@@ -828,17 +873,63 @@ class SQLAlchemyAIResultImportRepository:
                         TradeLedgerModel.entry_plan_id.is_not(None),
                     )
                     .order_by(
+                        TradeLedgerModel.account_id,
                         TradeLedgerModel.security_id,
                         TradeLedgerModel.trade_time.desc(),
                         TradeLedgerModel.ledger_sequence.desc(),
                     )
                 )
             ).all()
-            for trade in trades:
-                if trade.security_id not in trade_binding:
-                    trade_binding[trade.security_id] = (
-                        trade.entry_plan_id, trade.entry_plan_version,
+            corrections_by_trade: dict[UUID, list[TradeCorrectionModel]] = {}
+            if trades:
+                corrections = (
+                    await self._session.scalars(
+                        select(TradeCorrectionModel).where(
+                            TradeCorrectionModel.trade_id.in_(
+                                [trade.trade_id for trade in trades]
+                            )
+                        ).order_by(TradeCorrectionModel.correction_sequence)
                     )
+                ).all()
+                for correction in corrections:
+                    corrections_by_trade.setdefault(
+                        correction.trade_id, []
+                    ).append(correction)
+            for trade in trades:
+                pair = (trade.account_id, trade.security_id)
+                if pair in trade_binding:
+                    continue  # 同 (account, security) 已取最新有效 BUY
+                try:
+                    effective = apply_trade_correction_chain(
+                        EffectiveTradeState(
+                            side=trade.side,
+                            quantity=trade.quantity,
+                            price=trade.price,
+                            fee=trade.fee,
+                        ),
+                        tuple(
+                            TradeCorrectionStep(
+                                correction_type=item.correction_type,
+                                replacement=item.replacement,
+                                previous_effective_hash=(
+                                    item.previous_effective_hash
+                                ),
+                                effective_hash=item.effective_hash,
+                            )
+                            for item in corrections_by_trade.get(
+                                trade.trade_id, []
+                            )
+                        ),
+                    )
+                except ValueError as exc:
+                    raise RepositoryConflictError(
+                        f"invalid trade correction chain: {exc}"
+                    ) from exc
+                if effective.reversed or effective.side.value != "BUY":
+                    continue  # 已 Reverse / 修正为 SELL：非有效入场成交
+                trade_binding[pair] = (
+                    trade.entry_plan_id, trade.entry_plan_version,
+                )
         return tuple(_filter_active_plans(
             latest, decisions, security_by_id,
             active_watchlist, held_security_ids,

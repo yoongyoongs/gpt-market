@@ -23,6 +23,9 @@ from app.v3.infrastructure.db.models import (
 
 NOW = datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc)
 
+ACCOUNT_A = uuid4()
+ACCOUNT_B = uuid4()
+
 
 def _plan(decision_id, *, stop=9.0, target=11.0, effective_from=None, version=1, plan=None):
     return EntryPlanModel(
@@ -110,11 +113,15 @@ def test_trade_bound_plan_survives_newer_decision():
         {security.security_id: security},
         set(), {security.security_id}, NOW,
         plan_by_id={plan_a.entry_plan_id: plan_a, plan_b.entry_plan_id: plan_b},
-        trade_binding={security.security_id: (plan_a.entry_plan_id, 1)},
+        trade_binding={
+            (ACCOUNT_A, security.security_id): (plan_a.entry_plan_id, 1),
+        },
     )
     assert len(rows) == 1
     assert rows[0]["entry_plan_id"] == plan_a.entry_plan_id
     assert rows[0]["plan_binding"] == "TRADE_BOUND"
+    assert rows[0]["plan_source"] == "POSITION"
+    assert rows[0]["account_id"] == ACCOUNT_A
     assert rows[0]["stop_loss"] == 8.0  # Plan B 的 9.5 不替换 Plan A
 
 
@@ -243,3 +250,86 @@ def test_plan_without_levels_not_monitored():
         {security.security_id}, set(), NOW,
     )
     assert rows == []
+
+
+def test_position_plus_watchlist_without_binding_emits_watchlist_only():
+    """FC-01 阻断点 1：持仓 + Watchlist 并存且无 Trade 绑定 → 绝不合成
+    "ENTRY_WATCHLIST+POSITION + DECISION binding"；POSITION 侧缺绑定，
+    Watchlist 侧用当前 Decision Plan，只输出一条 ENTRY_WATCHLIST record。"""
+    security = _security("600000")
+    decision = _decision(security.security_id, hours_ago=1)
+    latest = {decision.decision_id: _plan(decision.decision_id)}
+    rows = _filter_active_plans(
+        latest, [decision], {security.security_id: security},
+        {security.security_id}, {security.security_id}, NOW,
+        plan_by_id={},
+        trade_binding={},
+    )
+    assert len(rows) == 1
+    assert rows[0]["plan_source"] == "ENTRY_WATCHLIST"
+    assert rows[0]["plan_binding"] == "DECISION"
+    assert rows[0]["account_id"] is None
+
+
+def test_position_plus_watchlist_with_binding_emits_two_records():
+    """FC-01：同证券 POSITION + ENTRY_WATCHLIST 并存且有 Trade 绑定 →
+    两条语义明确的 record（TRADE_BOUND 带 account_id / DECISION 用
+    当前 Decision Plan），不得互相替换。"""
+    security = _security("600000")
+    decision_a = _decision(security.security_id, hours_ago=72)
+    decision_b = _decision(security.security_id, hours_ago=1)
+    plan_a = _plan(decision_a.decision_id, stop=8.0, target=12.0)
+    plan_b = _plan(decision_b.decision_id, stop=9.5, target=10.5)
+    latest = {
+        decision_a.decision_id: plan_a,
+        decision_b.decision_id: plan_b,
+    }
+    rows = _filter_active_plans(
+        latest, [decision_a, decision_b],
+        {security.security_id: security},
+        {security.security_id}, {security.security_id}, NOW,
+        plan_by_id={plan_a.entry_plan_id: plan_a, plan_b.entry_plan_id: plan_b},
+        trade_binding={
+            (ACCOUNT_A, security.security_id): (plan_a.entry_plan_id, 1),
+        },
+    )
+    assert len(rows) == 2
+    position_rows = [r for r in rows if r["plan_binding"] == "TRADE_BOUND"]
+    decision_rows = [r for r in rows if r["plan_binding"] == "DECISION"]
+    assert len(position_rows) == 1 and len(decision_rows) == 1
+    assert position_rows[0]["entry_plan_id"] == plan_a.entry_plan_id
+    assert position_rows[0]["plan_source"] == "POSITION"
+    assert position_rows[0]["account_id"] == ACCOUNT_A
+    assert decision_rows[0]["entry_plan_id"] == plan_b.entry_plan_id
+    assert decision_rows[0]["plan_source"] == "ENTRY_WATCHLIST"
+    assert decision_rows[0]["account_id"] is None
+
+
+def test_multi_account_bindings_each_get_own_record():
+    """FC-01：两账户持有同一证券、各自绑定不同 Plan → 按账户维度各出
+    一条 TRADE_BOUND record，不压缩成证券级单一 Plan。"""
+    security = _security("600000")
+    decision_a = _decision(security.security_id, hours_ago=72)
+    decision_b = _decision(security.security_id, hours_ago=48)
+    plan_a = _plan(decision_a.decision_id, stop=8.0, target=12.0)
+    plan_b = _plan(decision_b.decision_id, stop=8.5, target=11.0)
+    latest = {
+        decision_a.decision_id: plan_a,
+        decision_b.decision_id: plan_b,
+    }
+    rows = _filter_active_plans(
+        latest, [decision_a, decision_b],
+        {security.security_id: security},
+        set(), {security.security_id}, NOW,
+        plan_by_id={plan_a.entry_plan_id: plan_a, plan_b.entry_plan_id: plan_b},
+        trade_binding={
+            (ACCOUNT_A, security.security_id): (plan_a.entry_plan_id, 1),
+            (ACCOUNT_B, security.security_id): (plan_b.entry_plan_id, 1),
+        },
+    )
+    assert len(rows) == 2
+    by_account = {r["account_id"]: r for r in rows}
+    assert by_account[ACCOUNT_A]["entry_plan_id"] == plan_a.entry_plan_id
+    assert by_account[ACCOUNT_B]["entry_plan_id"] == plan_b.entry_plan_id
+    assert all(r["plan_binding"] == "TRADE_BOUND" for r in rows)
+    assert all(r["plan_source"] == "POSITION" for r in rows)

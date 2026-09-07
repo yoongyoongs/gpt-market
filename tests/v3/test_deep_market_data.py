@@ -27,7 +27,10 @@ class FakeMinuteProvider:
             })()
             for i in range(count)
         ]
-        result = type("Result", (), {"klines": bars, "stale": False})()
+        result = type("Result", (), {
+            "klines": bars, "stale": False,
+            "source": "eastmoney", "data_timestamp": AS_OF,
+        })()
         return result
 
 
@@ -162,3 +165,39 @@ async def test_flat_structure_is_sideways_per_unified_vocabulary() -> None:
         "600000", as_of=NOW,
     )
     assert structure.periods["60m"]["structure"]["trend"] == "SIDEWAYS"
+
+
+@pytest.mark.asyncio
+async def test_deep_period_event_time_is_upstream_data_timestamp() -> None:
+    """FC-04 阻断点 5：Deep period event_time = 上游 data_timestamp，
+    与 Quote/Kline provenance 全链统一；first/last_bar_time 是窗口边界，
+    不是同一 Contract 字段。"""
+    provider = FakeMinuteProvider()
+    service = make_service(provider)
+    structure = await service.get_intraday_structure(
+        "000001", as_of=NOW + timedelta(minutes=1),
+    )
+    for period, item in structure.periods.items():
+        assert item["status"] == "AVAILABLE", (period, item)
+        assert item["event_time"] == AS_OF
+        assert item["upstream_source"] == "eastmoney"
+        assert item["fallback_used"] is False
+        assert item["known_at"] == NOW  # fetch 完成后取时点
+
+
+@pytest.mark.asyncio
+async def test_deep_period_failure_reports_event_time_none() -> None:
+    """FC-04：provider 失败路径 event_time 显式 None，不伪造上游时点。"""
+    from app.v3.application.deep_market_data import DeepMarketDataService
+
+    class _BoomProvider:
+        async def get_kline(self, code, period, limit, adjust="qfq"):
+            raise RuntimeError("clist down")
+
+    service = DeepMarketDataService(_BoomProvider(), clock=lambda: NOW)
+    structure = await service.get_intraday_structure(
+        "000001", as_of=AS_OF,
+    )
+    for period, item in structure.periods.items():
+        assert item["status"] == "UNKNOWN"
+        assert item["event_time"] is None

@@ -56,6 +56,7 @@ class V3Runtime:
         fast_lane: Any,
         deep_service: Any,
         intraday_market_data: Any,
+        structure_service: Any,
         config: V3RuntimeConfig,
     ) -> None:
         self.uow_factory = uow_factory
@@ -63,6 +64,9 @@ class V3Runtime:
         self.fast_lane = fast_lane
         self.deep_service = deep_service
         self.intraday_market_data = intraday_market_data
+        # FC-05：HTTP/MCP Decision Context 的分钟结构服务同样出自
+        # Runtime——同一 bars 源，禁止各入口自建第二套
+        self.structure_service = structure_service
         self.config = config
 
 
@@ -86,6 +90,9 @@ def build_v3_runtime(
     from app.v3.application.intraday_market_data import (
         IntradayMarketDataService,
     )
+    from app.v3.application.intraday_structure_snapshot import (
+        IntradayStructureSnapshotService,
+    )
     from app.v3.application.intraday_overlay import (
         ActiveIntradayUniverseService,
         IntradayOverlayService,
@@ -98,6 +105,9 @@ def build_v3_runtime(
         provider_manager, source="legacy-provider",
     )
     intraday_market_data = IntradayMarketDataService(provider_manager)
+    structure_service = IntradayStructureSnapshotService(
+        intraday_market_data,
+    )
 
     async def _levels_loader(as_of: datetime) -> dict[str, dict[str, float]]:
         """F6-08：真实 EOD Levels（最新 QFQ DAY revision 20 日窗口）。"""
@@ -123,5 +133,6 @@ def build_v3_runtime(
         fast_lane=fast_lane,
         deep_service=deep_service,
         intraday_market_data=intraday_market_data,
+        structure_service=structure_service,
         config=config,
     )
