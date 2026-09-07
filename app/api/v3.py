@@ -10,10 +10,6 @@ from app.container import container
 from app.v3.application.execute_regression_case import ExecuteRegressionCaseService
 from app.v3.application.release_resolver import ReleaseResolver
 from app.v3.application.read_operations import ReadOperationsService
-from app.v3.application.intraday_market_data import IntradayMarketDataService
-from app.v3.application.intraday_structure_snapshot import (
-    IntradayStructureSnapshotService,
-)
 from app.v3.application.read_entry_decision_context import (
     ReadEntryDecisionContextService,
 )
@@ -101,7 +97,6 @@ from app.v3.repositories.errors import (
     RepositoryConflictError,
     RepositoryNotFoundError,
 )
-from app.v3.application.deep_market_data import DeepMarketDataService
 from app.v3.security import V3Principal, bind_v3_principal
 
 router = APIRouter(prefix="/api/v3", tags=["V3"])
@@ -111,6 +106,23 @@ def _uow():
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
     return container.v3.uow()
+
+
+_V3_RUNTIME_CACHE: dict = {}
+
+
+def _v3_runtime_read_only():
+    """FC-05/F6-01：HTTP Decision Context 复用唯一 Runtime Factory——
+    intraday/deep/structure 服务与 Worker/MCP 同源（同一 Provider/
+    feature_limit/deep_limit/Levels），HTTP 上下文只读，engine=None
+    绝不写 AttentionEvent。"""
+    if "runtime" not in _V3_RUNTIME_CACHE:
+        from app.v3.runtime import build_v3_runtime
+
+        _V3_RUNTIME_CACHE["runtime"] = build_v3_runtime(
+            _uow, container.provider_manager, engine=None,
+        )
+    return _V3_RUNTIME_CACHE["runtime"]
 
 
 def _bind_principal(command, request: Request):
@@ -764,12 +776,14 @@ async def entry_decision_context(
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
     effective_as_of = _require_current_as_of(as_of)
-    # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback + 健康降级）
-    bars_service = IntradayMarketDataService(container.provider_manager)
+    # R3-P1-006 + FC-05：实时主入口复用 Runtime Factory 的
+    # intraday/structure 服务（ProviderManager fallback 语义不变），
+    # 不再自建第二套服务
+    runtime = _v3_runtime_read_only()
     service = ReadEntryDecisionContextService(
         _uow,
-        bars_service,
-        IntradayStructureSnapshotService(bars_service),
+        runtime.intraday_market_data,
+        runtime.structure_service,
     )
     return await service.execute(
         code, market, as_of=effective_as_of,
@@ -781,10 +795,9 @@ async def portfolio_intraday_structure(
     code: str,
     as_of: datetime | None = Query(default=None),
 ):
-    """分钟级深度结构（RC-04D）：只服务持仓上下文，fetch-time 事实。"""
-    service = DeepMarketDataService(
-        container.provider_manager, source="legacy-provider",
-    )
+    """分钟级深度结构（RC-04D）：只服务持仓上下文，fetch-time 事实。
+    FC-05：Deep 服务复用 Runtime Factory（deep_service），不再自建。"""
+    service = _v3_runtime_read_only().deep_service
     return await service.get_intraday_structure(
         code, as_of=as_of or datetime.now(timezone.utc),
     )
@@ -827,14 +840,14 @@ async def position_review_history(
 
 def _position_context_service() -> ReadPositionContextService:
     """NEW-CTX-002：主路径绑定 Calendar + DeepMarketData + 实时 Quote，
-    60m/15m/5m 与 holding_sessions 不再退化 UNKNOWN。"""
+    60m/15m/5m 与 holding_sessions 不再退化 UNKNOWN。
+    FC-05：Deep/Quote 服务复用 Runtime Factory，不再自建。"""
+    runtime = _v3_runtime_read_only()
     return ReadPositionContextService(
         _uow,
         calendar=ExchangeCalendarsAShareCalendar(),
-        deep_market_data=DeepMarketDataService(
-            container.provider_manager, source="legacy-provider",
-        ),
-        quote_service=IntradayMarketDataService(container.provider_manager),
+        deep_market_data=runtime.deep_service,
+        quote_service=runtime.intraday_market_data,
     )
 
 

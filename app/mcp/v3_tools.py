@@ -42,10 +42,6 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
     if v3 is None or not getattr(v3, "enabled", False):
         return []
 
-    from app.v3.application.intraday_market_data import IntradayMarketDataService
-    from app.v3.application.intraday_structure_snapshot import (
-        IntradayStructureSnapshotService,
-    )
     from app.v3.application.manage_decisions import DecisionStateService
     from app.v3.application.market_intraday_status import (
         MarketIntradayStatusService,
@@ -69,18 +65,30 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
     calendar = ExchangeCalendarsAShareCalendar()
     _cache: dict[str, Any] = {}
 
+    def _runtime_read_only() -> Any:
+        """FC-05：MCP 全部只读服务复用唯一 Runtime Factory。
+
+        bars/structure/deep/fast_lane 全部出自同一 V3Runtime 实例——
+        与 Worker/HTTP 同能力（feature_limit/Deep/Levels/Coverage），
+        唯一差异 = engine=None（只读，绝不写 AttentionEvent）。
+        """
+        if "runtime" not in _cache:
+            from app.v3.runtime import build_v3_runtime
+
+            _cache["runtime"] = build_v3_runtime(
+                uow_factory,
+                root_container.provider_manager,
+                engine=None,  # 只读：不发 Attention
+                clock=_utcnow,
+            )
+        return _cache["runtime"]
+
     def _bars_service() -> Any:
-        if "bars" not in _cache:
-            # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback）
-            _cache["bars"] = IntradayMarketDataService(root_container.provider_manager)
-        return _cache["bars"]
+        # R3-P1-006：实时主入口走 ProviderManager（东财/腾讯 fallback）
+        return _runtime_read_only().intraday_market_data
 
     def _structure_service() -> Any:
-        if "structure" not in _cache:
-            _cache["structure"] = IntradayStructureSnapshotService(
-                _bars_service(),
-            )
-        return _cache["structure"]
+        return _runtime_read_only().structure_service
 
     def _intraday_status() -> Any:
         if "status" not in _cache:
@@ -117,16 +125,15 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
         return _cache["entry"]
 
     def _position_context_service() -> Any:
-        """NEW-CTX-002：MCP 主路径同样绑定 Calendar/Deep/实时 Quote。"""
-        if "position_context" not in _cache:
-            from app.v3.application.deep_market_data import DeepMarketDataService
+        """NEW-CTX-002：MCP 主路径同样绑定 Calendar/Deep/实时 Quote。
 
+        FC-05：deep_market_data 复用 Runtime 的 deep_service——不再自建
+        第二套 DeepMarketDataService。"""
+        if "position_context" not in _cache:
             _cache["position_context"] = ReadPositionContextService(
                 uow_factory,
                 calendar=calendar,
-                deep_market_data=DeepMarketDataService(
-                    root_container.provider_manager, source="legacy-provider",
-                ),
+                deep_market_data=_runtime_read_only().deep_service,
                 quote_service=_bars_service(),
             )
         return _cache["position_context"]
@@ -166,16 +173,7 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
         Runtime Factory——能力（feature_limit/Deep/Levels/Coverage/
         Quality）完全一致，唯一差异 = engine=None（只读，绝不写
         AttentionEvent）。"""
-        if "fast_lane" not in _cache:
-            from app.v3.runtime import build_v3_runtime
-
-            _cache["fast_lane"] = build_v3_runtime(
-                uow_factory,
-                root_container.provider_manager,
-                engine=None,  # 只读扫描：不发 Attention
-                clock=_utcnow,
-            ).fast_lane
-        return _cache["fast_lane"]
+        return _runtime_read_only().fast_lane
 
     @_tool
     async def v3_scan_opportunities(
@@ -200,6 +198,8 @@ def register_v3_tools(mcp: Any, container: Any) -> list[str]:
             for key in (
                 "status", "data_quality", "quote_error",
                 "quote_expected", "quote_actual", "quote_count",
+                "raw_quote_count", "unique_quote_count",
+                "duplicate_quote_count",
                 "quote_missing", "quote_coverage", "full_market_complete",
                 "stale_quote_count", "feature_expected", "feature_actual",
                 "feature_coverage", "overlay_status", "features_error",

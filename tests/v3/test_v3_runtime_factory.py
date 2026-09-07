@@ -244,3 +244,49 @@ async def test_case_b_real_deep_and_fast_lane_assembly() -> None:
         deep["periods"][p]["known_at"] for p in ("5m", "15m", "60m")
     ]
     assert deep["known_at"] >= max(period_known) - timedelta(seconds=0)
+
+
+# ---------- FC-05：structure_service 出自 Runtime，绝不自建第二套 ----------
+
+
+def test_case_c_runtime_exposes_structure_service_same_source() -> None:
+    """FC-05：Runtime 暴露 structure_service（HTTP Decision Context /
+    MCP 的分钟结构服务），bars 源与 runtime.intraday_market_data 是
+    同一实例——同 provider 同源，禁止各入口自建第二套。"""
+    provider_manager = object()
+    worker = build_v3_runtime(
+        lambda: _FakeUow(), provider_manager,
+        engine=_FakeEngine(), clock=lambda: NOW,
+    )
+    mcp = build_v3_runtime(
+        lambda: _FakeUow(), provider_manager, engine=None, clock=lambda: NOW,
+    )
+    from app.v3.application.intraday_structure_snapshot import (
+        IntradayStructureSnapshotService,
+    )
+
+    # 类型正确
+    assert isinstance(
+        worker.structure_service, IntradayStructureSnapshotService,
+    )
+    assert isinstance(
+        mcp.structure_service, IntradayStructureSnapshotService,
+    )
+    # bars 源 = 同一 Runtime 的 intraday_market_data 实例（同源硬约束）
+    assert (
+        worker.structure_service._bars
+        is worker.intraday_market_data
+    )
+    assert (
+        mcp.structure_service._bars is mcp.intraday_market_data
+    )
+    # 同 provider_manager：Worker / MCP / HTTP 三入口能力一致
+    assert (
+        worker.structure_service._bars._provider
+        is mcp.structure_service._bars._provider
+    )
+    # deep_service 同源：结构服务与 Deep 共享同一 provider
+    assert (
+        mcp.structure_service._bars._provider
+        is mcp.deep_service._provider
+    )
