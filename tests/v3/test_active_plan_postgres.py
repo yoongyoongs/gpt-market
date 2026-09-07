@@ -18,7 +18,6 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.v3.domain.portfolio import (
-    AccountCreate,
     EffectiveTradeState,
     TradeCorrectionStep,
 )

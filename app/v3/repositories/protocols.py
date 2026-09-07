@@ -48,13 +48,11 @@ from app.v3.domain.market_data import (
 from app.v3.domain.recall import (
     PerformanceObservation,
     RawOpportunity,
-    RawOpportunityReadItem,
     RawOpportunityReadPage,
     RecallChannel,
     RecallFeatureView,
     RecallMissEvaluation,
     RecallMissReadPage,
-    RecallReadItem,
     RecallReadPage,
     RecallResult,
     RecallRun,
