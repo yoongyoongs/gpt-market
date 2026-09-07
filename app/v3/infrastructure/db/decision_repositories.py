@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import UUID, uuid4
 
@@ -41,6 +41,7 @@ from app.v3.infrastructure.db.models import (
     ReviewModel,
     SecurityModel,
     TaskRunModel,
+    TradeLedgerModel,
     WatchlistProposalModel,
     WatchlistEventModel,
     WatchlistModel,
@@ -59,6 +60,22 @@ _ACTIVE_WATCHLIST_STATES = (
 )
 
 
+_CALENDAR_SINGLETON: Any = None
+
+
+def _trading_day_fn() -> Any:
+    """P1-07 max_wait_sessions 生命周期用的交易日谓词（模块级单例，
+    避免每 45s 轮询重建 calendar）。"""
+    global _CALENDAR_SINGLETON
+    if _CALENDAR_SINGLETON is None:
+        from app.v3.infrastructure.providers.exchange_calendar import (
+            ExchangeCalendarsAShareCalendar,
+        )
+
+        _CALENDAR_SINGLETON = ExchangeCalendarsAShareCalendar()
+    return _CALENDAR_SINGLETON.is_trading_day
+
+
 def _filter_active_plans(
     latest: dict[UUID, "EntryPlanModel"],
     decisions: "Iterable[DecisionModel]",
@@ -66,18 +83,32 @@ def _filter_active_plans(
     active_watchlist: set[UUID],
     held_security_ids: set[UUID],
     now: datetime,
+    plan_by_id: dict[UUID, "EntryPlanModel"] | None = None,
+    trade_binding: dict[UUID, tuple[UUID, int]] | None = None,
+    is_trading_day: Any = None,
 ) -> list[dict]:
-    """R5-P1-005/§60：Active Plan 冻结定义（纯函数，便于独立验收）。
+    """F6-03/第六轮 §7-§10：Active Plan 冻结定义（纯函数，独立验收）。
 
-    - 每个 security 只取当前 Decision（最新 as_of）的最新版本 Plan——
-      历史 Decision 的 Plan 即使带 stop/target 也不进入 Resident Monitor；
-    - 仅 ENTRY_WATCHLIST（Watchlist 现态 ∈ _ACTIVE_WATCHLIST_STATES）
-      或 POSITION（持仓现态投影 quantity > 0）的 security 保留；
-    - effective_from 未生效（未来计划）排除。
+    - **真正最新 Decision**：先按 security 取最新 as_of 的 Decision，
+      再看它有没有 Plan——最新 Decision 无 Plan → 该 security 本轮
+      无 Active Plan（NO_ACTIVE_ENTRY_PLAN），绝不回退旧 Decision 的
+      旧 Plan（P0-P1-05 复现场景）；
+    - **Trade-bound Position Plan**（P0-P1-04）：POSITION 来源优先用
+      TradeLedger.entry_plan_id 绑定的 Plan（真实成交按 Plan A 买入后，
+      即使后来产生 Decision B/Plan B，后台仍监控 Plan A）；持仓无
+      Trade 绑定 → 显式 NO_TRADE_PLAN_BINDING 跳过，绝不悄悄换成最新
+      Decision Plan；
+    - **trigger-only 合法**（P1-06）：stop/target/triggers/cancels
+      任一存在即进入 Resident Monitor，不再要求必须有 stop/target；
+    - **生命周期**（P1-07）：effective_from 未生效排除；非
+      Trade-bound Plan 超过 max_wait_sessions 个交易日后过期排除
+      （不能无限期作为 current plan）。
     """
     current_decision_id: dict[UUID, UUID] = {}  # security_id -> decision_id
     for decision in sorted(decisions, key=lambda d: d.as_of):
         current_decision_id[decision.security_id] = decision.decision_id
+    plan_by_id = plan_by_id or {}
+    trade_binding = trade_binding or {}
     result = []
     for security_id, decision_id in current_decision_id.items():
         security = security_by_id.get(security_id)
@@ -90,7 +121,23 @@ def _filter_active_plans(
             sources.append("POSITION")
         if not sources:
             continue
-        plan = latest[decision_id]
+        binding = trade_binding.get(security_id)
+        if binding is not None:
+            # F6-03：持仓以 Trade-bound Plan 为准（最新 BUY 成交绑定的
+            # Plan），不替换成最新 Decision Plan；已成交不受
+            # max_wait_sessions 生命周期约束。
+            plan = plan_by_id.get(binding[0])
+            if plan is None:
+                continue  # 绑定的 Plan 已不存在：NO_TRADE_PLAN_BINDING
+            binding_label = "TRADE_BOUND"
+        else:
+            if "POSITION" in sources and "ENTRY_WATCHLIST" not in sources:
+                # 持仓但无 Trade 绑定：显式缺失，不回退最新 Decision Plan
+                continue
+            plan = latest.get(decision_id)
+            if plan is None:
+                continue  # 最新 Decision 无 Plan → NO_ACTIVE_ENTRY_PLAN
+            binding_label = "DECISION"
         if plan.effective_from > now:
             continue  # 未来生效计划不进入 Resident Monitor
         payload = plan.plan or {}
@@ -102,8 +149,13 @@ def _filter_active_plans(
             targets = payload.get("targets") or []
             if targets and isinstance(targets[0], dict):
                 target = targets[0].get("price")
-        if stop is None and target is None:
-            continue
+        has_trigger = bool(payload.get("triggers"))
+        has_cancel = bool(payload.get("cancels"))
+        if stop is None and target is None and not has_trigger and not has_cancel:
+            continue  # 四类皆无：无可监控事实
+        if binding_label != "TRADE_BOUND":
+            if _plan_wait_expired(plan, payload, now, is_trading_day):
+                continue  # max_wait_sessions 已过期：不再作为 current plan
         result.append({
             "entry_plan_id": plan.entry_plan_id,
             "decision_id": decision_id,
@@ -113,9 +165,47 @@ def _filter_active_plans(
             "stop_loss": stop,
             "take_profit": target,
             "plan_source": "+".join(sources),
+            "plan_binding": binding_label,
             "plan": payload,
         })
     return result
+
+
+def _plan_wait_expired(
+    plan: "EntryPlanModel",
+    payload: dict,
+    now: datetime,
+    is_trading_day: Any,
+) -> bool:
+    """P1-07：max_wait_sessions 生命周期——effective_from 起第 N 个
+    交易日后计划过期，不再无限期作为 current plan。日历缺失/越界时
+    保守视为未过期（不因日历故障停摆监控）。"""
+    max_wait = payload.get("max_wait_sessions")
+    if not isinstance(max_wait, int) or max_wait <= 0:
+        return False
+    if is_trading_day is None:
+        return False
+    start = plan.effective_from
+    if start.tzinfo is not None:
+        start = start.astimezone().replace(tzinfo=None)
+    now_naive = now
+    if now.tzinfo is not None:
+        now_naive = now.astimezone().replace(tzinfo=None)
+    day = start.date()
+    counted = 0
+    for _ in range(max_wait * 3 + 10):  # 上界防周末/节假日长尾死循环
+        day += timedelta(days=1)
+        try:
+            if not is_trading_day(day):
+                continue
+        except Exception:  # noqa: BLE001 - 日历越界按交易日历事实处理
+            return False
+        counted += 1
+        if counted >= max_wait:
+            break
+    else:
+        return False
+    return now_naive.date() > day
 
 
 class SQLAlchemyAIResultImportRepository:
@@ -665,18 +755,24 @@ class SQLAlchemyAIResultImportRepository:
         )
 
     async def active_price_trigger_plans(self) -> tuple[dict, ...]:
-        """RT §21 盘中循环 + R5-P1-005/§60：Resident Monitor 只监控
-        当前有效 EntryPlan（Active Plan 定义见 _filter_active_plans）。
+        """RT §21 盘中循环 + R5-P1-005/§60 + F6-03：Resident Monitor
+        只监控当前有效 EntryPlan（Active Plan 定义见 _filter_active_plans）。
 
+        - **先取每个 security 真正最新 Decision**，再看它有没有 Plan——
+          最新 Decision 无 Plan → NO_ACTIVE_ENTRY_PLAN，绝不回退旧
+          Decision 的旧 Plan（第六轮 P0-P1-05 复现后冻结）；
+        - **POSITION 来源优先 Trade-bound Plan**（TradeLedger.entry_plan_id
+          绑定）：真实成交按 Plan A 买入后，即使后来产生 Decision B/
+          Plan B，后台仍监控 Plan A；持仓无绑定 → NO_TRADE_PLAN_BINDING
+          跳过，绝不悄悄替换（P0-P1-04）；
         - ENTRY_WATCHLIST：security 当前 Watchlist state ∈
           {WATCHING, WAIT_ENTRY, ACTION_READY}；
-        - POSITION：security 持仓现态投影 quantity > 0；
-        - 每个 security 只取当前 Decision（最新 as_of）的最新版本 Plan。
+        - trigger-only / cancel-only / stop-only / target-only 均为合法
+          监控计划（P1-06）；
+        - effective_from / max_wait_sessions 生命周期生效（P1-07）。
 
-        历史 Decision / CLOSED / INVALIDATED Watchlist 不再产生
-        STOP_HIT / TARGET_HIT / ENTRY_TRIGGER_MET。plan JSONB 为
-        RT-06 类型化结构（stop.price / targets[].price），兼容历史
-        stop_loss/take_profit 顶层键。
+        plan JSONB 为 RT-06 类型化结构（stop.price / targets[].price），
+        兼容历史 stop_loss/take_profit 顶层键。
         """
         plans = (
             await self._session.scalars(
@@ -686,16 +782,14 @@ class SQLAlchemyAIResultImportRepository:
             )
         ).all()
         latest: dict[UUID, EntryPlanModel] = {}
+        plan_by_id: dict[UUID, EntryPlanModel] = {}
         for row in plans:  # version 升序 → 同 decision 后者覆盖
             latest[row.decision_id] = row
-        if not latest:
-            return ()
+            plan_by_id[row.entry_plan_id] = row
+        # F6-03：全部 Decision 都参与"当前 Decision"竞选（不能只查有
+        # Plan 的 Decision——否则最新无 Plan 时旧 Decision 会冒充当前）。
         decisions = (
-            await self._session.scalars(
-                select(DecisionModel).where(
-                    DecisionModel.decision_id.in_(latest)
-                )
-            )
+            await self._session.scalars(select(DecisionModel))
         ).all()
         securities = (
             await self._session.scalars(
@@ -721,10 +815,37 @@ class SQLAlchemyAIResultImportRepository:
                 )
             )
         )
+        # F6-03/P0-P1-04：Trade-bound 绑定 = 每 held security 最新一笔
+        # 带 entry_plan_id 的 BUY 成交。
+        trade_binding: dict[UUID, tuple[UUID, int | None]] = {}
+        if held_security_ids:
+            trades = (
+                await self._session.scalars(
+                    select(TradeLedgerModel)
+                    .where(
+                        TradeLedgerModel.security_id.in_(held_security_ids),
+                        TradeLedgerModel.side == "BUY",
+                        TradeLedgerModel.entry_plan_id.is_not(None),
+                    )
+                    .order_by(
+                        TradeLedgerModel.security_id,
+                        TradeLedgerModel.trade_time.desc(),
+                        TradeLedgerModel.ledger_sequence.desc(),
+                    )
+                )
+            ).all()
+            for trade in trades:
+                if trade.security_id not in trade_binding:
+                    trade_binding[trade.security_id] = (
+                        trade.entry_plan_id, trade.entry_plan_version,
+                    )
         return tuple(_filter_active_plans(
             latest, decisions, security_by_id,
             active_watchlist, held_security_ids,
             datetime.now(timezone.utc),
+            plan_by_id=plan_by_id,
+            trade_binding=trade_binding,
+            is_trading_day=_trading_day_fn(),
         ))
 
     async def read_decision_state(self, security_id: UUID):

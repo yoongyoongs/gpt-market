@@ -74,18 +74,36 @@ def _jsonify(value: Any) -> Any:
 
 
 def _item_bundle(missing_reason: str, run_reason: str) -> Callable:
-    """R5-P1-006/§64：Security-specific 读取结果打包——
-    None（无 Published run）与空（run 内无此券）区分报告，绝不混同。"""
+    """R5-P1-006/§64 + F6-10：Security-specific 读取结果打包——
+    None（无 Published run）与空（run 内无此券）区分报告，绝不混同；
+    命中时携带 run 级元数据（recall_run_id / as_of / known_at /
+    strategy_version / coverage）。"""
     def transform(items: Any) -> Any:
         if items is None:
             return _not_available(run_reason)
-        if not items:
+        run_meta = getattr(items, "run", None)
+        entries = getattr(items, "items", None)
+        if run_meta is None or entries is None:
+            entries = items
+        if not entries:
             return _not_available(missing_reason)
-        return {
+        bundle: dict[str, Any] = {
             "status": "AVAILABLE",
-            "count": len(items),
-            "items": [_dump(item) for item in items],
+            "count": len(entries),
+            "items": [_dump(item) for item in entries],
         }
+        if run_meta is not None:
+            bundle["run"] = {
+                "recall_run_id": str(run_meta.recall_run_id),
+                "as_of": run_meta.as_of.isoformat()
+                if hasattr(run_meta.as_of, "isoformat") else run_meta.as_of,
+                "known_at": run_meta.known_at.isoformat()
+                if hasattr(run_meta.known_at, "isoformat")
+                else run_meta.known_at,
+                "strategy_version": run_meta.strategy_version,
+                "coverage": run_meta.coverage,
+            }
+        return bundle
     return transform
 
 

@@ -101,3 +101,75 @@ async def test_feature_run_publish_query_cursor_regime_and_immutability() -> Non
             ), {"run_id": run.feature_run_id})
         await connection.rollback()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_daily_levels_last_twenty_day_bars() -> None:
+    """F6-08/P1-13：daily_levels 从最新 QFQ DAY revision 取最近 20 根
+    日 K——prev_high_20d=max high、prev_low_20d=min low（support/
+    resistance 同值）；不足 20 根的券不返回；key=code 与 Overlay/
+    FastLane 一致。"""
+    assert DATABASE_URL is not None
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    def short_revision(security_id) -> BarSeriesRevision:
+        # 仅 10 根日 K：< lookback=20 → daily_levels 绝不返回该券
+        bars = tuple(
+            MarketBar(
+                bar_time=NOW - timedelta(days=30 - index),
+                open=5.0, high=5.1, low=4.9, close=5.0,
+                volume=100, amount=10_000.0,
+                fetch_time=NOW - timedelta(minutes=1),
+            )
+            for index in range(10)
+        )
+        return BarSeriesRevision.build(BarSeriesRevisionContent(
+            revision_id=uuid4(), security_id=security_id, period=BarPeriod.DAY,
+            adjust_type=AdjustType.QFQ, source="phase3-fixture",
+            upstream_source="fixture", raw_bar_available=False,
+            point_in_time_precision=PointInTimePrecision.LIMITED,
+            precision_reason="fixture short", known_at=NOW - timedelta(seconds=1),
+            bars=bars,
+        ))
+
+    snapshot = UniverseSnapshot.build(UniverseSnapshotContent(
+        snapshot_id=uuid4(), source_code=f"phase3-lv-{uuid4().hex}",
+        status=UniverseSnapshotStatus.PRIMARY, as_of=NOW - timedelta(minutes=2),
+        fetch_time=NOW - timedelta(minutes=2), known_at=NOW - timedelta(minutes=2),
+        coverage=1.0, stale=False,
+        members=(
+            SecurityMember(code="600011", market=Market.SH, name="lv one"),
+            SecurityMember(code="000012", market=Market.SZ, name="lv two"),
+            SecurityMember(code="000013", market=Market.SZ, name="lv short"),
+        ),
+    ))
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        assert await uow.universes.publish(snapshot) is True
+        await uow.commit()
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        targets = await uow.universes.targets(snapshot.snapshot_id)
+        for seed, target in enumerate(targets):
+            revision = (
+                make_revision(target.security_id, seed) if seed < 2
+                else short_revision(target.security_id)
+            )
+            assert await uow.bars.publish_series_revision(revision) is True
+        # F6-08：levels 读取本身
+        levels = await uow.features.daily_levels(as_of=NOW)
+    await engine.dispose()
+
+    # 不足 20 根的 000013 绝不返回；key=code（跨市场不重叠）。
+    # daily_levels 是全市场读取（FastLane 按 code 取用）——共享库中其它
+    # 测试残留的 ≥20 根券允许出现，但目标券与值必须精确。
+    assert "000013" not in levels
+    assert {"600011", "000012"} <= set(levels)
+    for seed, code in enumerate(("600011", "000012")):
+        entry = levels[code]
+        # 最近 20 根 = index 240..259：max high / min low
+        expected_high = 10.5 + seed + 259 / 100
+        expected_low = 9.5 + seed + 240 / 100
+        assert entry["prev_high_20d"] == pytest.approx(expected_high)
+        assert entry["resistance"] == pytest.approx(expected_high)
+        assert entry["prev_low_20d"] == pytest.approx(expected_low)
+        assert entry["support"] == pytest.approx(expected_low)

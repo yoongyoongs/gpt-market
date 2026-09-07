@@ -400,6 +400,41 @@ def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp
     assert all(run["status"] == "COMPLETED" for run in report["main"])
 
 
+def test_run_once_research_shadow_runs_full_recall_under_v2(monkeypatch, tmp_path) -> None:
+    """F6-09/Case J/§17：V2 Live + V3_RESEARCH_SHADOW_ENABLED=true →
+    主链照常包含 full-recall（V3 每日实际跑低位埋伏候选，产出 Recall/
+    Raw Opportunity 数据事实供观察），但正式 Release 解析不变
+    （effective_mode 仍 V2）、release_gate.strategy_chain 如实标注
+    SHADOW_RESEARCH_EXECUTED（绝不假装正式 V3 激活）、无 Trade 路径。
+    env 关闭时回到纯 Gate 行为（SKIPPED + 数据链）。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V2", reason="V3_DISABLED_FLAG",
+    )
+    assert report["release_gate"]["strategy_chain"] == "SKIPPED"
+    assert report["release_gate"].get("research_shadow") is False
+    # --- 开启 Research Shadow ---
+    monkeypatch.setenv("V3_RESEARCH_SHADOW_ENABLED", "true")
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V2", reason="V3_DISABLED_FLAG",
+    )
+    seen = report.pop("_seen")
+    gate = report["release_gate"]
+    # 正式 Release 解析未被影子模式篡改
+    assert report["release_resolution"]["effective_mode"] == "V2"
+    assert gate["data_chain"] == "EXECUTED"
+    assert gate["strategy_chain"] == "SHADOW_RESEARCH_EXECUTED"
+    assert gate["research_shadow"] is True
+    assert gate["reason"] == "V3_DISABLED_FLAG"
+    # 主链不限选 job_ids——full-recall 照常执行（Recall 数据事实刷新）
+    assert seen["orch_job_ids"], "主链 Orchestrator 必须被调度"
+    assert all(job_ids is None for job_ids in seen["orch_job_ids"])
+    # catch-up 终端标记按策略链终端 full-recall 追平
+    assert seen["terminal_jobs"][-1] == "full-recall"
+    assert all(run["status"] == "COMPLETED" for run in report["main"])
+    assert report["status"] == "COMPLETED"
+
+
 # --- REMAIN-OPS-EXPECTED / R3-P1-005：Expected Run Registry Job ---
 
 

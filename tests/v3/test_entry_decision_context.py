@@ -20,6 +20,7 @@ from app.v3.domain.entry_plan import EntryPlanPayload
 from app.v3.application.read_entry_decision_context import (
     ReadEntryDecisionContextService,
 )
+from app.v3.repositories.protocols import RecallSecurityBundle
 
 NOW = datetime(2026, 9, 2, 6, 0, tzinfo=timezone.utc)
 
@@ -289,9 +290,9 @@ class _FakeFeatures:
 
 
 class _FakeRecalls:
-    """R5-P1-006：Security-specific 读取——latest_recall_for_security /
-    latest_raw_opportunity_for_security（None = 无 Published run，
-    () = run 内无此券）。"""
+    """R5-P1-006 + F6-10：Security-specific 读取——latest_recall_for_security /
+    latest_raw_opportunity_for_security 返回 RecallSecurityBundle
+    （run=None 表示无 Published run，items=() 表示 run 内无此券）。"""
 
     def __init__(self, recall_items=(), raw_items=(), *,
                  recall_missing=False, raw_missing=False):
@@ -300,15 +301,37 @@ class _FakeRecalls:
         self._recall_missing = recall_missing
         self._raw_missing = raw_missing
 
-    async def latest_recall_for_security(self, *, market, code, limit=5):
+    @staticmethod
+    def _run_meta():
+        from app.v3.repositories.protocols import RecallRunMeta
+
+        return RecallRunMeta(
+            recall_run_id=uuid4(),
+            as_of=NOW,
+            known_at=NOW,
+            strategy_version="support-resistance-20d-v1",
+            coverage=0.87,
+        )
+
+    async def latest_recall_for_security(self, *, market, code):
         if self._recall_missing:
             raise RuntimeError("recall db down")
-        return None if self._recall_items is None else tuple(self._recall_items)
+        return (
+            None if self._recall_items is None
+            else RecallSecurityBundle(
+                run=self._run_meta(), items=tuple(self._recall_items),
+            )
+        )
 
-    async def latest_raw_opportunity_for_security(self, *, market, code, limit=5):
+    async def latest_raw_opportunity_for_security(self, *, market, code):
         if self._raw_missing:
             raise RuntimeError("recall db down")
-        return None if self._raw_items is None else tuple(self._raw_items)
+        return (
+            None if self._raw_items is None
+            else RecallSecurityBundle(
+                run=self._run_meta(), items=tuple(self._raw_items),
+            )
+        )
 
 
 class _Item(SimpleNamespace):
@@ -430,6 +453,12 @@ async def test_aggregate_facts_populated() -> None:
     assert report["feature_eod"]["ma20"] == 9.0
     assert report["latest_recall"]["status"] == "AVAILABLE"
     assert report["latest_recall"]["items"][0]["code"] == "000001"
+    # F6-10：run 级元数据必须随命中结果一起可见
+    assert report["latest_recall"]["run"]["strategy_version"] == (
+        "support-resistance-20d-v1"
+    )
+    assert report["latest_recall"]["run"]["coverage"] == 0.87
+    assert report["latest_recall"]["run"]["recall_run_id"]
     assert report["latest_raw_opportunity"]["status"] == "AVAILABLE"
     assert report["latest_raw_opportunity"]["items"][0]["code"] == "000001"
     assert report["latest_action"]["status"] == "AVAILABLE"
@@ -558,10 +587,10 @@ async def test_aggregate_facts_partial_failure_isolated() -> None:
     security_id = uuid4()
 
     class _BoomRecalls:
-        async def latest_recall_for_security(self, *, market, code, limit=5):
+        async def latest_recall_for_security(self, *, market, code):
             raise RuntimeError("recall db down")
 
-        async def latest_raw_opportunity_for_security(self, *, market, code, limit=5):
+        async def latest_raw_opportunity_for_security(self, *, market, code):
             raise RuntimeError("recall db down")
 
     uow = _FactUow(

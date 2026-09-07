@@ -34,26 +34,38 @@ class DeepMarketDataService:
         *,
         clock: Any = None,
         source: str = DEFAULT_SOURCE,
+        primary_source: str = "eastmoney",
         periods: tuple[str, ...] = DEEP_PERIODS,
         bars_per_period: int = 32,
     ) -> None:
         self._provider = provider
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._source = source
+        self._primary_source = primary_source
         self._periods = periods
         self._bars_per_period = bars_per_period
 
     async def get_intraday_structure(
         self, code: str, *, as_of: datetime
     ) -> IntradayStructure:
-        known_at = self._clock()
+        """F6-07/P1-11：known_at 必须在网络 fetch 完成之后确定。
+
+        每周期 dict 透传 source/upstream_source/known_at/quality/
+        fallback_used/provisional/stale（§3.2）；聚合 known_at = 各周期
+        known_at 的 max——绝不预先生成 known_at。
+        """
         periods: dict[str, dict[str, Any]] = {}
         for period in self._periods:
             periods[period] = await self._read_period(
                 code, period, as_of=as_of
             )
+        known_ats = [
+            entry["known_at"] for entry in periods.values()
+            if entry.get("known_at") is not None
+        ]
         return IntradayStructure(
-            code=code, as_of=as_of, known_at=known_at,
+            code=code, as_of=as_of,
+            known_at=max(known_ats) if known_ats else self._clock(),
             source=self._source, periods=periods,
         )
 
@@ -94,16 +106,25 @@ class DeepMarketDataService:
                 code, period, self._bars_per_period, adjust="raw",
             )
         except Exception as exc:
+            # 失败路径 known_at 同样取 fetch 尝试完成之后
             return {
                 "status": "UNKNOWN",
                 "reason": f"{type(exc).__name__}: {exc}",
                 "precision": "UNKNOWN",
                 "bar_count": 0,
                 "stale": None,
+                "source": self._source,
+                "upstream_source": None,
+                "known_at": self._clock(),
+                "quality": "UNTRUSTED",
+                "fallback_used": False,
             }
+        known_at = self._clock()  # F6-07：fetch 完成后取时点
+        upstream = getattr(result, "source", None)
         bars = [
             bar for bar in result.klines if bar.timestamp <= as_of
         ]
+        stale = bool(result.stale)
         if not bars:
             return {
                 "status": "UNKNOWN",
@@ -111,6 +132,11 @@ class DeepMarketDataService:
                 "precision": "UNKNOWN",
                 "bar_count": 0,
                 "stale": result.stale,
+                "source": self._source,
+                "upstream_source": upstream,
+                "known_at": known_at,
+                "quality": "UNTRUSTED" if stale else "OK",
+                "fallback_used": upstream != self._primary_source,
             }
         return {
             "status": "AVAILABLE",
@@ -123,4 +149,9 @@ class DeepMarketDataService:
             "provisional": any(bar.provisional for bar in bars),
             "stale": result.stale,
             "structure": self._structure(bars),
+            "source": self._source,
+            "upstream_source": upstream,
+            "known_at": known_at,
+            "quality": "UNTRUSTED" if stale else "OK",
+            "fallback_used": upstream != self._primary_source,
         }
