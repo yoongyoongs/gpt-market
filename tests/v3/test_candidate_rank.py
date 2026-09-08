@@ -182,12 +182,13 @@ class TestSoftOpportunity:
     def test_full_dimensions_exact_value(self):
         rr = RiskRewardService().evaluate(_view(distance_60d_low=0.10, distance_60d_high=-0.20))
         result = SoftOpportunityService().evaluate(_stock(), FULL_EXPERT_SCORES, rr)
-        # 0.8*20 + 0.65*20 + 0.5*15 + 0.7*10 + 0(nonchase) + 0.4*8 + 0.3*7 + rr(≈0.957)*10
-        expected = 16 + 13 + 7.5 + 7 + 3.2 + 2.1 + rr.score / 10.0
-        assert result.value == pytest.approx(expected, abs=1e-3)
+        # raw = 0.8*20 + 0.65*20 + 0.5*15 + 0.7*10 + 0(nonchase) + 0.4*8 + 0.3*7 + rr/10
+        # P0-05 归一：value = raw / 有效权重90 * 100
+        raw = 16 + 13 + 7.5 + 7 + 3.2 + 2.1 + rr.score / 10.0
+        assert result.value == pytest.approx(raw / 90.0 * 100.0, abs=1e-3)
         # nonchase 缺（无 return_20d/连涨/spike）→ 有效权重 90/100
         assert result.confidence == pytest.approx(0.9)
-        assert result.net_value == pytest.approx(expected, abs=1e-3)
+        assert result.net_value == pytest.approx(result.value, abs=1e-3)
 
     def test_missing_dimensions_lower_confidence(self):
         rr = RiskRewardService().evaluate(_view())
@@ -209,8 +210,10 @@ class TestSoftOpportunity:
         rr = RiskRewardService().evaluate(_view())
         stock = _stock(return_20d=0.0, consecutive_up_days=0, volume_spike=1.0)
         result = SoftOpportunityService().evaluate(stock, {}, rr)
-        # 三个子代理全部满分 → nonchase 维 1.0
-        assert result.value == pytest.approx(10.0, abs=1e-3)
+        # 三个子代理全部满分 → nonchase 维 1.0；P0-05 归一：
+        # 仅 nonchase 生效（有效权重 10/100）→ value=100，confidence=0.1
+        assert result.value == pytest.approx(100.0, abs=1e-3)
+        assert result.confidence == pytest.approx(0.1, abs=1e-3)
 
 
 # ---------- §21 Machine Rank ----------
@@ -293,9 +296,10 @@ class TestDeepRank:
     def test_machine_only_low_confidence(self):
         result = DeepRankService().execute([_deep_item()])
         entry = result.entries[0]
-        # 60m/市场/行业/周K/日K/RR 全 missing → 有效权重 45/100
+        # 60m/市场/行业/周K/日K/RR 全 missing → 有效权重 45/100；
+        # P0-05 归一：machine 0.8 为唯一有效维 → deep_score=80
         assert entry.confidence == pytest.approx(0.45)
-        assert entry.deep_score == pytest.approx(45.0 * 0.8, abs=1e-3)
+        assert entry.deep_score == pytest.approx(80.0, abs=1e-3)
 
     def test_full_known_dimensions(self):
         item = _deep_item(
@@ -305,8 +309,9 @@ class TestDeepRank:
         )
         result = DeepRankService().execute([item])
         entry = result.entries[0]
-        # machine 0.8*45=36 + weekly 0.9*15=13.5 + daily 0.9*15=13.5 + rr 0.8*5=4
-        assert entry.deep_score == pytest.approx(67.0, abs=1e-3)
+        # raw = machine 0.8*45=36 + weekly 0.9*15=13.5 + daily 0.9*15=13.5
+        #       + rr 0.8*5=4 = 67；P0-05 归一：67/有效权重80*100 = 83.75
+        assert entry.deep_score == pytest.approx(67.0 / 80.0 * 100.0, abs=1e-3)
         assert entry.confidence == pytest.approx(0.80)  # (45+15+15+5)/100
         assert entry.trend_conflict is False
 
@@ -320,8 +325,9 @@ class TestDeepRank:
         entry = result.entries[0]
         assert entry.trend_conflict is True
         assert "trend_conflict_no_reversal_evidence" in entry.reasons
-        # 日K 被压到 40：machine 36 + weekly 4.5 + daily 6
-        assert entry.deep_score == pytest.approx(46.5, abs=1e-3)
+        # 日K 被压到 40：raw = machine 36 + weekly 4.5 + daily 6 = 46.5，
+        # 有效权重 75 → P0-05 归一 46.5/75*100 = 62.0
+        assert entry.deep_score == pytest.approx(46.5 / 75.0 * 100.0, abs=1e-3)
 
     def test_reversal_evidence_waives_conflict(self):
         item = _deep_item(
@@ -336,8 +342,8 @@ class TestDeepRank:
     def test_slope_proxy_fallback(self):
         item = _deep_item(weekly_slope_8w=0.05)  # 饱和 → 100 分代理
         result = DeepRankService().execute([item])
-        # machine 36 + weekly 15
-        assert result.entries[0].deep_score == pytest.approx(51.0, abs=1e-3)
+        # raw = machine 36 + weekly 15 = 51，有效权重 60 → P0-05 归一 85.0
+        assert result.entries[0].deep_score == pytest.approx(51.0 / 60.0 * 100.0, abs=1e-3)
 
     def test_top60_truncation(self):
         pool = [_deep_item(machine_score=float(90 - i)) for i in range(70)]

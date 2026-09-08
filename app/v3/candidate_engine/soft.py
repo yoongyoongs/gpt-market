@@ -119,15 +119,22 @@ def weighted_combine(
     parts: list[tuple[str, float, float | None]],
     *,
     extra_confidence: float = 1.0,
-) -> tuple[float, float, tuple[str, ...], dict[str, float | None]]:
-    """通用加权合成（设计 §11.3 missing 语义）：0~1 子分 × 权重。
+) -> tuple[float | None, float, tuple[str, ...], dict[str, float | None]]:
+    """通用加权合成（设计 §11.3 missing 语义，第二轮 P0-05 修正）。
 
-    parts = [(维度名, 权重, 子分或 None)]；None 记 missing：0 分、
-    权重不计入生效权重并按比例降 confidence。返回
-    (value 0~100, confidence, reasons, features_used)。
+    parts = [(维度名, 权重, 子分或 None)]；missing ≠ negative：
+
+    - value 按**有效权重归一**：value = Σ(weight_i*score_i)/effective*100，
+      缺失维度不再既降 confidence 又拖低 value（双重惩罚）；
+    - confidence = effective/total * extra_confidence，覆盖度单独体现；
+    - effective == 0（全 missing）→ value=None、confidence=0
+      （不得伪装成真实 0 分；domain 类型冻结 value 非 None 的调用方，
+      经 confidence==0 判 missing——任务书 §7.5 允许路径）。
+
+    返回 (value 0~100 或 None, confidence, reasons, features_used)。
     专家与 SoftOpportunity 等多维度合成的公共实现。
     """
-    value = 0.0
+    raw = 0.0
     effective = 0.0
     reasons: list[str] = []
     features_used: dict[str, float | None] = {}
@@ -136,14 +143,16 @@ def weighted_combine(
             features_used[label] = None
             reasons.append(f"{label}:missing")
             continue
-        value += weight * max(0.0, min(1.0, subscore))
+        raw += weight * max(0.0, min(1.0, subscore))
         effective += weight
         features_used[label] = round(subscore, 6)
         reasons.append(f"{label}:{subscore:.3f}*{weight:g}")
     total = sum(weight for _, weight, _ in parts)
-    confidence = (effective / total if total > 0 else 0.0) * extra_confidence
+    if effective <= 0.0 or total <= 0.0:
+        return (None, 0.0, tuple(reasons), features_used)
+    confidence = (effective / total) * extra_confidence
     return (
-        round(min(value, 100.0), 4),
+        round(min(raw / effective * 100.0, 100.0), 4),
         round(max(0.0, min(confidence, 1.0)), 4),
         tuple(reasons),
         features_used,

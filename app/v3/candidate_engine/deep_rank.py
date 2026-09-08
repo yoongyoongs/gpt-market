@@ -93,6 +93,9 @@ class DeepRankService:
                 ("risk_reward_refined", WEIGHTS["risk_reward_refined"], _opt(item.get("rr_score"))),
             ]
             value, confidence, comb_reasons, _ = weighted_combine(parts)
+            # effective==0（machine_score 恒在，理论不可达）防御：记 0 分，
+            # confidence=0 已标 missing（P0-05，不伪装真实分）
+            value = 0.0 if value is None else value
             reasons.extend(comb_reasons)
             components = {
                 "machine": item["machine_score"],

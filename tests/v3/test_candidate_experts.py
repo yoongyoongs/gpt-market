@@ -8,6 +8,8 @@ CAT 四因子乘积）、TopN 截断与排名。
 from __future__ import annotations
 
 import math
+
+import pytest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -191,12 +193,15 @@ class TestAccumulation:
         assert score is not None and score.value > 50
 
     def test_explosive_volume_zeroed(self):
-        # U/D > 3.5 → 归零（设计 §8.1 不奖励单日爆量追涨）
+        # U/D > 3.5 → 该维归零（设计 §8.1 不奖励单日爆量追涨）。
+        # P0-05 归一后：爆量维 0 分仍在（features_used=0.0），其余有效维
+        # （obv/volume_5_20/turnover 各 15 分全满）托底 raw=45/effective=65。
         score = AccumulationExpert().evaluate(_stock(
             up_down_volume_ratio=4.0, obv_slope_z=0.6, volume_5_20=1.3,
         ))
         assert score is not None
-        assert score.value < 50
+        assert score.value == pytest.approx(45.0 / 65.0 * 100.0, abs=1e-3)
+        assert score.features_used["up_down_volume_ratio"] == 0.0
         ud = next(r for r in score.reasons if r.startswith("up_down_volume_ratio"))
         assert ud.startswith("up_down_volume_ratio:0.000")
 

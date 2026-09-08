@@ -254,6 +254,8 @@ class CandidatePipeline:
             else (bt if bt is not None else rv)
         )
         fq, cat = scores_map.get("FQ"), scores_map.get("CAT")
+        # P0-05：FQ/CAT 全 missing → quality=None（真实 missing 语义）；
+        # 有值但真 0 分 → 保留 0.0（不再被 `or None` 吞掉）。
         quality = weighted_combine([
             ("fundamental", 55.0, None if fq is None else fq / 100.0),
             ("catalyst", 45.0, None if cat is None else cat / 100.0),
@@ -273,7 +275,7 @@ class CandidatePipeline:
                 "position": position,
                 "transition": transition,
                 "accumulation": accumulation,
-                "quality_catalyst": quality or None,
+                "quality_catalyst": quality,
                 "risk_reward": rr_score,
             },
             missing_dimensions=tuple(missing),

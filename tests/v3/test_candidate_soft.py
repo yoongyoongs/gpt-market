@@ -16,6 +16,7 @@ from app.v3.candidate_engine.soft import (
     soft_target,
     smoothstep,
     volume_5_20_score,
+    weighted_combine,
 )
 
 
@@ -146,3 +147,48 @@ class TestIsFinite:
 
     def test_zero_is_valid(self):
         assert is_finite(0.0) is True
+
+
+class TestWeightedCombineRound2:
+    """任务书 P0-05 §7.6：missing 按有效权重归一，missing ≠ negative。"""
+
+    def test_half_present_all_full_score(self):
+        # 已知一半维度（权重 50/100）且全部满分 → value=100, confidence=0.5
+        value, confidence, reasons, used = weighted_combine([
+            ("a", 30.0, 1.0),
+            ("b", 20.0, 1.0),
+            ("c", 25.0, None),
+            ("d", 25.0, None),
+        ])
+        assert value == pytest.approx(100.0)
+        assert confidence == pytest.approx(0.5)
+        assert "c:missing" in reasons and "d:missing" in reasons
+        assert used["a"] == 1.0 and used["c"] is None
+
+    def test_half_present_all_half_score(self):
+        # 已知一半维度且全部 50 分 → value=50, confidence=0.5
+        value, confidence, _, _ = weighted_combine([
+            ("a", 30.0, 0.5),
+            ("b", 20.0, 0.5),
+            ("c", 50.0, None),
+        ])
+        assert value == pytest.approx(50.0)
+        assert confidence == pytest.approx(0.5)
+
+    def test_all_missing_no_fake_zero(self):
+        # 全部 missing → 不得伪装成真实 0 分
+        value, confidence, reasons, used = weighted_combine([
+            ("a", 50.0, None),
+            ("b", 50.0, None),
+        ])
+        assert value is None
+        assert confidence == 0.0
+        assert set(reasons) == {"a:missing", "b:missing"}
+
+    def test_extra_confidence_multiplier(self):
+        # extra_confidence 与覆盖度相乘，value 不受影响
+        value, confidence, _, _ = weighted_combine(
+            [("a", 40.0, 1.0), ("b", 60.0, None)], extra_confidence=0.8
+        )
+        assert value == pytest.approx(100.0)
+        assert confidence == pytest.approx(0.4 * 0.8)

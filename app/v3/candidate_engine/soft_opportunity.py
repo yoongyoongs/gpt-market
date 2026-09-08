@@ -64,6 +64,9 @@ class SoftOpportunityService:
             ("catalyst", WEIGHTS["catalyst"], None if catalyst is None else catalyst / 100.0),
             ("risk_reward", WEIGHTS["risk_reward"], None if risk_reward.score <= 0 and risk_reward.confidence <= 0 else risk_reward.score / 100.0),
         ])
+        # P0-05：value 按 有效权重归一；全 missing（effective==0）时为 None，
+        # 域类型冻结 → 记 0 + confidence=0（reasons 已含全部 :missing）。
+        value = 0.0 if value is None else value
         penalty = (
             self.penalty_engine.evaluate(stock)
             if self.penalty_engine is not None else PenaltyAssessment(total=0.0)

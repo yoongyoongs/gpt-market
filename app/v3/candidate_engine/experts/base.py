@@ -70,11 +70,15 @@ class BaseExpert:
         *,
         extra_confidence: float = 1.0,
     ) -> ExpertScore:
-        """按设计权重合成分数（missing => 0 分 + 降 confidence，§11.3）。"""
+        """按设计权重合成分数（P0-05：missing 归一不双罚，§11.3）。
+
+        全 missing（effective==0）时 weighted_combine 返回 value=None，
+        ExpertScore.value 域类型冻结非 None → 记 0 分 + confidence=0，
+        下游按 confidence==0 判 missing（任务书 §7.5 允许路径）。"""
         value, confidence, reasons, features_used = weighted_combine(
             parts, extra_confidence=extra_confidence
         )
         return ExpertScore(
-            value=value, confidence=confidence,
+            value=0.0 if value is None else value, confidence=confidence,
             reasons=reasons, features_used=features_used,
         )
