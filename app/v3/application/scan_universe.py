@@ -28,6 +28,18 @@ from app.v3.domain.market_data import SecurityMember
 
 __all__ = ["UniverseScanOrchestrator"]
 
+# RecallFeatureView 顶层宽表字段（专家输入特征字典的补充来源）
+_WIDE_COLUMNS = (
+    "return_3d", "return_5d", "return_10d", "return_20d",
+    "return_60d", "return_120d", "return_250d",
+    "position_60d", "position_120d", "position_250d",
+    "ma20_slope", "ma60_slope", "atr14", "atr_pct", "volatility20",
+    "distance_60d_high", "distance_60d_low",
+    "breakout_20d", "pullback_20d",
+    "amount", "volume_ratio_5d", "volume_expansion",
+    "relative_index_strength", "relative_industry_strength",
+)
+
 
 def _default_as_of() -> datetime:
     return datetime.now(timezone.utc)
@@ -37,16 +49,28 @@ class UniverseScanOrchestrator:
     def __init__(self, pipeline: CandidatePipeline | None = None) -> None:
         self._pipeline = pipeline or CandidatePipeline()
 
-    async def execute(self, uow, *, as_of: datetime | None = None) -> dict:
+    async def execute(
+        self,
+        uow,
+        *,
+        as_of: datetime | None = None,
+        feature_run_id=None,
+    ) -> dict:
+        """feature_run_id 显式指定时跳过 latest_run（操作员决策通道，
+        例如最新 run 头数据异常但特征行有效）。"""
         as_of = as_of or _default_as_of()
 
         snapshot = await uow.universes.latest()
         if snapshot is None:
             return {"status": "no_universe"}
-        feature_run = await uow.features.latest_run()
-        if feature_run is None:
-            return {"status": "no_feature_run"}
-        views = await uow.features.features_for_run(feature_run.feature_run_id)
+        if feature_run_id is not None:
+            run_id = feature_run_id
+        else:
+            feature_run = await uow.features.latest_run()
+            if feature_run is None:
+                return {"status": "no_feature_run"}
+            run_id = feature_run.feature_run_id
+        views = await uow.features.features_for_run(run_id)
         key_map = await uow.scans.security_keys()
 
         candidates, stocks, skipped = self._assemble(
@@ -59,7 +83,7 @@ class UniverseScanOrchestrator:
         return {
             "status": "ok",
             "scan_run_id": str(scan_run_id),
-            "feature_run_id": str(feature_run.feature_run_id),
+            "feature_run_id": str(run_id),
             "universe_snapshot_id": str(snapshot.snapshot_id),
             "members": len(snapshot.members),
             "feature_rows": len(views),
@@ -89,7 +113,12 @@ class UniverseScanOrchestrator:
             if member is None:
                 skipped += 1
                 continue
-            features = dict(view.features)
+            # 宽表主字段 + features JSONB（候选引擎 extras）合成专家输入；
+            # JSONB 优先（extras 是同名主字段的更新语义不存在，setdefault 防覆盖）
+            features = {k: v for k, v in view.features.items()}
+            for key in _WIDE_COLUMNS:
+                if features.get(key) is None:
+                    features[key] = getattr(view, key, None)
             candidates.append(SafetyCandidateInput(
                 security_id=view.security_id,
                 member=member,

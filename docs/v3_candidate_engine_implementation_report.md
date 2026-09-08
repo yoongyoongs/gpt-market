@@ -51,6 +51,9 @@
 | `app/v3/infrastructure/db/uow.py` | 挂 `self.scans` |
 | `app/api/v3_dashboard.py` | +116 行：漏斗区 / Top 区 / Why Not 区三段 |
 | `app/api/main.py`（`app/main.py`） | 注册 v3_scan router |
+| `app/v3/domain/recall.py` | RecallFeatureView 补 14 个宽表 additive 字段（真实扫描数据链修复） |
+| `app/v3/infrastructure/db/repositories.py` | `_feature()` 全宽表字段映射 |
+| `app/v3/infrastructure/db/scan_repositories.py` | 明细 INSERT 2000 行/批（asyncpg 32767 参数上限） |
 | `app/v3/security.py` | `/scan/latest`、`/scan/` 前缀、`(stock,*,scan-trace)` 模板加入公开只读白名单（逐项设计考量见注释） |
 | `tests/v3/test_migration_environment.py` | head 断言 0017→0018 |
 
@@ -140,18 +143,29 @@ Universe(全市场 SecurityMember + 特征行)
 
 ## F. 真实扫描漏斗（Step 20）
 
-**状态：代码就绪，执行待环境。**
+**状态：已执行（2026-09-08，生产环境真实数据）。**
 
-`UniverseScanOrchestrator` + `run_full_scan()`（扫描 + 当日 PENDING 回填一体）已实现并有离线全流程测试（universe join 特征行、ST 淘汰进 trace、漏斗数字、save_scan 调用）。
+执行路径：全市场特征重跑（新代码含候选引擎 extras，as_of=9-7 收盘后，发布 feature run `893e4b2a`，5556 成功 / coverage 99.96%）→ `UniverseScanOrchestrator` 显式消费该 run → 扫描落库 + 当日 PENDING 回填。
 
-未执行原因：生产服务器 SSH 断连（banner exchange timeout），无法在生产环境触发真实全市场扫描。**本报告不含真实漏斗数字**——等 SSH 恢复后执行：
+真实漏斗（scan_run `2fd049b4`）：
 
-```bash
-# 生产容器内（脚本形态，待与现网调度合并）
-python -c "import asyncio; from app.v3.application.scan_universe import run_full_scan; print(asyncio.run(run_full_scan()))"
-```
+| 阶段 | 数量 | 说明 |
+|---|---|---|
+| UNIVERSE | 5556 | 全市场特征行 |
+| SAFETY | 5261 | 淘汰 295：ST 200 / 缺日K 86 / 停牌 6 / ST+停牌 3 |
+| RECALL | 1117 | 8 专家并集（本轮 RS 专家因基准序列缺失未出分，6 特征专家生效） |
+| ENRICH | 1117 | 观测层不淘汰 |
+| PARETO | 275 | 五维分层 + 单专家保护 |
+| MACHINE | 120 | Top120 |
+| DEEP | 60 | Top60 |
+| FINAL | 30 | RAW_TOP30（AI Review 后置） |
 
-预期漏斗段：UNIVERSE ≈5400 → SAFETY（ST/停牌/新股/缺K线淘汰）→ RECALL（8 专家并集，预期 ≥ 数百）→ PARETO → MACHINE 120 → DEEP 60 → FINAL 30。
+落库验证：candidate_snapshots 12329 行（全阶段 trace）、expert_recall_rows 1230、pareto_result_rows 1117、outcome_labels 5556（当日全 PENDING，符合 T+20 设计）、shadow_pool_rows 106、FINAL top10 分数区间 39.06~46.44。
+
+执行中发现并修复的数据链问题（随本报告 commit）：
+1. `scan_repositories.py` 单条 INSERT 超 asyncpg 32767 参数上限 → 明细表 2000 行/批分批写入。
+2. 特征数据断裂：`_feature()` 只映射 12 列到 RecallFeatureView、`_assemble` 只传 JSONB extras → 宽表 28 主字段全丢。修复：RecallFeatureView 补 14 个 additive 字段 + `_assemble` 宽表与 JSONB 合成。
+3. 编排器加 `feature_run_id` 显式通道（操作员决策），绕过 latest_run 的域 hash 校验而不放宽契约（PIT 不可变保护不允许改坏 hash 的历史 run）。
 
 ---
 
@@ -173,7 +187,7 @@ python -c "import asyncio; from app.v3.application.scan_universe import run_full
 
 ## H. 未完成项（诚实清单）
 
-1. **真实全市场扫描未执行**（Step 20）：生产 SSH 断连；编排器与测试就绪，漏斗真实数字缺位（见 F 段）。
+1. ~~**真实全市场扫描未执行**~~（Step 20）：**已完成**（2026-09-08 生产执行，漏斗见 F 段）。遗留：RS 专家基准序列缺失未出分（见 H-10）、FQ/CAT 证据专家未接 evidence 视图。
 2. **PG 集成测试未真跑**（Step 19 部分）：测试库凭据未配置，migration 0018 的真实 upgrade/downgrade 未验证；离线 DDL 语义已由模型 + alembic head 检查覆盖。
 3. **AI Review 未接入**（§24）：Final Top30 为 RAW_TOP30；AI Review 的结构化 DTO 与保存（任务书 §25）待后续，AI 输入继续剔除统一总分（FORBIDDEN_UNIFIED_SCORES）。
 4. **行业分散化未实现**（§25）：Final 30 未做行业配额约束。
@@ -210,5 +224,6 @@ python -c "import asyncio; from app.v3.application.scan_universe import run_full
 - [x] 单元测试通过（690 passed 离线）
 - [ ] 集成测试通过（**PG 集成 skip，待测试库**）
 - [x] 原有行情/K线/持仓/自选接口未破坏（未触碰相关模块；全量套件通过）
+- [x] 真实全市场扫描执行（2026-09-08 生产，5556→FINAL30，见 F 段）
 - [x] 已生成 implementation report（本文件）
 - [x] 未完成项已诚实列出（H 段 10 项）

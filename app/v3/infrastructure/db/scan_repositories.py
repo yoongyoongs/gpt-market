@@ -40,6 +40,9 @@ __all__ = ["SQLAlchemyScanRepository"]
 
 FEATURE_VERSION = "v1"
 
+# asyncpg 单条语句参数上限 32767；明细行最多 11 列 → 每批 ≤2978 行，取 2000 留余。
+_INSERT_BATCH = 2000
+
 
 class SQLAlchemyScanRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -48,6 +51,10 @@ class SQLAlchemyScanRepository:
     # ------------------------------------------------------------------
     # 写入
     # ------------------------------------------------------------------
+
+    async def _insert_batched(self, model, rows: list[dict]) -> None:
+        for i in range(0, len(rows), _INSERT_BATCH):
+            await self._session.execute(pg_insert(model).values(rows[i:i + _INSERT_BATCH]))
 
     async def save_scan(self, result: CandidatePipelineResult, *, scan_time: datetime | None = None) -> UUID:
         """一次扫描的三类明细一次性落库（事务由 UoW 提交）。"""
@@ -94,7 +101,7 @@ class SQLAlchemyScanRepository:
                     "data_timestamp": data_timestamp,
                 })
         if snapshot_rows:
-            await self._session.execute(pg_insert(CandidateSnapshotModel).values(snapshot_rows))
+            await self._insert_batched(CandidateSnapshotModel, snapshot_rows)
 
         expert_rows = []
         for entry in result.union.entries:
@@ -110,7 +117,7 @@ class SQLAlchemyScanRepository:
                     "reason_json": {"reasons": list(hit.reasons), "confidence": hit.confidence},
                 })
         if expert_rows:
-            await self._session.execute(pg_insert(ExpertRecallRowModel).values(expert_rows))
+            await self._insert_batched(ExpertRecallRowModel, expert_rows)
 
         pareto_rows = [
             {
@@ -129,7 +136,7 @@ class SQLAlchemyScanRepository:
             for entry in result.pareto.entries
         ]
         if pareto_rows:
-            await self._session.execute(pg_insert(ParetoResultRowModel).values(pareto_rows))
+            await self._insert_batched(ParetoResultRowModel, pareto_rows)
         return scan_run_id
 
     # ------------------------------------------------------------------
@@ -345,26 +352,27 @@ class SQLAlchemyScanRepository:
             }
             for entry in labels
         ]
-        stmt = pg_insert(OutcomeLabelModel).values(rows)
-        await self._session.execute(
-            stmt.on_conflict_do_update(
-                index_elements=["scan_run_id", "code"],
-                set_={
-                    "mfe_5": stmt.excluded.mfe_5,
-                    "mfe_10": stmt.excluded.mfe_10,
-                    "mfe_20": stmt.excluded.mfe_20,
-                    "mae_5": stmt.excluded.mae_5,
-                    "mae_10": stmt.excluded.mae_10,
-                    "mae_20": stmt.excluded.mae_20,
-                    "time_to_8": stmt.excluded.time_to_8,
-                    "time_to_10": stmt.excluded.time_to_10,
-                    "time_to_15": stmt.excluded.time_to_15,
-                    "close_t": stmt.excluded.close_t,
-                    "bars_used": stmt.excluded.bars_used,
-                    "label": stmt.excluded.label,
-                },
+        for i in range(0, len(rows), _INSERT_BATCH):
+            stmt = pg_insert(OutcomeLabelModel).values(rows[i:i + _INSERT_BATCH])
+            await self._session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["scan_run_id", "code"],
+                    set_={
+                        "mfe_5": stmt.excluded.mfe_5,
+                        "mfe_10": stmt.excluded.mfe_10,
+                        "mfe_20": stmt.excluded.mfe_20,
+                        "mae_5": stmt.excluded.mae_5,
+                        "mae_10": stmt.excluded.mae_10,
+                        "mae_20": stmt.excluded.mae_20,
+                        "time_to_8": stmt.excluded.time_to_8,
+                        "time_to_10": stmt.excluded.time_to_10,
+                        "time_to_15": stmt.excluded.time_to_15,
+                        "close_t": stmt.excluded.close_t,
+                        "bars_used": stmt.excluded.bars_used,
+                        "label": stmt.excluded.label,
+                    },
+                )
             )
-        )
         return len(rows)
 
     async def save_miss_rows(self, scan_run_id: UUID, entries: list[MissAuditEntry]) -> int:
