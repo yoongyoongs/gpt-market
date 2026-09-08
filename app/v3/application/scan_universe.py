@@ -76,6 +76,10 @@ class UniverseScanOrchestrator:
         candidates, stocks, skipped = self._assemble(
             snapshot.members, views, key_map, as_of,
         )
+        if stocks:
+            self._attach_evidence(stocks, await uow.evidence.for_securities(
+                tuple(stocks.keys()), as_of=as_of,
+            ))
         result = self._pipeline.execute(candidates, stocks, trade_date=as_of)
         scan_run_id = await uow.scans.save_scan(result)
 
@@ -135,6 +139,27 @@ class UniverseScanOrchestrator:
                 ),
             )
         return tuple(candidates), stocks, skipped
+
+    @staticmethod
+    def _attach_evidence(
+        stocks: dict,
+        evidence_rows: tuple,
+    ) -> None:
+        """把 PIT 证据按 security_id 注入 ExpertInput（FQ/CAT 数据链）。
+
+        uow.evidence.for_securities 已做 known_at<=as_of / AVAILABLE /
+        expire_at>=as_of 过滤且单次批量查询，这里只做分组绑定，
+        不新建第二套 evidence 查询。"""
+        evidence_by_security: dict[UUID, list] = {}
+        for row in evidence_rows:
+            evidence_by_security.setdefault(row.security_id, []).append(row)
+        for security_id, rows in evidence_by_security.items():
+            expert_input = stocks.get(security_id)
+            if expert_input is None:
+                continue
+            stocks[security_id] = expert_input.model_copy(
+                update={"evidence": tuple(rows)}
+            )
 
 
 async def run_full_scan() -> dict:

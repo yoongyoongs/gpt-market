@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from app.v3.application.scan_universe import UniverseScanOrchestrator
@@ -98,14 +98,31 @@ class _FakeScans:
         return result.scan_id
 
 
+class _FakeEvidence:
+    """PIT 行为与真实 repository 对齐：known_at<=as_of 才返回，
+    单次批量接收全部 security_ids（编排器不得逐股循环查询）。"""
+
+    def __init__(self, rows: tuple = ()) -> None:
+        self._rows = rows
+        self.calls: list[tuple[tuple, datetime]] = []
+
+    async def for_securities(self, security_ids: tuple, *, as_of: datetime):
+        self.calls.append((tuple(security_ids), as_of))
+        return tuple(
+            row for row in self._rows
+            if row.security_id in security_ids and row.record.known_at <= as_of
+        )
+
+
 class _FakeUow:
-    def __init__(self, universes, features, scans) -> None:
+    def __init__(self, universes, features, scans, evidence=None) -> None:
         self.universes = universes
         self.features = features
         self.scans = scans
+        self.evidence = evidence or _FakeEvidence()
 
 
-def _uow(codes=("000001", "000002"), unknown_extra=False):
+def _uow(codes=("000001", "000002"), unknown_extra=False, evidence_rows=()):
     members = tuple(_member(code) for code in codes)
     if unknown_extra:
         members = members + (_member("999999"),)  # universe 有但无特征行
@@ -115,7 +132,10 @@ def _uow(codes=("000001", "000002"), unknown_extra=False):
         for code in codes
     )
     key_map = {view.security_id: code for view, code in zip(views, codes)}
-    return _FakeUow(_FakeUniverses(snapshot), _FakeFeatures(views), _FakeScans(key_map))
+    return _FakeUow(
+        _FakeUniverses(snapshot), _FakeFeatures(views), _FakeScans(key_map),
+        _FakeEvidence(evidence_rows),
+    )
 
 
 class TestUniverseScanOrchestrator:
@@ -174,3 +194,82 @@ class TestUniverseScanOrchestrator:
         summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
         assert summary["funnel"]["UNIVERSE"] == 2
         assert summary["funnel"]["SAFETY"] == 1  # ST 被 Safety 淘汰
+
+
+class TestEvidenceDataChain:
+    """第二轮 P0-03：FQ/CAT evidence 数据链经编排器真实接通。"""
+
+    @staticmethod
+    def _finance_rows(security_id, *, growth: float = 0.30, known_at=None):
+        """跨年两期财报证据（营收/利润同比 ~growth）。"""
+        from tests.v3.test_candidate_experts import _evidence
+
+        rows = []
+        for year, base in ((2025, 100.0), (2026, 100.0 * (1 + growth))):
+            view = _evidence(
+                report_name="RPT_F10_FINANCE_MAINFINADATA",
+                values={
+                    "TOTALOPERATEREVE": f"{base}",
+                    "PARENTNETPROFIT": f"{base * 0.2}",
+                },
+                period=f"{year}-12-31",
+            )
+            if known_at is not None:
+                view = view.model_copy(update={
+                    "record": view.record.model_copy(update={"known_at": known_at}),
+                })
+            rows.append(view.model_copy(update={"security_id": security_id}))
+        return tuple(rows)
+
+    @staticmethod
+    def _expert_hits(result, expert: str) -> int:
+        recall = next(s for s in result.funnel.stages if s.stage == "RECALL")
+        return int(recall.extras.get(expert, 0))
+
+    async def test_finance_evidence_produces_fq_hit(self):
+        uow = _uow(("000001",))
+        target = next(iter(uow.scans._key_map))
+        uow.evidence = _FakeEvidence(self._finance_rows(target))
+        summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        assert summary["status"] == "ok"
+        result = uow.scans.saved[0]
+        assert self._expert_hits(result, "FQ") == 1
+        # 批量查询：一次调用覆盖全部 security_ids，且 as_of 正确传递
+        assert len(uow.evidence.calls) == 1
+        called_ids, called_as_of = uow.evidence.calls[0]
+        assert set(called_ids) == set(uow.scans._key_map)
+        assert called_as_of == NOW
+
+    async def test_catalyst_evidence_produces_cat_hit(self):
+        from tests.v3.test_candidate_experts import _evidence
+
+        uow = _uow(("000001",))
+        target = next(iter(uow.scans._key_map))
+        announcement = _evidence(title="公司拟回购股份暨回购报告书")
+        uow.evidence = _FakeEvidence(
+            (announcement.model_copy(update={"security_id": target}),),
+        )
+        await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        result = uow.scans.saved[0]
+        assert self._expert_hits(result, "CAT") == 1
+
+    async def test_no_evidence_experts_run_but_fq_cat_silent(self):
+        """无 evidence → FQ/CAT 不命中，其它专家照常运行。"""
+        uow = _uow(("000001", "000002"))
+        summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        assert summary["status"] == "ok"
+        result = uow.scans.saved[0]
+        assert self._expert_hits(result, "FQ") == 0
+        assert self._expert_hits(result, "CAT") == 0
+        recall = next(s for s in result.funnel.stages if s.stage == "RECALL")
+        assert sum(int(v) for k, v in recall.extras.items() if k not in {"FQ", "CAT"}) > 0
+
+    async def test_future_known_evidence_excluded(self):
+        """known_at > as_of 的证据不得进入当期扫描（PIT）。"""
+        uow = _uow(("000001",))
+        target = next(iter(uow.scans._key_map))
+        future_rows = self._finance_rows(target, known_at=NOW + timedelta(days=1))
+        uow.evidence = _FakeEvidence(future_rows)
+        await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        result = uow.scans.saved[0]
+        assert self._expert_hits(result, "FQ") == 0
