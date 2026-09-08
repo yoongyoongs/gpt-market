@@ -105,11 +105,29 @@ class TestRiskRewardService:
         assert assessment.support == pytest.approx(9.0909, abs=1e-3)
         assert assessment.resistance == pytest.approx(12.5)
         assert assessment.downside == pytest.approx(0.10 / 1.10, abs=1e-4)
-        assert assessment.upside == pytest.approx(0.20, abs=1e-4)
-        assert assessment.rr == pytest.approx(2.2, abs=1e-2)
-        # 锚点插值 (1.8,80)→(2.5,100)：t=0.4/0.7 → 80+20*0.5714
-        assert assessment.score == pytest.approx(91.4286, abs=1e-3)
+        # P0-06：upside = -dist_high/(1+dist_high) = 0.20/0.80 = 0.25
+        assert assessment.upside == pytest.approx(0.25, abs=1e-4)
+        assert assessment.rr == pytest.approx(2.75, abs=1e-2)
+        # 锚点插值 (2.5,100)→(4.0,95)：t=0.25/1.5 → 100-5*0.16667
+        assert assessment.score == pytest.approx(99.1667, abs=1e-3)
         assert assessment.confidence == 1.0
+
+    def test_upside_exact_consistency_close10_high12_low95(self):
+        """任务书 P0-06 §8.3 一致性：close=10/high=12/low=9.5
+        → upside=20%、downside=5%、RR=4（不接受 16.67% 近似）。"""
+        assessment = RiskRewardService().evaluate(
+            _view(
+                distance_60d_low=10.0 / 9.5 - 1.0,
+                distance_60d_high=10.0 / 12.0 - 1.0,
+            )
+        )
+        assert assessment.support == pytest.approx(9.5, abs=1e-9)
+        assert assessment.resistance == pytest.approx(12.0, abs=1e-9)
+        assert assessment.upside == pytest.approx(0.20, abs=1e-9)
+        assert assessment.downside == pytest.approx(0.05, abs=1e-9)
+        assert assessment.rr == pytest.approx(4.0, abs=1e-9)
+        # rr=4.0 命中 (4.0, 95) 锚点
+        assert assessment.score == pytest.approx(95.0, abs=1e-6)
 
     def test_support_too_close_low_confidence(self):
         assessment = RiskRewardService().evaluate(

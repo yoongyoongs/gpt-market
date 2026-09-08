@@ -57,7 +57,13 @@ class RiskRewardService:
         invalidation = support
         target1 = resistance
         downside = dist_low / (1.0 + dist_low)  # (close-support)/close
-        upside = -dist_high if dist_high < 0 else 0.0  # 贴高时上方无空间
+        # P0-06：upside = resistance/close - 1 = -dist_high/(1+dist_high)。
+        # 旧式 -dist_high 把贴高收益系统性放大（10/12 → 16.67% 而非 20%）。
+        upside = (
+            -dist_high / (1.0 + dist_high)
+            if dist_high < 0 and 1.0 + dist_high > 0
+            else 0.0  # 贴高（close 即 60d 高点）时上方无空间
+        )
         rr = upside / max(downside, _DOWNSIDE_FLOOR) if upside > 0 else 0.0
         score = risk_reward_score(rr)
         # 防虚假高分：支撑过近（downside < 1%）时 RR 无意义，压到下限档
