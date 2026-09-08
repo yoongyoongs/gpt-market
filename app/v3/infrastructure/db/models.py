@@ -2294,3 +2294,174 @@ class AttentionEventModel(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(256), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ScanRunModel(Base):
+    """候选扫描主记录（设计 §35.1）。"""
+
+    __tablename__ = "scan_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "universe_count >= 0 AND eligible_count >= 0 AND recall_count >= 0 "
+            "AND pareto_count >= 0 AND machine_count >= 0 AND deep_count >= 0 "
+            "AND final_count >= 0",
+            name="valid_counts",
+        ),
+        Index("ix_scan_runs_market_date", "market_date", "status"),
+        {"schema": V3_SCHEMA},
+    )
+
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    market_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    universe_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    eligible_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    recall_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    pareto_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    machine_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    deep_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    final_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CandidateSnapshotModel(Base):
+    """单股单阶段状态快照（设计 §35.2，全链 Trace 落库）。"""
+
+    __tablename__ = "candidate_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('UNIVERSE','SAFETY','RECALL','PARETO','MACHINE','DEEP','FINAL')",
+            name="valid_stage",
+        ),
+        Index("ix_candidate_snapshots_run_stage_code", "scan_run_id", "stage", "code"),
+        Index("ix_candidate_snapshots_run_code", "scan_run_id", "code"),
+        {"schema": V3_SCHEMA},
+    )
+
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    security_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    alive: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    score: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    rank: Mapped[int | None] = mapped_column(Integer)
+    drop_reason: Mapped[str | None] = mapped_column(String(128))
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ExpertRecallRowModel(Base):
+    """专家召回明细（设计 §35.3）。"""
+
+    __tablename__ = "expert_recall_rows"
+    __table_args__ = (
+        Index("ix_expert_recall_rows_run_expert", "scan_run_id", "expert"),
+        {"schema": V3_SCHEMA},
+    )
+
+    row_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    expert: Mapped[str] = mapped_column(String(8), nullable=False)
+    score: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    hit: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ParetoResultRowModel(Base):
+    """Pareto 分层结果（设计 §35.4）。"""
+
+    __tablename__ = "pareto_result_rows"
+    __table_args__ = (
+        Index("ix_pareto_result_rows_run", "scan_run_id", "front"),
+        {"schema": V3_SCHEMA},
+    )
+
+    row_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    front: Mapped[int] = mapped_column(Integer, nullable=False)
+    crowding_distance: Mapped[Decimal] = mapped_column(Numeric(16, 6), nullable=False)
+    p_position: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    p_transition: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    p_accumulation: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    p_quality_catalyst: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    p_risk_reward: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class OutcomeLabelModel(Base):
+    """结果标签（设计 §35.5，MFE/MAE/分级，Step 17 回填）。"""
+
+    __tablename__ = "outcome_labels"
+    __table_args__ = (
+        CheckConstraint("label IS NULL OR label IN ('A','B','C')", name="valid_label"),
+        UniqueConstraint("scan_run_id", "code", name="uq_outcome_labels_run_code"),
+        {"schema": V3_SCHEMA},
+    )
+
+    row_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    mfe_5: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    mfe_10: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    mfe_20: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    mae_5: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    mae_10: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    mae_20: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    time_to_8: Mapped[int | None] = mapped_column(Integer)
+    time_to_10: Mapped[int | None] = mapped_column(Integer)
+    time_to_15: Mapped[int | None] = mapped_column(Integer)
+    label: Mapped[str | None] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class MissAuditRowModel(Base):
+    """漏选审计（设计 §35.6，Step 17）。"""
+
+    __tablename__ = "miss_audit_rows"
+    __table_args__ = (
+        Index("ix_miss_audit_rows_run", "scan_run_id", "future_label"),
+        {"schema": V3_SCHEMA},
+    )
+
+    row_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    future_label: Mapped[str] = mapped_column(String(8), nullable=False)
+    last_alive_stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    drop_stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    drop_reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    audit_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ShadowPoolRowModel(Base):
+    """影子池（设计 §35.7，Step 18）。"""
+
+    __tablename__ = "shadow_pool_rows"
+    __table_args__ = (
+        CheckConstraint(
+            "sample_group IN ('near_miss','single_expert','random','other')",
+            name="valid_sample_group",
+        ),
+        Index("ix_shadow_pool_rows_run_group", "scan_run_id", "sample_group"),
+        {"schema": V3_SCHEMA},
+    )
+
+    row_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    sample_group: Mapped[str] = mapped_column(String(32), nullable=False)
+    drop_stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    drop_reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome_label: Mapped[str | None] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

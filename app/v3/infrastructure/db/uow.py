@@ -31,6 +31,7 @@ from app.v3.infrastructure.db.action_repositories import SQLAlchemyActionReposit
 from app.v3.infrastructure.db.performance_repositories import SQLAlchemyPerformanceRepository
 from app.v3.infrastructure.db.strategy_repositories import SQLAlchemyStrategyRepository
 from app.v3.infrastructure.db.read_repositories import SQLAlchemyReadRepository
+from app.v3.infrastructure.db.scan_repositories import SQLAlchemyScanRepository
 
 
 class SQLAlchemyUnitOfWork:
@@ -65,6 +66,7 @@ class SQLAlchemyUnitOfWork:
         self.index_benchmarks = SQLAlchemyIndexBenchmarkRepository(self._session)
         self.reads = SQLAlchemyReadRepository(self._session)
         self.attention = SQLAlchemyAttentionRepository(self._session)
+        self.scans = SQLAlchemyScanRepository(self._session)
         return self
 
     async def __aexit__(

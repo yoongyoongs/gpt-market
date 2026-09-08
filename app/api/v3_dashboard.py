@@ -226,10 +226,98 @@ def _attention_section(events: list[Any]) -> str:
     )
 
 
+def _scan_funnel_section(run, expert_counts: dict[str, int] | None = None) -> str:
+    """§37.1 漏斗 + §37.2 专家召回计数（候选扫描最新一轮）。"""
+    if run is None:
+        return ""
+    stages = [
+        ("Universe", run.universe_count),
+        ("Safety", run.eligible_count),
+        ("Recall", run.recall_count),
+        ("Pareto", run.pareto_count),
+        ("Machine", run.machine_count),
+        ("Deep", run.deep_count),
+        ("Final", run.final_count),
+    ]
+    chips = " ".join(
+        f'<span class="badge{" mute" if count == 0 else ""}">{escape(name)} {count:,}</span>'
+        for name, count in stages
+    )
+    expert_note = ""
+    if expert_counts:
+        expert_note = (
+            '<p class="subtitle" style="margin-top:8px">专家命中：'
+            + " · ".join(
+                f"{escape(str(expert))} {count:,}"
+                for expert, count in sorted(expert_counts.items())
+            )
+            + "</p>"
+        )
+    return (
+        '<section class="card section"><div class="section-head"><div><h2>候选扫描漏斗</h2>'
+        f'<p class="subtitle">最新扫描 {escape(run.market_date.isoformat()[:10])} · '
+        f'<a href="/api/v3/scan/latest">JSON</a> · 耗时 {run.duration_ms:,}ms</p></div></div>'
+        f"<p>{chips}</p>{expert_note}</section>"
+    )
+
+
+def _scan_top_section(rows: list[Any], stage: str) -> str:
+    """§37.3 Top30（扫描 top 阶段存活名单，机器分口径）。"""
+    if not rows:
+        return ""
+    body = "".join(
+        "<tr>"
+        f'<td class="num">{escape(str(row.rank))}</td>'
+        f"<td>{escape(row.code)}</td>"
+        f'<td class="num">{_number(row.score)}</td>'
+        f'<td><a href="/v3/dashboard?whynot={escape(row.code)}">Why Not / 轨迹</a></td>'
+        "</tr>"
+        for row in rows
+    )
+    return (
+        f'<section class="card section"><div class="section-head"><div><h2>扫描 {escape(stage)} 榜单</h2>'
+        '<p class="subtitle">机器排序口径分（非统一评分，不构成投资建议）。</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th class="num">Rank</th><th>代码</th>'
+        '<th class="num">分数</th><th>轨迹</th></tr></thead>'
+        f"<tbody>{body}</tbody></table></div></section>"
+    )
+
+
+def _why_not_section(rows: list[Any], code: str) -> str:
+    """§37.4 Why Not：任意代码全链生命轨迹。"""
+    if not rows:
+        return (
+            '<section class="card section"><h2>Why Not</h2>'
+            f"<p class=\"muted\">扫描中未找到 {escape(code)} 的记录。</p></section>"
+        )
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(row.stage)}</td>"
+        f'<td>{"" if row.alive else "<span class=\"badge bad\">DEAD</span>"}</td>'
+        f'<td class="num">{_number(row.score)}</td>'
+        f'<td class="num">{_text(row.rank)}</td>'
+        f'<td class="missing">{_text(row.drop_reason)}</td>'
+        "</tr>"
+        for row in rows
+    )
+    return (
+        f'<section class="card section"><div class="section-head"><div><h2>Why Not · {escape(code)}</h2>'
+        '<p class="subtitle">全链生命轨迹：在哪一层、为什么被降级（设计 §37.4）。</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th>阶段</th><th>状态</th>'
+        '<th class="num">分数</th><th class="num">名次</th><th>淘汰原因</th></tr></thead>'
+        f"<tbody>{body}</tbody></table></div></section>"
+    )
+
+
 def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: bool, market: str | None, limit: int,
                      intraday_status: dict[str, Any] | None = None,
                      pipeline: dict[str, Any] | None = None,
-                     attention_events: list[Any] | None = None) -> str:
+                     attention_events: list[Any] | None = None,
+                     scan_run=None,
+                     scan_expert_counts: dict[str, int] | None = None,
+                     scan_top_rows: list[Any] | None = None,
+                     why_not_rows: list[Any] | None = None,
+                     why_not_code: str | None = None) -> str:
     quality = page.quality_summary
     coverage = float(quality.get("coverage", 0))
     successful = int(quality.get("successful_count", 0))
@@ -301,6 +389,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
 <section class="card stat"><span>成功</span><strong>{successful:,}</strong></section><section class="card stat"><span>失败</span><strong>{failed:,}</strong></section>
 <section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页陈旧</span><strong>{stale_count}</strong></section></div>
 {regime_html}
+{_scan_funnel_section(scan_run, scan_expert_counts)}
+{_scan_top_section(scan_top_rows or [], 'FINAL')}
+{_why_not_section(why_not_rows or [], why_not_code or '')}
 {_live_status_section(intraday_status)}
 {_pipeline_section(pipeline)}
 {_attention_section(attention_events or [])}
@@ -319,6 +410,7 @@ async def v3_dashboard(
     sort_by: FeatureSortField = FeatureSortField.RETURN_20D,
     descending: bool = True,
     limit: str | None = Query(default=None),
+    whynot: str | None = Query(default=None),
 ):
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
@@ -354,6 +446,23 @@ async def v3_dashboard(
         )
         regime = await uow.features.latest_regime()
         attention_events = await uow.attention.open_events(limit=20)
+        # §37 候选扫描区块（无扫描数据/UoW 无 scans 时各 section 自动缺席）
+        scans = getattr(uow, "scans", None)
+        scan_run = await scans.latest_run() if scans is not None else None
+        scan_expert_counts = scan_top_rows = why_not_rows = None
+        if scans is not None and scan_run is not None:
+            expert_rows = await uow.scans.expert_rows(scan_run.scan_run_id)
+            counts: dict[str, int] = {}
+            for row in expert_rows:
+                counts[row.expert] = counts.get(row.expert, 0) + 1
+            scan_expert_counts = counts
+            scan_top_rows = await uow.scans.snapshots(
+                scan_run.scan_run_id, stage="FINAL", alive_only=True, limit=30,
+            )
+            if whynot:
+                why_not_rows = await uow.scans.snapshots(
+                    scan_run.scan_run_id, code=whynot, limit=64,
+                )
     intraday_status = await MarketIntradayStatusService(
         clock=clock, is_trading_day=_trading_day,
     ).execute()
@@ -373,6 +482,11 @@ async def v3_dashboard(
             intraday_status=intraday_status,
             pipeline=pipeline,
             attention_events=attention_events,
+            scan_run=scan_run,
+            scan_expert_counts=scan_expert_counts,
+            scan_top_rows=scan_top_rows,
+            why_not_rows=why_not_rows,
+            why_not_code=whynot,
         ),
         headers=NO_CACHE_HEADERS,
     )

@@ -72,12 +72,16 @@ PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
         "/raw-opportunities",
         "/market/intraday-status",
         "/health/data-quality",
+        "/scan/latest",
     }
 )
 # R4-P1-005：/evidence/ 不再任意 prefix 公开——subject_type 是自由字符串，
 # 未来新增 POSITION/ACCOUNT 等 subject 不许自动变公开；改用下方明确
 # allowlist。/context-packs/{id} 同理回归认证（R3-P1-004）。
-PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = ()
+# Step 15（设计 §36）：候选扫描漏斗/专家/Pareto/Top/trace 属纯市场
+# 事实读取，/scan/{id}/* 公开；backtest/shadow 属策略内部语义，
+# 保持认证。模板第三段逐个登记，不用 /scan/ 整段 prefix。
+PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = ("/scan/",)
 # 只有明确"公开语义"的 Evidence subject_type 匿名可读；其余一律认证。
 PUBLIC_EVIDENCE_SUBJECT_TYPES: frozenset[str] = frozenset(
     {"SECURITY", "PUBLIC_INDUSTRY", "PUBLIC_POLICY"}
@@ -85,6 +89,7 @@ PUBLIC_EVIDENCE_SUBJECT_TYPES: frozenset[str] = frozenset(
 PUBLIC_MARKET_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
     ("stocks", "*", "evidence"),
     ("stocks", "*", "context-pack"),
+    ("stock", "*", "scan-trace"),
 )
 
 
