@@ -69,3 +69,66 @@ async def test_save_scan_and_read_back() -> None:
         assert await uow.scans.shadow_group_counts(scan_run_id) == {}
 
     await engine.dispose()
+
+
+async def test_mature_backfill_pending_and_read_back() -> None:
+    """mature 编排（无 bars → 全 PENDING）+ 落库路径 TraceView 一致性。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.v3.application.mature_scan_outcomes import MatureScanOutcomesService
+    from app.v3.application.trace_view import to_trace_views
+    from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
+
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    result = _pipeline_result()
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        scan_run_id = await uow.scans.save_scan(result)
+        await uow.commit()
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        # 落库路径 TraceView 与内存路径一致
+        db_views = {v.code: v for v in await uow.scans.trace_views(scan_run_id)}
+        mem_views = {v.code: v for v in to_trace_views(result)}
+        assert set(db_views) == set(mem_views)
+        for code, db_view in db_views.items():
+            mem_view = mem_views[code]
+            assert db_view.final == mem_view.final
+            assert db_view.drop_stage == mem_view.drop_stage
+            assert db_view.machine_rank == mem_view.machine_rank
+            assert db_view.pareto_front == mem_view.pareto_front
+            assert db_view.pareto_protected == mem_view.pareto_protected
+            assert db_view.expert_ranks == mem_view.expert_ranks
+
+        # mature：测试库无 bars → 全 PENDING，但 label 行要覆盖全 universe
+        summary = await MatureScanOutcomesService().execute(
+            uow.scans, scan_id=scan_run_id,
+        )
+        await uow.commit()
+        assert summary["status"] == "ok"
+        assert summary["labels_upserted"] == len(result.trace.traces)
+        assert summary["pending"] == len(result.trace.traces)
+        assert summary["labeled"] == 0
+
+        label_rows = await uow.scans.outcome_labels(scan_run_id)
+        assert len(label_rows) == len(result.trace.traces)
+        assert all(row.label is None and row.bars_used == 0 for row in label_rows)
+
+        # 幂等：重跑不翻倍
+        summary2 = await MatureScanOutcomesService().execute(
+            uow.scans, scan_id=scan_run_id,
+        )
+        await uow.commit()
+        assert summary2["labels_upserted"] == summary["labels_upserted"]
+        assert len(await uow.scans.outcome_labels(scan_run_id)) == len(label_rows)
+
+        # shadow：dead 股按分层落库（数量与内存 sample 一致）
+        from app.v3.application.shadow_pool import ShadowPoolService
+
+        expected_shadow = ShadowPoolService().sample(list(db_views.values()))
+        assert summary["shadow_rows"] == len(expected_shadow)
+        counts = await uow.scans.shadow_group_counts(scan_run_id)
+        assert sum(counts.values()) == len(expected_shadow)
+
+    await engine.dispose()

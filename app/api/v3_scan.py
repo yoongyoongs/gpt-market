@@ -13,7 +13,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.v3 import _uow
-from app.v3.domain.candidate_engine import TRACE_STAGES
+from app.v3.application.backtest_metrics import BacktestMetricsService
+from app.v3.domain.candidate_engine import GOOD_LABELS, OutcomeLabelResult, TRACE_STAGES
 
 router = APIRouter(prefix="/api/v3", tags=["V3 Scan"])
 
@@ -182,22 +183,62 @@ async def stock_scan_trace(
 
 
 @router.get("/backtest/metrics")
-async def backtest_metrics() -> dict:
-    """Recall@K / Precision@K / NDCG@K（Step 17 计算落地后返回真实值）。"""
+async def backtest_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
+    """Recall@K / Precision@K / NDCG@K（§27-§29；观察窗成熟后有效）。"""
     async with _uow() as uow:
-        run = await _resolve_run(None, uow)
+        run = await _resolve_run(scan_id, uow)
+
+        async def _pool(stage: str) -> list[tuple[str, int]]:
+            rows = await uow.scans.snapshots(
+                run.scan_run_id, stage=stage, alive_only=True, limit=1_000_000,
+            )
+            return [(row.code, row.rank) for row in rows if row.rank is not None]
+
+        machine = await _pool("MACHINE")
+        final = await _pool("FINAL")
+        pools = {
+            "recall_pool": await _pool("RECALL"),
+            "pareto_pool": await _pool("PARETO"),
+            "top300": [(code, rank) for code, rank in machine if rank <= 300],
+            "top120": [(code, rank) for code, rank in machine if rank <= 120],
+            "top60": await _pool("DEEP"),
+            "top30": final,
+            "final": final,
+        }
+        label_rows = await uow.scans.outcome_labels(run.scan_run_id)
+        labels = [
+            OutcomeLabelResult(code=row.code, label=row.label) for row in label_rows
+        ]
+        result = BacktestMetricsService().compute(
+            labels, pools, scan_id=run.scan_run_id,
+        )
         return {
             "scan_id": str(run.scan_run_id),
-            "metrics": [],
-            "note": "outcome labels pending Step 17 maturity window",
+            "good_count": result.good_count,
+            "labeled_count": result.labeled_count,
+            "metrics": [
+                {
+                    "metric": entry.metric,
+                    "pool": entry.pool,
+                    "k": entry.k,
+                    "value": entry.value,
+                    "numerator": entry.numerator,
+                    "denominator": entry.denominator,
+                }
+                for entry in result.entries
+            ],
+            "note": None if label_rows else "outcome labels pending maturity window",
         }
 
 
 @router.get("/backtest/misses")
-async def backtest_misses(limit: int = Query(default=50, ge=1, le=500)) -> dict:
-    """False Negative / 漏选审计（Step 17 落地后返回真实值）。"""
+async def backtest_misses(
+    scan_id: UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> dict:
+    """False Negative / 漏选审计（§30）。"""
     async with _uow() as uow:
-        run = await _resolve_run(None, uow)
+        run = await _resolve_run(scan_id, uow)
         rows = await uow.scans.miss_rows(run.scan_run_id, limit=limit)
         return {
             "scan_id": str(run.scan_run_id),
@@ -216,15 +257,44 @@ async def backtest_misses(limit: int = Query(default=50, ge=1, le=500)) -> dict:
 
 
 @router.get("/shadow/metrics")
-async def shadow_metrics() -> dict:
-    """影子池对照指标（Step 18 落地后返回真实值）。"""
+async def shadow_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
+    """影子池对照（§31.2/§32）：各组 GOOD rate + 淘汰原因分布，对照 Final 组。"""
     async with _uow() as uow:
-        run = await _resolve_run(None, uow)
-        groups = await uow.scans.shadow_group_counts(run.scan_run_id)
+        run = await _resolve_run(scan_id, uow)
+        rows = await uow.scans.shadow_rows(run.scan_run_id)
+        labels = await uow.scans.labels_by_code(run.scan_run_id)
+        final_rows = await uow.scans.snapshots(
+            run.scan_run_id, stage="FINAL", alive_only=True, limit=100,
+        )
+        final_labels = [labels.get(row.code) for row in final_rows]
+        final_good = sum(1 for label in final_labels if label in GOOD_LABELS)
+
+        groups: dict[str, dict] = {}
+        for row in rows:
+            bucket = groups.setdefault(
+                row.sample_group,
+                {"count": 0, "good": 0, "drop_reasons": {}},
+            )
+            bucket["count"] += 1
+            label = row.outcome_label or labels.get(row.code)
+            if label in GOOD_LABELS:
+                bucket["good"] += 1
+            bucket["drop_reasons"][row.drop_reason] = (
+                bucket["drop_reasons"].get(row.drop_reason, 0) + 1
+            )
+        for bucket in groups.values():
+            bucket["good_rate"] = (
+                bucket["good"] / bucket["count"] if bucket["count"] else 0.0
+            )
         return {
             "scan_id": str(run.scan_run_id),
             "groups": groups,
-            "note": "outcome labels pending Step 18",
+            "final_group": {
+                "count": len(final_labels),
+                "good": final_good,
+                "good_rate": final_good / len(final_labels) if final_labels else 0.0,
+            },
+            "note": None if rows else "shadow pool pending mature backfill",
         }
 
 

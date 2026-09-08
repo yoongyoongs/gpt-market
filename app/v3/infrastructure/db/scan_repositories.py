@@ -1,26 +1,36 @@
-"""候选扫描落库与查询（设计 §35，Step 14）。
+"""候选扫描落库与查询（设计 §35，Step 14/17-18）。
 
 写入：CandidatePipelineResult → scan_runs + candidate_snapshots +
-expert_recall_rows + pareto_result_rows（bulk insert）。
-查询：latest / funnel / experts / pareto / top(stage) / trace(code)，
-供 Step 15 API 直接消费。
+expert_recall_rows + pareto_result_rows（bulk insert）；
+mature 回填 → outcome_labels（upsert）+ miss_audit_rows + shadow_pool_rows。
+查询：latest / funnel / experts / pareto / top(stage) / trace(code) /
+trace_views（落库路径重建 TraceView）供 Step 15 API 与成熟编排消费。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.v3.domain.candidate_engine import CandidatePipelineResult
+from app.v3.application.trace_view import TraceView
+from app.v3.domain.candidate_engine import (
+    CandidatePipelineResult,
+    MissAuditEntry,
+    OutcomeLabelResult,
+    ShadowSampleEntry,
+)
 from app.v3.infrastructure.db.models import (
+    BarSeriesRevisionModel,
     CandidateSnapshotModel,
     ExpertRecallRowModel,
+    MarketBarModel,
     MissAuditRowModel,
+    OutcomeLabelModel,
     ParetoResultRowModel,
     ScanRunModel,
     ShadowPoolRowModel,
@@ -108,6 +118,7 @@ class SQLAlchemyScanRepository:
                 "scan_run_id": scan_run_id,
                 "code": entry.code,
                 "front": entry.front,
+                "protected": entry.protected,
                 "crowding_distance": Decimal(str(min(entry.crowding, 1e12))),
                 "p_position": _decimal(entry.scores.get("position")),
                 "p_transition": _decimal(entry.scores.get("transition")),
@@ -189,8 +200,6 @@ class SQLAlchemyScanRepository:
         return list(result.scalars().all())
 
     async def shadow_group_counts(self, scan_run_id: UUID) -> dict[str, int]:
-        from sqlalchemy import func
-
         result = await self._session.execute(
             select(
                 ShadowPoolRowModel.sample_group,
@@ -200,6 +209,230 @@ class SQLAlchemyScanRepository:
             .group_by(ShadowPoolRowModel.sample_group)
         )
         return {group: count for group, count in result.all()}
+
+    # ------------------------------------------------------------------
+    # Step 17-18：mature 回填
+    # ------------------------------------------------------------------
+
+    async def bars_from(
+        self,
+        security_ids: list[UUID],
+        since: datetime,
+        *,
+        limit: int = 21,
+    ) -> dict[UUID, list[tuple[datetime, float, float, float]]]:
+        """批量拉 QFQ 日K 中 since 之后的 ≤limit 根（含 T 日首根，用于 close_T 基准）。
+
+        一次 SQL 覆盖全 universe；revision 取每股市最新 PUBLISHED DAY/QFQ。
+        返回 (bar_time, high, low, close)，按时间升序；第一根若为 T 日收盘
+        则作为 close_T，其余为观察窗。
+        """
+        if not security_ids:
+            return {}
+        ranked = (
+            select(
+                BarSeriesRevisionModel.revision_id,
+                BarSeriesRevisionModel.security_id,
+                func.row_number()
+                .over(
+                    partition_by=BarSeriesRevisionModel.security_id,
+                    order_by=(
+                        BarSeriesRevisionModel.known_at.desc(),
+                        BarSeriesRevisionModel.revision_id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(
+                BarSeriesRevisionModel.security_id.in_(security_ids),
+                BarSeriesRevisionModel.period == "DAY",
+                BarSeriesRevisionModel.adjust_type == "QFQ",
+                BarSeriesRevisionModel.status == "PUBLISHED",
+            )
+            .subquery()
+        )
+        window_end = since + timedelta(days=limit * 3 + 14)
+        result = await self._session.execute(
+            select(
+                ranked.c.security_id,
+                MarketBarModel.bar_time,
+                MarketBarModel.high,
+                MarketBarModel.low,
+                MarketBarModel.close,
+            )
+            .join(MarketBarModel, MarketBarModel.revision_id == ranked.c.revision_id)
+            .where(
+                ranked.c.rn == 1,
+                MarketBarModel.bar_time > since,
+                MarketBarModel.bar_time < window_end,
+            )
+            .order_by(ranked.c.security_id, MarketBarModel.bar_time)
+        )
+        bars: dict[UUID, list[tuple[datetime, float, float, float]]] = {}
+        for security_id, bar_time, high, low, close in result.all():
+            series = bars.setdefault(security_id, [])
+            if len(series) >= limit:
+                continue
+            series.append((bar_time, float(high), float(low), float(close)))
+        return bars
+
+    async def trace_views(self, scan_run_id: UUID) -> list[TraceView]:
+        """落库路径：从 snapshots + pareto + expert rows 重建 TraceView（mature 用）。"""
+        snapshot_rows = await self.snapshots(scan_run_id, limit=1_000_000)
+        pareto_by_code = {
+            row.code: row for row in await self.pareto_rows(scan_run_id, limit=100_000)
+        }
+        expert_ranks: dict[str, dict[str, int]] = {}
+        for row in await self.expert_rows(scan_run_id, limit=1_000_000):
+            ranks = expert_ranks.setdefault(row.code, {})
+            if row.expert not in ranks or row.rank < ranks[row.expert]:
+                ranks[row.expert] = row.rank
+
+        staged: dict[UUID, dict[str, CandidateSnapshotModel]] = {}
+        for row in snapshot_rows:
+            staged.setdefault(row.security_id, {})[row.stage] = row
+
+        views: list[TraceView] = []
+        for security_id, stages in staged.items():
+            first = next(iter(stages.values()))
+            alive_stages = [row for row in stages.values() if row.alive]
+            dead_rows = [row for row in stages.values() if not row.alive]
+            dead = min(dead_rows, key=lambda row: row.stage) if dead_rows else None
+            machine = stages.get("MACHINE")
+            pareto_snapshot = stages.get("PARETO")
+            final_row = stages.get("FINAL")
+            pareto = pareto_by_code.get(first.code)
+            views.append(TraceView(
+                code=first.code,
+                security_id=security_id,
+                last_alive_stage=alive_stages[-1].stage if alive_stages else None,
+                drop_stage=dead.stage if dead else None,
+                drop_reason=dead.drop_reason if dead else None,
+                machine_rank=machine.rank if machine and machine.alive else None,
+                machine_selected=bool(machine and machine.alive),
+                pareto_front=pareto.front if pareto else None,
+                pareto_selected=bool(pareto_snapshot and pareto_snapshot.alive),
+                pareto_protected=pareto.protected if pareto else False,
+                expert_ranks=expert_ranks.get(first.code, {}),
+                final=bool(final_row and final_row.alive),
+            ))
+        views.sort(key=lambda view: view.code)
+        return views
+
+    async def save_outcome_labels(
+        self, scan_run_id: UUID, labels: list[OutcomeLabelResult]
+    ) -> int:
+        """按 (scan_run_id, code) upsert；重跑 mature 覆盖旧值。"""
+        if not labels:
+            return 0
+        rows = [
+            {
+                "row_id": uuid4(),
+                "scan_run_id": scan_run_id,
+                "code": entry.code,
+                "mfe_5": _decimal(entry.mfe_5),
+                "mfe_10": _decimal(entry.mfe_10),
+                "mfe_20": _decimal(entry.mfe_20),
+                "mae_5": _decimal(entry.mae_5),
+                "mae_10": _decimal(entry.mae_10),
+                "mae_20": _decimal(entry.mae_20),
+                "time_to_8": entry.time_to_8,
+                "time_to_10": entry.time_to_10,
+                "time_to_15": entry.time_to_15,
+                "close_t": _decimal(entry.close_t),
+                "bars_used": entry.bars_used,
+                "label": entry.label,
+            }
+            for entry in labels
+        ]
+        stmt = pg_insert(OutcomeLabelModel).values(rows)
+        await self._session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["scan_run_id", "code"],
+                set_={
+                    "mfe_5": stmt.excluded.mfe_5,
+                    "mfe_10": stmt.excluded.mfe_10,
+                    "mfe_20": stmt.excluded.mfe_20,
+                    "mae_5": stmt.excluded.mae_5,
+                    "mae_10": stmt.excluded.mae_10,
+                    "mae_20": stmt.excluded.mae_20,
+                    "time_to_8": stmt.excluded.time_to_8,
+                    "time_to_10": stmt.excluded.time_to_10,
+                    "time_to_15": stmt.excluded.time_to_15,
+                    "close_t": stmt.excluded.close_t,
+                    "bars_used": stmt.excluded.bars_used,
+                    "label": stmt.excluded.label,
+                },
+            )
+        )
+        return len(rows)
+
+    async def save_miss_rows(self, scan_run_id: UUID, entries: list[MissAuditEntry]) -> int:
+        """幂等重算：先清同 run 旧行再插入（backfill 语义）。"""
+        if entries:
+            await self._session.execute(
+                delete(MissAuditRowModel).where(MissAuditRowModel.scan_run_id == scan_run_id)
+            )
+        rows = [
+            {
+                "row_id": uuid4(),
+                "scan_run_id": scan_run_id,
+                "code": entry.code,
+                "future_label": entry.future_label,
+                "last_alive_stage": entry.last_alive_stage or "UNIVERSE",
+                "drop_stage": entry.drop_stage or "UNIVERSE",
+                "drop_reason": entry.drop_reason or "",
+                "audit_json": entry.audit,
+            }
+            for entry in entries
+        ]
+        if rows:
+            await self._session.execute(pg_insert(MissAuditRowModel).values(rows))
+        return len(rows)
+
+    async def save_shadow_rows(
+        self,
+        scan_run_id: UUID,
+        entries: list[ShadowSampleEntry],
+        labels_by_code: dict[str, str | None] | None = None,
+    ) -> int:
+        """幂等重算：先清同 run 旧行再插入；labels_by_code 由 mature 提供联表值。"""
+        if entries:
+            await self._session.execute(
+                delete(ShadowPoolRowModel).where(ShadowPoolRowModel.scan_run_id == scan_run_id)
+            )
+        labels_by_code = labels_by_code or {}
+        rows = [
+            {
+                "row_id": uuid4(),
+                "scan_run_id": scan_run_id,
+                "code": entry.code,
+                "sample_group": entry.sample_group,
+                "drop_stage": entry.drop_stage or "UNIVERSE",
+                "drop_reason": entry.drop_reason or "",
+                "outcome_label": labels_by_code.get(entry.code),
+            }
+            for entry in entries
+        ]
+        if rows:
+            await self._session.execute(pg_insert(ShadowPoolRowModel).values(rows))
+        return len(rows)
+
+    async def outcome_labels(self, scan_run_id: UUID) -> list[OutcomeLabelModel]:
+        result = await self._session.execute(
+            select(OutcomeLabelModel).where(OutcomeLabelModel.scan_run_id == scan_run_id)
+        )
+        return list(result.scalars().all())
+
+    async def labels_by_code(self, scan_run_id: UUID) -> dict[str, str | None]:
+        rows = await self.outcome_labels(scan_run_id)
+        return {row.code: row.label for row in rows}
+
+    async def shadow_rows(self, scan_run_id: UUID) -> list[ShadowPoolRowModel]:
+        result = await self._session.execute(
+            select(ShadowPoolRowModel).where(ShadowPoolRowModel.scan_run_id == scan_run_id)
+        )
+        return list(result.scalars().all())
 
 
 def _decimal(value: float | None) -> Decimal | None:

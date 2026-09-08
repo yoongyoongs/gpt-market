@@ -2389,6 +2389,7 @@ class ParetoResultRowModel(Base):
     scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey(f"{V3_SCHEMA}.scan_runs.scan_run_id"), nullable=False)
     code: Mapped[str] = mapped_column(String(16), nullable=False)
     front: Mapped[int] = mapped_column(Integer, nullable=False)
+    protected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     crowding_distance: Mapped[Decimal] = mapped_column(Numeric(16, 6), nullable=False)
     p_position: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     p_transition: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
@@ -2420,6 +2421,8 @@ class OutcomeLabelModel(Base):
     time_to_8: Mapped[int | None] = mapped_column(Integer)
     time_to_10: Mapped[int | None] = mapped_column(Integer)
     time_to_15: Mapped[int | None] = mapped_column(Integer)
+    close_t: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    bars_used: Mapped[int | None] = mapped_column(Integer)
     label: Mapped[str | None] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

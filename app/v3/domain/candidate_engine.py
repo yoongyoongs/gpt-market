@@ -498,3 +498,76 @@ class CandidatePipelineResult(V3Contract):
     final_entries: tuple[DeepRankEntry, ...] = Field(
         description="RAW_TOP30（§24/§25）；AI Review 接入后叠加 ai_rank/decision",
     )
+
+
+# ---------------------------------------------------------------------
+# Step 17-18：结果标签 / 回测指标 / 漏选审计 / 影子池（§26-§32）
+# ---------------------------------------------------------------------
+
+GOOD_LABELS = ("A", "B")  # GOOD_OPPORTUNITY = A or B（§26.2）
+SHADOW_GROUPS = ("near_miss", "single_expert", "random", "other")  # §31.2
+
+
+class OutcomeLabelResult(V3Contract):
+    """单股单次扫描的结果标签（§26.1-§26.2）。"""
+
+    code: str
+    security_id: UUID | None = None
+    close_t: float | None = Field(default=None, description="T 日收盘（扫描日记）")
+    mfe_5: float | None = None
+    mfe_10: float | None = None
+    mfe_20: float | None = None
+    mae_5: float | None = None
+    mae_10: float | None = None
+    mae_20: float | None = None
+    time_to_8: int | None = Field(default=None, description="首次 +8% 的交易日序（None=未达）")
+    time_to_10: int | None = None
+    time_to_15: int | None = None
+    label: str | None = Field(default=None, description="A/B/C；None=未达标")
+    bars_used: int = Field(default=0, ge=0, description="可用未来交易日数（<20 时 label 恒 None）")
+
+    @property
+    def is_good(self) -> bool:
+        return self.label in GOOD_LABELS
+
+
+class MetricsEntry(V3Contract):
+    """单条指标（Recall/Precision/NDCG）。"""
+
+    metric: str
+    k: int
+    value: float = Field(ge=0, le=1)
+    numerator: int = Field(ge=0, description="命中 GOOD 数")
+    denominator: int = Field(ge=0, description="分母（全部 GOOD 或 K）")
+    pool: str | None = Field(default=None, description="Recall 池名（Precision/NDCG 为 None）")
+
+
+class MissAuditEntry(V3Contract):
+    """漏选审计单条（§30：这只股票为什么当时没进）。"""
+
+    code: str
+    security_id: UUID | None = None
+    future_label: str
+    last_alive_stage: str | None = None
+    drop_stage: str | None = None
+    drop_reason: str | None = None
+    audit: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShadowSampleEntry(V3Contract):
+    """影子池抽样单条（§31.2 分层）。"""
+
+    code: str
+    security_id: UUID | None = None
+    sample_group: str
+    drop_stage: str | None = None
+    drop_reason: str | None = None
+
+
+class BacktestMetricsResult(V3Contract):
+    """一次扫描的 Recall/Precision/NDCG 汇总（§27-§29）。"""
+
+    scan_id: UUID | None = None
+    good_count: int = Field(ge=0, description="Universe 中 GOOD_OPPORTUNITY 总数")
+    labeled_count: int = Field(ge=0, description="已出标签的股票数")
+    entries: tuple[MetricsEntry, ...] = ()
