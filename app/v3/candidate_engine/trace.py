@@ -93,6 +93,12 @@ class ScanTraceBuilder:
                 self._dead(
                     security_id, "PARETO",
                     reason=f"pareto_front{entry.front}_not_selected",
+                    # P0-08：未入选也保存 front/crowding/rrf，Why Not 可查
+                    detail={
+                        "front": entry.front,
+                        "crowding": entry.crowding,
+                        "rrf_norm": entry.rrf_norm,
+                    },
                 )
 
     def record_machine(self, result: MachineRankResult) -> None:
@@ -100,9 +106,13 @@ class ScanTraceBuilder:
             if entry.selected:
                 self._alive(entry.security_id, "MACHINE", score=entry.machine_score, rank=entry.rank)
             else:
+                # P0-08：未入 Top120 也保存真实 rank/score（§37.4 Why Not
+                # 必须能查到 Machine #167）
                 self._dead(
                     entry.security_id, "MACHINE",
                     reason=f"machine_rank_below_top{result.top_n}",
+                    score=entry.machine_score,
+                    rank=entry.rank,
                 )
 
     def record_deep(self, result: DeepRankResult) -> None:
@@ -117,11 +127,16 @@ class ScanTraceBuilder:
         final_ids = {entry.security_id for entry in entries}
         for entry in entries:
             self._alive(entry.security_id, "FINAL", score=entry.deep_score, rank=entry.rank)
-        # Deep Top60 但未进 Final 的补 dead 行
+        # Deep Top60 但未进 Final 的补 dead 行（P0-08：保留 deep rank/score）
         for security_id, records in self._records.items():
             deep_record = records.get("DEEP")
             if deep_record is not None and deep_record.alive and security_id not in final_ids:
-                self._dead(security_id, "FINAL", reason="final_not_top30")
+                self._dead(
+                    security_id, "FINAL",
+                    reason="final_not_top30",
+                    score=deep_record.score,
+                    rank=deep_record.rank,
+                )
 
     # ---- 输出 ----
 
@@ -153,8 +168,18 @@ class ScanTraceBuilder:
             stage=stage, alive=True, score=score, rank=rank, detail=detail or {},
         )
 
-    def _dead(self, security_id: UUID, stage: str, *, reason: str) -> None:
-        """已淘汰股票继续记行；未经过前面阶段的（保护并入等）先补 UNIVERSE。"""
+    def _dead(
+        self, security_id: UUID, stage: str, *, reason: str,
+        score: float | None = None, rank: int | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """已淘汰股票继续记行；未经过前面阶段的（保护并入等）先补 UNIVERSE。
+
+        P0-08：淘汰行同样保存 score/rank/detail——「未入选 ≠ 未评分」，
+        Why Not 查询（Machine #121~）必须能拿到真实排名。"""
         records = self._records.setdefault(security_id, {})
         records.setdefault("UNIVERSE", CandidateStageRecord(stage="UNIVERSE", alive=True))
-        records[stage] = CandidateStageRecord(stage=stage, alive=False, drop_reason=reason)
+        records[stage] = CandidateStageRecord(
+            stage=stage, alive=False, score=score, rank=rank,
+            drop_reason=reason, detail=detail or {},
+        )

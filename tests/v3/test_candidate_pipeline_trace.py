@@ -10,11 +10,18 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.v3.application.candidate_pipeline import FINAL_TOP_N, CandidatePipeline
+from app.v3.candidate_engine.trace import ScanTraceBuilder
 from app.v3.domain.candidate_engine import (
-    SafetyCandidateInput,
-    TRACE_STAGES,
+    DeepRankEntry,
+    DeepRankResult,
     ExpertFeatureView,
     ExpertInput,
+    MachineRankEntry,
+    MachineRankResult,
+    ParetoEntry,
+    ParetoResult,
+    SafetyCandidateInput,
+    TRACE_STAGES,
 )
 from app.v3.domain.market_data import Market, SecurityMember
 
@@ -180,3 +187,71 @@ class TestCandidatePipeline:
         assert result.pareto.evaluated_count == result.union.union_count
         assert result.funnel.scan_id == result.scan_id
         assert result.trace.scan_id == result.scan_id
+
+
+class TestTraceUnselectedKeepRank:
+    """任务书 P0-08：未入选也保存真实 rank/score（Why Not 可查）。"""
+
+    @staticmethod
+    def _builder() -> ScanTraceBuilder:
+        return ScanTraceBuilder(scan_id=uuid4(), trade_date=NOW)
+
+    def test_machine_unselected_keep_real_rank_score(self):
+        builder = self._builder()
+        kept, dropped = uuid4(), uuid4()
+        builder.record_universe([])  # 补 UNIVERSE 行逻辑走 _dead 内部
+        builder.record_machine(MachineRankResult(
+            evaluated_count=2, top_n=1,
+            entries=(
+                MachineRankEntry(security_id=kept, code="000001",
+                                 machine_score=88.0, rank=1, selected=True),
+                MachineRankEntry(security_id=dropped, code="000002",
+                                 machine_score=61.5, rank=167, selected=False),
+            ),
+        ))
+        trace = next(t for t in builder.build().traces if t.security_id == dropped)
+        record = trace.stage("MACHINE")
+        assert record is not None and record.alive is False
+        assert record.rank == 167
+        assert record.score == 61.5
+        assert record.drop_reason == "machine_rank_below_top1"
+
+    def test_pareto_unselected_keep_front_detail(self):
+        builder = self._builder()
+        dropped = uuid4()
+        builder.record_pareto(ParetoResult(
+            evaluated_count=1, selected_count=0, protected_count=0,
+            front_sizes=(1,),
+            entries=(ParetoEntry(
+                security_id=dropped, code="000003", rrf_norm=42.5,
+                scores={}, front=5, crowding=1.25, selected=False,
+            ),),
+        ))
+        trace = next(t for t in builder.build().traces if t.security_id == dropped)
+        record = trace.stage("PARETO")
+        assert record is not None and record.alive is False
+        assert record.detail["front"] == 5
+        assert record.detail["crowding"] == 1.25
+        assert record.detail["rrf_norm"] == 42.5
+
+    def test_final_dead_rows_keep_deep_rank_score(self):
+        builder = self._builder()
+        in_final, deep_only = uuid4(), uuid4()
+        builder.record_deep(DeepRankResult(
+            evaluated_count=2, top_n=2,
+            entries=(
+                DeepRankEntry(security_id=in_final, code="000004",
+                              deep_score=90.0, rank=1),
+                DeepRankEntry(security_id=deep_only, code="000005",
+                              deep_score=70.0, rank=31),
+            ),
+        ))
+        builder.record_final((DeepRankEntry(
+            security_id=in_final, code="000004", deep_score=90.0, rank=1,
+        ),))
+        trace = next(t for t in builder.build().traces if t.security_id == deep_only)
+        record = trace.stage("FINAL")
+        assert record is not None and record.alive is False
+        assert record.drop_reason == "final_not_top30"
+        assert record.rank == 31
+        assert record.score == 70.0
