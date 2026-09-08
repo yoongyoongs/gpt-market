@@ -427,7 +427,12 @@ class SQLAlchemyScanRepository:
                 "code": entry.code,
                 "sample_group": entry.sample_group,
                 "drop_stage": entry.drop_stage or "UNIVERSE",
-                "drop_reason": entry.drop_reason or "",
+                # P0-10：sample_reason（quota_reallocation_from_<group>）
+                # 无独立列（免 schema 变更），后缀拼进 drop_reason 保语义
+                "drop_reason": (
+                    f"{entry.drop_reason or ''};{entry.sample_reason}"
+                    if entry.sample_reason else (entry.drop_reason or "")
+                ),
                 "outcome_label": labels_by_code.get(entry.code),
             }
             for entry in entries

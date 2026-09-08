@@ -284,17 +284,18 @@ def _shadow_views() -> list[TraceView]:
                          pareto_front=kw.get("front"),
                          expert_ranks=kw.get("experts", {}))
 
+    # P0-10：near_miss 窗口 = (machine_top_n, machine_top_n+window] = (120, 220]
     return [
-        _view("600001", "MACHINE", mrank=80),                                   # near_miss（机器近线）
+        _view("600001", "MACHINE", mrank=80),                                   # random（rank≤120 不该 dead，防御归 random）
         _view("600002", "PARETO", front=2),                                     # near_miss（前沿近线）
         _view("600003", "DEEP", experts={"BOTTOM_REVERSAL": 1}),                # single_expert
         _view("600004", "SAFETY", reason="ST"),                                 # other
         _view("600005", "MACHINE", mrank=500),                                  # random（离线太远）
         _view("600006", "RECALL", reason="no_expert_hit"),                      # random
-        _view("600007", "MACHINE", mrank=90),                                   # near_miss
+        _view("600007", "MACHINE", mrank=130),                                  # near_miss（121~220 窗口）
         _view("600008", "PARETO", front=1),                                     # near_miss
         _view("600009", "DEEP", experts={"MACD_DIVERGENCE": 2, "VOLUME_SPIKE": 3}),  # 双专家→random
-        _view("600010", "MACHINE", mrank=70),                                   # near_miss
+        _view("600010", "MACHINE", mrank=150),                                  # near_miss
     ]
 
 
@@ -305,16 +306,17 @@ class TestShadowPool:
                                        "random": 10, "other": 10}, seed=1)
         chosen = svc.sample(_shadow_views())
         by_code = {e.code: e.sample_group for e in chosen}
-        assert by_code["600001"] == "near_miss"   # MACHINE rank 80 近线
+        # P0-10：rank 80 在 (120,220] 窗口外（top120 内不该 dead）→ random
+        assert by_code["600001"] == "random"
         assert by_code["600002"] == "near_miss"   # PARETO front 2
-        assert by_code["600007"] == "near_miss"
+        assert by_code["600007"] == "near_miss"   # MACHINE rank 130 ∈ (120,220]
         assert by_code["600008"] == "near_miss"
         assert by_code["600003"] == "single_expert"  # 单专家 rank1
         assert by_code["600004"] == "other"       # SAFETY 资格淘汰
         assert by_code["600009"] == "random"      # 双专家不算 single_expert
         assert by_code["600005"] == "random"      # MACHINE rank 500 离线
         assert by_code["600006"] == "random"
-        assert by_code["600010"] == "near_miss"
+        assert by_code["600010"] == "near_miss"   # MACHINE rank 150 ∈ (120,220]
 
     def test_group_sizes_capped(self):
         svc = ShadowPoolService(sizes={"near_miss": 1, "single_expert": 1,
@@ -345,11 +347,19 @@ class TestShadowPool:
         assert all(e.code != "600011" for e in chosen)
 
     def test_single_expert_requires_single_hit(self):
-        """双专家命中 rank≤3 不算 single_expert（600009）。"""
+        """双专家命中 rank≤3 不算 single_expert（600009）。
+
+        P0-10 reallocation 后可经 random 组补抽（reason 记来源），
+        但 sample_group 绝不为 single_expert。"""
         svc = ShadowPoolService(sizes={"near_miss": 0, "single_expert": 5,
                                        "random": 0, "other": 0}, seed=1)
         chosen = svc.sample(_shadow_views())
-        assert all(e.code != "600009" for e in chosen)
+        for entry in chosen:
+            if entry.code == "600009":
+                assert entry.sample_group == "random"
+                assert entry.sample_reason is not None
+        assert all(e.sample_group != "single_expert" for e in chosen
+                   if e.code == "600009")
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,8 @@ class MatureScanOutcomesService:
             "pending": pending,
             "miss_audit_rows": saved_miss,
             "shadow_rows": saved_shadow,
+            # P0-10：影子池不足 200 时显式上报，不静默
+            "shadow_shortfall_reason": self._shadow.last_shortfall_reason,
         }
 
     @staticmethod

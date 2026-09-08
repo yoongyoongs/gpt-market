@@ -559,13 +559,19 @@ class MissAuditEntry(V3Contract):
 
 
 class ShadowSampleEntry(V3Contract):
-    """影子池抽样单条（§31.2 分层）。"""
+    """影子池抽样单条（§31.2 分层）。
+
+    sample_reason：P0-10 fallback reallocation 时记录
+    quota_reallocation_from_<group>；正常抽样为 None。sample_group
+    保持原语义不被缺口填充篡改。
+    """
 
     code: str
     security_id: UUID | None = None
     sample_group: str
     drop_stage: str | None = None
     drop_reason: str | None = None
+    sample_reason: str | None = None
 
 
 class BacktestMetricsResult(V3Contract):
