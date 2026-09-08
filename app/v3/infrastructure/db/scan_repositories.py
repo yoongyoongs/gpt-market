@@ -314,6 +314,9 @@ class SQLAlchemyScanRepository:
             machine = stages.get("MACHINE")
             pareto_snapshot = stages.get("PARETO")
             final_row = stages.get("FINAL")
+            # P0-11：Recall/Deep 阶段行带真实 union_rank / deep_rank
+            recall_snapshot = stages.get("RECALL")
+            deep_snapshot = stages.get("DEEP")
             pareto = pareto_by_code.get(first.code)
             views.append(TraceView(
                 code=first.code,
@@ -331,6 +334,8 @@ class SQLAlchemyScanRepository:
                 pareto_selected=bool(pareto_snapshot and pareto_snapshot.alive),
                 pareto_protected=pareto.protected if pareto else False,
                 expert_ranks=expert_ranks.get(first.code, {}),
+                recall_rank=recall_snapshot.rank if recall_snapshot is not None else None,
+                deep_rank=deep_snapshot.rank if deep_snapshot is not None else None,
                 final=bool(final_row and final_row.alive),
             ))
         views.sort(key=lambda view: view.code)

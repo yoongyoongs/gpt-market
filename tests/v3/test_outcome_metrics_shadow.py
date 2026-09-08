@@ -228,6 +228,8 @@ def _views() -> list[TraceView]:
                          pareto_front=kw.get("front"),
                          pareto_protected=kw.get("protected", False),
                          expert_ranks=kw.get("experts", {}),
+                         recall_rank=kw.get("rrank"),
+                         deep_rank=kw.get("drank"),
                          final=kw.get("final", False))
 
     return [
@@ -235,7 +237,7 @@ def _views() -> list[TraceView]:
         _view("600002", drop="MACHINE", mrank=80, experts={"LOW_BASE": 1}),   # good → 审计
         _view("600003", drop="SAFETY", reason="ST"),                 # SAFETY 误杀审计
         _view("600004", final=True),                                # Final 不审计
-        _view("600005", drop="PARETO", front=2, protected=True, mrank=45, experts={"BOTTOM_REVERSAL": 2, "LOW_POSITION": 5}),
+        _view("600005", drop="PARETO", front=2, protected=True, mrank=45, experts={"BOTTOM_REVERSAL": 2, "LOW_POSITION": 5}, rrank=44, drank=None),
     ]
 
 
@@ -261,8 +263,14 @@ class TestMissAudit:
         assert audit["pareto_front"] == 2
         assert audit["protected"] is True
         assert audit["machine_rank"] == 45
-        assert audit["union_rank"] == 2
-        assert set(audit["experts"]) == {"BOTTOM_REVERSAL", "LOW_POSITION"}
+        # P0-11：experts=[{expert, rank}] 按 rank ASC；recall_rank 是
+        # Trace RECALL 行真实 RRF 名次，≠ min(expert_rank)
+        assert audit["experts"] == [
+            {"expert": "BOTTOM_REVERSAL", "rank": 2},
+            {"expert": "LOW_POSITION", "rank": 5},
+        ]
+        assert audit["recall_rank"] == 44
+        assert "deep_rank" not in audit  # 未进 Deep 不伪造
         assert audit["mfe_20"] == 0.18
 
     def test_missing_view_skipped(self):
@@ -436,3 +444,9 @@ class TestTraceViewConversion:
         assert by_code["000003"].machine_rank is None
         # expert_ranks 来自 union
         assert by_code["000001"].expert_ranks  # 全特征股至少一个专家命中
+        # P0-11：recall_rank 来自 union RRF 真实名次；进 Deep 的股 deep_rank 非空
+        assert by_code["000001"].recall_rank is not None
+        assert by_code["000001"].deep_rank is not None
+        # ST 股无 Recall/Deep 行
+        assert by_code["000003"].recall_rank is None
+        assert by_code["000003"].deep_rank is None

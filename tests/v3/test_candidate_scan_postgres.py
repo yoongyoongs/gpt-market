@@ -100,6 +100,9 @@ async def test_mature_backfill_pending_and_read_back() -> None:
             assert db_view.pareto_front == mem_view.pareto_front
             assert db_view.pareto_protected == mem_view.pareto_protected
             assert db_view.expert_ranks == mem_view.expert_ranks
+            # P0-11：RECALL/DEEP 行 rank 双路径一致（union RRF 名次/Deep 名次）
+            assert db_view.recall_rank == mem_view.recall_rank
+            assert db_view.deep_rank == mem_view.deep_rank
 
         # mature：测试库无 bars → 全 PENDING，但 label 行要覆盖全 universe
         summary = await MatureScanOutcomesService().execute(

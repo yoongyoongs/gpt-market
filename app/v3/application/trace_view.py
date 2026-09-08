@@ -28,6 +28,10 @@ class TraceView:
     pareto_selected: bool = False
     pareto_protected: bool = False
     expert_ranks: dict[str, int] = field(default_factory=dict)
+    # P0-11：Recall Union 的 RRF 真实名次（≠ min(expert_rank)）
+    recall_rank: int | None = None
+    # P0-11：Deep Rank 名次（未进 Deep 为 None）
+    deep_rank: int | None = None
     final: bool = False
 
 
@@ -36,6 +40,8 @@ def to_trace_views(result: CandidatePipelineResult) -> list[TraceView]:
     pareto_by_id = {entry.security_id: entry for entry in result.pareto.entries}
     machine_by_id = {entry.security_id: entry for entry in result.machine.entries}
     final_ids = {entry.security_id for entry in result.final_entries}
+    recall_by_id = {entry.security_id: entry for entry in result.union.entries}
+    deep_by_id = {entry.security_id: entry for entry in result.deep.entries}
     expert_ranks: dict[UUID, dict[str, int]] = {}
     for entry in result.union.entries:
         ranks = {}
@@ -47,6 +53,8 @@ def to_trace_views(result: CandidatePipelineResult) -> list[TraceView]:
     for trace in result.trace.traces:
         pareto = pareto_by_id.get(trace.security_id)
         machine = machine_by_id.get(trace.security_id)
+        recall = recall_by_id.get(trace.security_id)
+        deep = deep_by_id.get(trace.security_id)
         views.append(TraceView(
             code=trace.code,
             security_id=trace.security_id,
@@ -59,6 +67,8 @@ def to_trace_views(result: CandidatePipelineResult) -> list[TraceView]:
             pareto_selected=bool(pareto and pareto.selected),
             pareto_protected=bool(pareto and pareto.protected),
             expert_ranks=expert_ranks.get(trace.security_id, {}),
+            recall_rank=recall.union_rank if recall else None,
+            deep_rank=deep.rank if deep else None,
             final=trace.security_id in final_ids,
         ))
     return views

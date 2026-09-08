@@ -51,19 +51,30 @@ class MissAuditService:
 
     @staticmethod
     def _evidence(view: TraceView, label: OutcomeLabelResult) -> dict:
-        """§30 示例字段：LP #31 / Pareto Front2 / Machine #167 / 主因。"""
+        """任务书 §13 证据结构：LP #31 / Recall #44 / Pareto Front2 /
+        Machine #167 / Deep rank，各阶段真实名次。"""
         evidence: dict = {
             "mfe_20": label.mfe_20,
             "mae_20": label.mae_20,
             "time_to_10": label.time_to_10,
         }
         if view.expert_ranks:
-            evidence["experts"] = sorted(view.expert_ranks)
-            best = min(view.expert_ranks.values())
-            evidence["union_rank"] = best
+            # P0-11：[{expert, rank}] 按 rank ASC（旧版只存专家名列表）
+            evidence["experts"] = [
+                {"expert": expert, "rank": rank}
+                for expert, rank in sorted(
+                    view.expert_ranks.items(), key=lambda item: (item[1], item[0])
+                )
+            ]
+        # P0-11：union_rank ≠ min(expert_rank)，用 Trace RECALL 行的
+        # 真实 RRF 名次；无则不伪造
+        if view.recall_rank is not None:
+            evidence["recall_rank"] = view.recall_rank
         if view.pareto_front is not None:
             evidence["pareto_front"] = view.pareto_front
             evidence["protected"] = view.pareto_protected
         if view.machine_rank is not None:
             evidence["machine_rank"] = view.machine_rank
+        if view.deep_rank is not None:
+            evidence["deep_rank"] = view.deep_rank
         return evidence
