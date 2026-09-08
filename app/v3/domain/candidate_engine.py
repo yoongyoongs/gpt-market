@@ -268,3 +268,71 @@ class EnrichmentResult(V3Contract):
     missing_input_count: int = Field(
         ge=0, description="Union 命中但无特征行的股票数（数据异常，不得静默）"
     )
+
+
+class ParetoCandidateInput(V3Contract):
+    """L4 Pareto 输入：5 个战略维度分数（设计 §16.1）。
+
+    维度缺失传 None，比较时以中性分 50 参与并记录
+    missing_dimensions（不因缺失惩罚，也不伪装成 0 分）。
+    """
+
+    security_id: UUID
+    code: str
+    rrf_norm: float = Field(ge=0, le=100)
+    scores: dict[str, float | None] = Field(
+        description="position/transition/accumulation/quality_catalyst/risk_reward",
+    )
+    missing_dimensions: tuple[str, ...] = ()
+
+    def dimension(self, name: str) -> float | None:
+        return self.scores.get(name)
+
+
+class ParetoEntry(V3Contract):
+    """Pareto 结果单股（front 编号 + 拥挤度 + 保护标记）。"""
+
+    security_id: UUID
+    code: str
+    rrf_norm: float
+    scores: dict[str, float | None]
+    front: int = Field(
+        default=0,
+        ge=0,
+        description="0 = 未参与分层（单专家保护并入，不经支配排序）",
+    )
+    crowding: float = Field(
+        default=0.0,
+        description="NSGA-II crowding distance；边界解用 CROWDING_BOUNDARY",
+    )
+    selected: bool = False
+    protected: bool = False
+    protected_reason: str | None = None
+
+
+class ParetoResult(V3Contract):
+    """L4 输出：入选池（含单专家保护）+ 全体分层信息。"""
+
+    evaluated_count: int = Field(ge=0)
+    selected_count: int = Field(ge=0)
+    protected_count: int = Field(ge=0)
+    front_sizes: tuple[int, ...] = ()
+    entries: tuple[ParetoEntry, ...] = ()
+
+    @property
+    def selected_ids(self) -> tuple[UUID, ...]:
+        return tuple(
+            entry.security_id for entry in self.entries
+            if entry.selected or entry.protected
+        )
+
+
+PARETO_DIMENSIONS = (
+    "position",
+    "transition",
+    "accumulation",
+    "quality_catalyst",
+    "risk_reward",
+)
+NEUTRAL_DIMENSION_SCORE = 50.0
+CROWDING_BOUNDARY = 1.0e9  # NSGA-II 边界解拥挤度（inf 不可序列化，用大数）
