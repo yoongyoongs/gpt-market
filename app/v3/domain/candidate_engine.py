@@ -336,3 +336,81 @@ PARETO_DIMENSIONS = (
 )
 NEUTRAL_DIMENSION_SCORE = 50.0
 CROWDING_BOUNDARY = 1.0e9  # NSGA-II 边界解拥挤度（inf 不可序列化，用大数）
+
+MAX_PENALTY = 30.0  # 设计 §20 总处罚封顶（Safety 硬风险不在此列）
+
+
+class RiskRewardAssessment(V3Contract):
+    """L4/L5 风险回报评估（设计 §17）。
+
+    invalidation 用最近有效 swing low（v1 以 60 日低点为代理），
+    禁止固定百分比止损；RR 极高（>4）反而降档，防支撑识别过近。
+    """
+
+    support: float | None = Field(default=None, description="支撑位（60日低点代理）")
+    resistance: float | None = Field(default=None, description="压力位（60日高点代理）")
+    invalidation: float | None = None
+    target1: float | None = None
+    downside: float | None = Field(default=None, ge=0)
+    upside: float | None = Field(default=None, ge=0)
+    rr: float | None = Field(default=None, ge=0)
+    score: float = Field(default=0.0, ge=0, le=100)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
+class PenaltyAssessment(V3Contract):
+    """Penalty Engine 结果（设计 §20）：total <= 0，封顶 -30。"""
+
+    total: float = Field(le=0, ge=-MAX_PENALTY)
+    items: tuple[tuple[str, float, str], ...] = Field(
+        default=(), description="[(规则名, 扣分, 说明)]",
+    )
+
+
+class SoftOpportunityResult(V3Contract):
+    """L5 SoftOpportunity 8 维合成（设计 §19.1）+ Penalty 后净分。"""
+
+    value: float = Field(ge=0, le=100)
+    net_value: float = Field(ge=0, le=100, description="value + penalty（封顶后）")
+    confidence: float = Field(ge=0, le=1)
+    reasons: tuple[str, ...] = ()
+    penalty: PenaltyAssessment
+    features_used: dict[str, float | None] = Field(default_factory=dict)
+
+
+class MachineRankEntry(V3Contract):
+    """L5 Machine Rank 输出（设计 §21：0.35 RRF + 0.50 SoftOpp + 0.15 Pareto）。"""
+
+    security_id: UUID
+    code: str
+    machine_score: float = Field(ge=0, le=100)
+    components: dict[str, float] = Field(default_factory=dict)
+    rank: int = Field(ge=1)
+    selected: bool = False
+
+
+class MachineRankResult(V3Contract):
+    evaluated_count: int = Field(ge=0)
+    top_n: int = Field(ge=0)
+    entries: tuple[MachineRankEntry, ...] = ()
+
+
+class DeepRankEntry(V3Contract):
+    """L6 Deep Rank 输出（设计 §22.3 权重，60m/市场/行业 missing 降权）。"""
+
+    security_id: UUID
+    code: str
+    deep_score: float = Field(ge=0, le=100)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    trend_conflict: bool = Field(
+        default=False, description="周K下降+日K上升 且无明确反转证据",
+    )
+    components: dict[str, float | None] = Field(default_factory=dict)
+    reasons: tuple[str, ...] = ()
+    rank: int = Field(ge=1)
+
+
+class DeepRankResult(V3Contract):
+    evaluated_count: int = Field(ge=0)
+    top_n: int = Field(ge=0)
+    entries: tuple[DeepRankEntry, ...] = ()

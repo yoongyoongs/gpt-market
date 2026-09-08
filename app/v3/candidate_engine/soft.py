@@ -113,3 +113,38 @@ def volume_5_20_score(ratio: float) -> float:
 def is_finite(value: float | None) -> bool:
     """missing（None）与非法值（NaN/inf）统一判定为不可用。"""
     return value is not None and math.isfinite(value)
+
+
+def weighted_combine(
+    parts: list[tuple[str, float, float | None]],
+    *,
+    extra_confidence: float = 1.0,
+) -> tuple[float, float, tuple[str, ...], dict[str, float | None]]:
+    """通用加权合成（设计 §11.3 missing 语义）：0~1 子分 × 权重。
+
+    parts = [(维度名, 权重, 子分或 None)]；None 记 missing：0 分、
+    权重不计入生效权重并按比例降 confidence。返回
+    (value 0~100, confidence, reasons, features_used)。
+    专家与 SoftOpportunity 等多维度合成的公共实现。
+    """
+    value = 0.0
+    effective = 0.0
+    reasons: list[str] = []
+    features_used: dict[str, float | None] = {}
+    for label, weight, subscore in parts:
+        if subscore is None:
+            features_used[label] = None
+            reasons.append(f"{label}:missing")
+            continue
+        value += weight * max(0.0, min(1.0, subscore))
+        effective += weight
+        features_used[label] = round(subscore, 6)
+        reasons.append(f"{label}:{subscore:.3f}*{weight:g}")
+    total = sum(weight for _, weight, _ in parts)
+    confidence = (effective / total if total > 0 else 0.0) * extra_confidence
+    return (
+        round(min(value, 100.0), 4),
+        round(max(0.0, min(confidence, 1.0)), 4),
+        tuple(reasons),
+        features_used,
+    )

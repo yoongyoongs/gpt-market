@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.v3.candidate_engine.soft import weighted_combine
 from app.v3.domain.candidate_engine import (
     ExpertFeatureView,
     ExpertHit,
@@ -69,30 +70,11 @@ class BaseExpert:
         *,
         extra_confidence: float = 1.0,
     ) -> ExpertScore:
-        """按设计权重合成分数。
-
-        parts = [(维度名, 权重, 0~1 子分或 None)]；None 为 missing：
-        计 0 分、权重不计入生效权重并按比例降低 confidence
-        （设计 §11.3：missing => confidence 降低，不得 score=0 伪装）。
-        """
-        value = 0.0
-        effective = 0.0
-        reasons: list[str] = []
-        features_used: dict[str, float | None] = {}
-        for label, weight, subscore in parts:
-            if subscore is None:
-                features_used[label] = None
-                reasons.append(f"{label}:missing")
-                continue
-            value += weight * max(0.0, min(1.0, subscore))
-            effective += weight
-            features_used[label] = round(subscore, 6)
-            reasons.append(f"{label}:{subscore:.3f}*{weight:g}")
-        total = sum(weight for _, weight, _ in parts)
-        confidence = (effective / total if total > 0 else 0.0) * extra_confidence
+        """按设计权重合成分数（missing => 0 分 + 降 confidence，§11.3）。"""
+        value, confidence, reasons, features_used = weighted_combine(
+            parts, extra_confidence=extra_confidence
+        )
         return ExpertScore(
-            value=round(min(value, 100.0), 4),
-            confidence=round(max(0.0, min(confidence, 1.0)), 4),
-            reasons=tuple(reasons),
-            features_used=features_used,
+            value=value, confidence=confidence,
+            reasons=reasons, features_used=features_used,
         )
