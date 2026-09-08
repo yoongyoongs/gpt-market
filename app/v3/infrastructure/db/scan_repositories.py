@@ -434,6 +434,15 @@ class SQLAlchemyScanRepository:
         )
         return list(result.scalars().all())
 
+    async def security_keys(self) -> dict[UUID, str]:
+        """security_id → code 全量映射（universe 成员与特征行 join 用）。"""
+        from app.v3.infrastructure.db.models import SecurityModel
+
+        result = await self._session.execute(
+            select(SecurityModel.security_id, SecurityModel.code)
+        )
+        return {security_id: code for security_id, code in result.all()}
+
 
 def _decimal(value: float | None) -> Decimal | None:
     return None if value is None else Decimal(str(value))
