@@ -431,6 +431,10 @@ TRACE_STAGES = (
     "FINAL",
 )
 
+# P0-09：业务阶段序（字符串字典序 DEEP<FINAL<MACHINE≠业务序），
+# TraceView 重建等一切「阶段先后」判断统一走这张表。
+STAGE_ORDER = {stage: index for index, stage in enumerate(TRACE_STAGES)}
+
 
 class CandidateStageRecord(V3Contract):
     """单股在单阶段的状态（candidate_snapshot 行语义）。"""

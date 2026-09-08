@@ -23,6 +23,7 @@ from app.v3.domain.candidate_engine import (
     MissAuditEntry,
     OutcomeLabelResult,
     ShadowSampleEntry,
+    STAGE_ORDER,
 )
 from app.v3.infrastructure.db.models import (
     BarSeriesRevisionModel,
@@ -302,9 +303,14 @@ class SQLAlchemyScanRepository:
         views: list[TraceView] = []
         for security_id, stages in staged.items():
             first = next(iter(stages.values()))
+            # P0-09：阶段行按业务序（TRACE_STAGES）比较，不按字符串字典序
+            # （DEEP<FINAL<MACHINE 字典序≠业务序）。
             alive_stages = [row for row in stages.values() if row.alive]
             dead_rows = [row for row in stages.values() if not row.alive]
-            dead = min(dead_rows, key=lambda row: row.stage) if dead_rows else None
+            dead = (
+                min(dead_rows, key=lambda row: STAGE_ORDER.get(row.stage, len(STAGE_ORDER)))
+                if dead_rows else None
+            )
             machine = stages.get("MACHINE")
             pareto_snapshot = stages.get("PARETO")
             final_row = stages.get("FINAL")
@@ -312,10 +318,14 @@ class SQLAlchemyScanRepository:
             views.append(TraceView(
                 code=first.code,
                 security_id=security_id,
-                last_alive_stage=alive_stages[-1].stage if alive_stages else None,
+                last_alive_stage=(
+                    max(alive_stages, key=lambda row: STAGE_ORDER.get(row.stage, -1)).stage
+                    if alive_stages else None
+                ),
                 drop_stage=dead.stage if dead else None,
                 drop_reason=dead.drop_reason if dead else None,
-                machine_rank=machine.rank if machine and machine.alive else None,
+                # P0-08 联动：Machine 淘汰行也带真实 rank，不限 alive
+                machine_rank=machine.rank if machine is not None else None,
                 machine_selected=bool(machine and machine.alive),
                 pareto_front=pareto.front if pareto else None,
                 pareto_selected=bool(pareto_snapshot and pareto_snapshot.alive),

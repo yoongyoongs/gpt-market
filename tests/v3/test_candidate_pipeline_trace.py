@@ -255,3 +255,15 @@ class TestTraceUnselectedKeepRank:
         assert record.drop_reason == "final_not_top30"
         assert record.rank == 31
         assert record.score == 70.0
+
+
+def test_stage_order_matches_trace_stages():
+    """P0-09：STAGE_ORDER 与 TRACE_STAGES 一致，供落库重建排序。"""
+    from app.v3.domain.candidate_engine import STAGE_ORDER
+
+    assert STAGE_ORDER == {
+        "UNIVERSE": 0, "SAFETY": 1, "RECALL": 2, "PARETO": 3,
+        "MACHINE": 4, "DEEP": 5, "FINAL": 6,
+    }
+    # 字典序陷阱示例：字符串序 DEEP < FINAL < MACHINE，业务序相反
+    assert sorted(STAGE_ORDER) != list(TRACE_STAGES)
