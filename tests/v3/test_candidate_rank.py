@@ -353,9 +353,48 @@ class TestDeepRank:
             daily_state="UP",
             multi_state="WEEKLY_DOWN_DAILY_BOUNCE",
             weekly_decline_deceleration=0.02,
+            rv_score=75.0,
         )
         result = DeepRankService().execute([item])
         assert result.entries[0].trend_conflict is False
+
+    def test_weak_decel_never_waives_conflict(self):
+        """任务书 P0-07 §9.5：decel 仅 0.0001 → 仍 conflict（噪声非减速）。"""
+        item = _deep_item(
+            weekly_state="DOWN",
+            daily_state="UP",
+            multi_state="WEEKLY_DOWN_DAILY_BOUNCE",
+            weekly_decline_deceleration=0.0001,
+            rv_score=75.0,
+        )
+        result = DeepRankService().execute([item])
+        entry = result.entries[0]
+        assert entry.trend_conflict is True
+        assert "WEEKLY_DOWN_DAILY_BOUNCE_UNCONFIRMED" in entry.reasons
+
+    def test_strong_evidence_waives_conflict(self):
+        """任务书 P0-07 §9.5：decel 强 + RV=75 + 日K UP → P0 解除。"""
+        item = _deep_item(
+            weekly_state="DOWN",
+            daily_state="UP",
+            multi_state="WEEKLY_DOWN_DAILY_BOUNCE",
+            weekly_decline_deceleration=0.03,
+            rv_score=75.0,
+        )
+        result = DeepRankService().execute([item])
+        assert result.entries[0].trend_conflict is False
+
+    def test_weak_rv_keeps_conflict(self):
+        """任务书 P0-07 §9.5：decel 强 + RV=40 → conflict。"""
+        item = _deep_item(
+            weekly_state="DOWN",
+            daily_state="UP",
+            multi_state="WEEKLY_DOWN_DAILY_BOUNCE",
+            weekly_decline_deceleration=0.03,
+            rv_score=40.0,
+        )
+        result = DeepRankService().execute([item])
+        assert result.entries[0].trend_conflict is True
 
     def test_slope_proxy_fallback(self):
         item = _deep_item(weekly_slope_8w=0.05)  # 饱和 → 100 分代理

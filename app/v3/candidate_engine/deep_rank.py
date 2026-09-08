@@ -14,7 +14,7 @@ from app.v3.candidate_engine.machine_rank import MachineRankResult
 from app.v3.candidate_engine.soft import weighted_combine
 from app.v3.domain.candidate_engine import DeepRankEntry, DeepRankResult
 
-__all__ = ["DeepRankService"]
+__all__ = ["DeepRankService", "evaluate_reversal_evidence"]
 
 WEIGHTS = {
     "machine": 45.0,
@@ -26,7 +26,34 @@ WEIGHTS = {
     "risk_reward_refined": 5.0,
 }
 
-_REVERSAL_FEATURES = ("weekly_decline_deceleration",)
+_REVERSAL_DECEL_MIN = 0.01  # 周级减速"有意义"阈值（0.0001 级噪声不算）
+_REVERSAL_RV_MIN = 70.0  # 反转启动专家（RV）足够强的门槛
+_CONFLICT_REASONS = (
+    "trend_conflict_no_reversal_evidence",
+    "WEEKLY_DOWN_DAILY_BOUNCE_UNCONFIRMED",  # 任务书 P0-07 §9.4
+)
+
+
+def evaluate_reversal_evidence(item: dict) -> bool:
+    """周K下降中的反弹是否具备明确反转证据（任务书 P0-07 §9.3 第一阶段）。
+
+    「跌速变慢」只是风险减轻，不是明确反转——decel>0 不再单独解除冲突。
+    60m 尚未接通（P1-01）前，解除须同时满足：
+
+    - 条件组 A：weekly_decline_deceleration > _REVERSAL_DECEL_MIN（1 个证据）
+    - 条件组 B：RV 专家分 >= _REVERSAL_RV_MIN
+    - 条件组 C：daily_state == UP（日K结构确认）
+
+    条件组 D（60m 确认）接入后追加为第四条（missing 不当作通过）。
+    """
+    decel = item.get("weekly_decline_deceleration")
+    rv = item.get("rv_score")
+    daily = item.get("daily_state")
+    return bool(
+        decel is not None and decel > _REVERSAL_DECEL_MIN
+        and rv is not None and rv >= _REVERSAL_RV_MIN
+        and daily == "UP"
+    )
 
 _STATE_SCORE = {"UP": 90.0, "FLAT": 60.0, "DOWN": 30.0}
 
@@ -132,13 +159,13 @@ class DeepRankService:
     # ---------- helpers ----------
 
     def _trend_conflict(self, item: dict, reasons: list[str]) -> bool:
-        """§22.2：周K下降 + 日K上升，且无反转证据 → 冲突降分。"""
+        """§22.2：周K下降 + 日K上升，且无明确反转证据 → 冲突降分。
+
+        P0-07：反转证据由 evaluate_reversal_evidence 综合判定
+        （decel 有意义 + RV 足够强 + 日K UP），不再以 decel>0 单独解除。
+        """
         if item.get("multi_state") == "WEEKLY_DOWN_DAILY_BOUNCE":
-            has_reversal = any(
-                item.get(key) is not None and item.get(key) > 0
-                for key in _REVERSAL_FEATURES
-            )
-            if not has_reversal:
-                reasons.append("trend_conflict_no_reversal_evidence")
+            if not evaluate_reversal_evidence(item):
+                reasons.extend(_CONFLICT_REASONS)
                 return True
         return False

@@ -139,7 +139,7 @@ class CandidatePipeline:
 
         # ---- L6 Deep Rank ----
         started = time.perf_counter()
-        deep = self._run_deep(machine, stocks_by_id, rr_scores)
+        deep = self._run_deep(machine, stocks_by_id, rr_scores, expert_scores_by_id)
         builder.record_deep(deep)
         stages.append(self._stage("DEEP", machine.top_n, deep.top_n, started))
 
@@ -204,6 +204,7 @@ class CandidatePipeline:
 
     def _run_deep(
         self, machine: MachineRankResult, stocks_by_id: dict, rr_scores: dict,
+        expert_scores_by_id: dict,
     ) -> "DeepRankResult":
         from app.v3.domain.candidate_engine import DeepRankResult
 
@@ -224,6 +225,8 @@ class CandidatePipeline:
                 "weekly_slope_8w": features.get("weekly_slope_8w"),
                 "weekly_decline_deceleration": features.get("weekly_decline_deceleration"),
                 "rr_score": rr_scores.get(entry.security_id),
+                # P0-07：反转证据条件组 B 需要 RV 专家分
+                "rv_score": expert_scores_by_id.get(entry.security_id, {}).get("RV"),
             })
         return self._deep.execute(pool)
 
