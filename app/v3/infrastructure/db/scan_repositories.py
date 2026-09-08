@@ -30,6 +30,7 @@ from app.v3.infrastructure.db.models import (
     CandidateSnapshotModel,
     ExpertRecallRowModel,
     MarketBarModel,
+    MarketRegimeSnapshotModel,
     MissAuditRowModel,
     OutcomeLabelModel,
     ParetoResultRowModel,
@@ -461,6 +462,28 @@ class SQLAlchemyScanRepository:
             select(ShadowPoolRowModel).where(ShadowPoolRowModel.scan_run_id == scan_run_id)
         )
         return list(result.scalars().all())
+
+    async def regime_snapshot(self, feature_run_id: UUID) -> dict | None:
+        """P1-02：feature_run_id PIT 绑定的 MarketRegime 快照（§20.2）。
+
+        只读落库事实，不重算市场指标；无快照返回 None（missing 降权）。
+        """
+        result = await self._session.execute(
+            select(MarketRegimeSnapshotModel).where(
+                MarketRegimeSnapshotModel.feature_run_id == feature_run_id
+            )
+        )
+        regime = result.scalar_one_or_none()
+        if regime is None:
+            return None
+        return {
+            "regime_snapshot_id": str(regime.regime_snapshot_id),
+            "index_states": dict(regime.index_states or {}),
+            "breadth": dict(regime.breadth or {}),
+            "risk_appetite_facts": dict(regime.risk_appetite_facts or {}),
+            "coverage": float(regime.coverage),
+            "stale": regime.stale,
+        }
 
     async def security_keys(self) -> dict[UUID, str]:
         """security_id → code 全量映射（universe 成员与特征行 join 用）。"""

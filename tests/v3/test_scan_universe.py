@@ -86,12 +86,16 @@ class _FakeUniverses:
 
 
 class _FakeScans:
-    def __init__(self, key_map: dict) -> None:
+    def __init__(self, key_map: dict, regime: dict | None = None) -> None:
         self._key_map = key_map
+        self._regime = regime
         self.saved: list = []
 
     async def security_keys(self) -> dict:
         return self._key_map
+
+    async def regime_snapshot(self, feature_run_id) -> dict | None:
+        return self._regime
 
     async def save_scan(self, result, *, scan_time=None):
         self.saved.append(result)
@@ -273,3 +277,44 @@ class TestEvidenceDataChain:
         await UniverseScanOrchestrator().execute(uow, as_of=NOW)
         result = uow.scans.saved[0]
         assert self._expert_hits(result, "FQ") == 0
+
+
+_REGIME = {
+    "regime_snapshot_id": "snap-1",
+    "index_states": {"status": "UP"},
+    "breadth": {"advance_decline_ratio": 1.0, "mean_return_3d": 0.0, "observed": 100},
+    "risk_appetite_facts": {"volume_expansion_count": 10, "breakout_20d_count": 5},
+    "coverage": 0.8,
+    "stale": False,
+}
+
+
+class TestMarketRegimePit:
+    """P1-02：regime 快照按 feature_run_id PIT 绑定；stale 不当事实。"""
+
+    async def test_valid_regime_score_in_summary(self):
+        uow = _uow(("000001",))
+        uow.scans._regime = dict(_REGIME)
+        summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        assert summary["status"] == "ok"
+        assert summary["market_regime_score"] == 68.0
+        assert summary["market_regime_source"] == "snap-1"
+        entry = uow.scans.saved[0].deep.entries[0]
+        detail = entry.components_detail["market_regime"]
+        assert detail["raw"] == 68.0
+        assert detail["source"] == "snap-1"
+
+    async def test_stale_regime_not_a_fact(self):
+        uow = _uow(("000001",))
+        uow.scans._regime = {**_REGIME, "stale": True}
+        summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        assert summary["market_regime_score"] is None
+        assert summary["market_regime_source"] is None
+        entry = uow.scans.saved[0].deep.entries[0]
+        detail = entry.components_detail["market_regime"]
+        assert detail["missing"] is True
+
+    async def test_no_regime_snapshot_missing(self):
+        uow = _uow(("000001",))
+        summary = await UniverseScanOrchestrator().execute(uow, as_of=NOW)
+        assert summary["market_regime_score"] is None

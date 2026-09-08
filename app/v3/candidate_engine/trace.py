@@ -11,6 +11,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.v3.domain.candidate_engine import (
+    AI_REVIEW_STATUS,
     CandidateStageRecord,
     CandidateTrace,
     DeepRankResult,
@@ -123,10 +124,16 @@ class ScanTraceBuilder:
         # entries 也已带 alive=False 行，这里无需补记。
 
     def record_final(self, entries: tuple) -> None:
-        """RAW_TOP30：Deep 前 30（AI Review 接入后在此叠加 ai_rank）。"""
+        """RAW_TOP30：Deep 前 30（AI Review 接入后在此叠加 ai_rank）。
+
+        P1-05：AI Review 未接真实模型——Final 明确标注 RAW_TOP30 +
+        AI_REVIEW_STATUS=NOT_CONNECTED，不宣称已 AI 复核。"""
         final_ids = {entry.security_id for entry in entries}
         for entry in entries:
-            self._alive(entry.security_id, "FINAL", score=entry.deep_score, rank=entry.rank)
+            self._alive(
+                entry.security_id, "FINAL", score=entry.deep_score, rank=entry.rank,
+                detail={"top_type": "RAW_TOP30", "ai_review_status": AI_REVIEW_STATUS},
+            )
         # Deep Top60 但未进 Final 的补 dead 行（P0-08：保留 deep rank/score）
         for security_id, records in self._records.items():
             deep_record = records.get("DEEP")

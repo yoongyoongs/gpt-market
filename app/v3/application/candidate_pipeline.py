@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.v3.candidate_engine.deep_rank import DeepRankService
 from app.v3.candidate_engine.enrichment import FeatureEnrichmentService
@@ -25,7 +26,9 @@ from app.v3.candidate_engine.trace import ScanTraceBuilder
 from app.v3.candidate_engine.union import RecallUnionService
 from app.v3.candidate_engine.config import SafetyConfig
 from app.v3.domain.candidate_engine import (
+    AI_REVIEW_STATUS,
     CandidatePipelineResult,
+    DeepContext,
     ExpertHit,
     ExpertInput,
     MachineRankResult,
@@ -39,9 +42,33 @@ from app.v3.domain.candidate_engine import (
     TRACE_STAGES,
 )
 
-__all__ = ["CandidatePipeline", "FINAL_TOP_N"]
+__all__ = ["CandidatePipeline", "FINAL_TOP_N", "AI_REVIEW_STATUS", "MachinePhaseState"]
 
 FINAL_TOP_N = 30  # RAW_TOP30；行业分散化（§25）待行业数据接入
+
+
+@dataclass
+class MachinePhaseState:
+    """P1-01 Phase A 输出：Machine Top120 为止的全部中间状态。
+
+    Phase B（complete_deep）消费；禁止复制执行 Safety~Machine。
+    """
+
+    scan_id: UUID
+    trade_date: datetime
+    strategy_version: str
+    parameter_version: str
+    builder: ScanTraceBuilder
+    stages: list[StageFunnelEntry] = field(default_factory=list)
+    candidates: tuple[SafetyCandidateInput, ...] = ()
+    stocks_by_id: dict = field(default_factory=dict)
+    safety: SafetyFilterResult | None = None
+    union: object | None = None
+    enrichment: object | None = None
+    pareto: ParetoResult | None = None
+    machine: MachineRankResult | None = None
+    rr_scores: dict = field(default_factory=dict)
+    expert_scores_by_id: dict = field(default_factory=dict)
 
 
 class CandidatePipeline:
@@ -74,7 +101,32 @@ class CandidatePipeline:
         strategy_version: str = "v3",
         parameter_version: str = "v1",
         scan_id=None,
+        deep_context: DeepContext | None = None,
     ) -> CandidatePipelineResult:
+        """同步全链入口 = Phase A + Phase B（不复制执行前段）。
+
+        deep_context=None（离线/测试路径）时 60m/Regime 恒 missing 降权。
+        """
+        state = self.run_to_machine(
+            candidates, stocks_by_id,
+            trade_date=trade_date,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+            scan_id=scan_id,
+        )
+        return self.complete_deep(state, deep_context=deep_context)
+
+    def run_to_machine(
+        self,
+        candidates: tuple[SafetyCandidateInput, ...],
+        stocks_by_id: dict,
+        *,
+        trade_date: datetime,
+        strategy_version: str = "v3",
+        parameter_version: str = "v1",
+        scan_id=None,
+    ) -> MachinePhaseState:
+        """P1-01 Phase A：Safety→Recall→Pareto→Machine Top120。"""
         scan_id = scan_id or uuid4()
         builder = ScanTraceBuilder(scan_id, trade_date)
         stages: list[StageFunnelEntry] = []
@@ -137,38 +189,68 @@ class CandidatePipeline:
             "MACHINE", pareto.evaluated_count, machine.top_n, started,
         ))
 
-        # ---- L6 Deep Rank ----
-        started = time.perf_counter()
-        deep = self._run_deep(machine, stocks_by_id, rr_scores, expert_scores_by_id)
-        builder.record_deep(deep)
-        stages.append(self._stage("DEEP", machine.top_n, deep.top_n, started))
-
-        # ---- Final (RAW_TOP30) ----
-        started = time.perf_counter()
-        final_entries = tuple(deep.entries[: self._final_top_n])
-        builder.record_final(final_entries)
-        stages.append(self._stage("FINAL", deep.top_n, len(final_entries), started))
-
-        trace = builder.build()
-        funnel = ScanFunnel(
+        return MachinePhaseState(
             scan_id=scan_id,
             trade_date=trade_date,
             strategy_version=strategy_version,
             parameter_version=parameter_version,
-            stages=tuple(stages),
-        )
-        return CandidatePipelineResult(
-            scan_id=scan_id,
-            trade_date=trade_date,
-            strategy_version=strategy_version,
-            parameter_version=parameter_version,
-            funnel=funnel,
-            trace=trace,
+            builder=builder,
+            stages=stages,
+            candidates=candidates,
+            stocks_by_id=stocks_by_id,
             safety=safety,
             union=union,
             enrichment=enrichment,
             pareto=pareto,
             machine=machine,
+            rr_scores=rr_scores,
+            expert_scores_by_id=expert_scores_by_id,
+        )
+
+    def complete_deep(
+        self,
+        state: MachinePhaseState,
+        *,
+        deep_context: DeepContext | None = None,
+    ) -> CandidatePipelineResult:
+        """P1-01 Phase B：Deep→Final（60m/Regime/Industry 上下文注入）。"""
+        deep_context = deep_context or DeepContext()
+
+        # ---- L6 Deep Rank ----
+        started = time.perf_counter()
+        deep = self._run_deep(
+            state.machine, state.stocks_by_id, state.rr_scores,
+            state.expert_scores_by_id, deep_context,
+        )
+        state.builder.record_deep(deep)
+        state.stages.append(self._stage("DEEP", state.machine.top_n, deep.top_n, started))
+
+        # ---- Final (RAW_TOP30) ----
+        started = time.perf_counter()
+        final_entries = tuple(deep.entries[: self._final_top_n])
+        state.builder.record_final(final_entries)
+        state.stages.append(self._stage("FINAL", deep.top_n, len(final_entries), started))
+
+        trace = state.builder.build()
+        funnel = ScanFunnel(
+            scan_id=state.scan_id,
+            trade_date=state.trade_date,
+            strategy_version=state.strategy_version,
+            parameter_version=state.parameter_version,
+            stages=tuple(state.stages),
+        )
+        return CandidatePipelineResult(
+            scan_id=state.scan_id,
+            trade_date=state.trade_date,
+            strategy_version=state.strategy_version,
+            parameter_version=state.parameter_version,
+            funnel=funnel,
+            trace=trace,
+            safety=state.safety,
+            union=state.union,
+            enrichment=state.enrichment,
+            pareto=state.pareto,
+            machine=state.machine,
             deep=deep,
             final_entries=final_entries,
         )
@@ -204,16 +286,19 @@ class CandidatePipeline:
 
     def _run_deep(
         self, machine: MachineRankResult, stocks_by_id: dict, rr_scores: dict,
-        expert_scores_by_id: dict,
+        expert_scores_by_id: dict, deep_context: DeepContext | None = None,
     ) -> "DeepRankResult":
         from app.v3.domain.candidate_engine import DeepRankResult
 
+        deep_context = deep_context or DeepContext()
         pool: list[dict] = []
         for entry in machine.entries:
             if not entry.selected:
                 continue
             stock = stocks_by_id.get(entry.security_id)
             features = stock.feature.features if stock is not None else {}
+            # P1-01：60m 抓取事实（仅 Machine selected 有）；缺失=未接入
+            m60 = deep_context.minute_60_by_id.get(entry.security_id)
             pool.append({
                 "security_id": entry.security_id,
                 "code": entry.code,
@@ -227,6 +312,14 @@ class CandidatePipeline:
                 "rr_score": rr_scores.get(entry.security_id),
                 # P0-07：反转证据条件组 B 需要 RV 专家分
                 "rv_score": expert_scores_by_id.get(entry.security_id, {}).get("RV"),
+                # P1-01：60m 事实注入（模型转 dict；None=未接入路径）
+                "minute_60": m60.model_dump() if m60 is not None else None,
+                "minute_60_state": m60.state if m60 is not None else None,
+                # P1-02：feature_run_id PIT 的 regime 分（全池共享）
+                "market_regime_score": deep_context.market_regime_score,
+                "market_regime_source": deep_context.market_regime_source,
+                # P1-03：无可靠行业源 → missing 带原因
+                "industry_missing_reason": deep_context.industry_missing_reason,
             })
         return self._deep.execute(pool)
 

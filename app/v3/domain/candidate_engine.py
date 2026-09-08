@@ -395,6 +395,38 @@ class MachineRankResult(V3Contract):
     entries: tuple[MachineRankEntry, ...] = ()
 
 
+class Minute60Fact(V3Contract):
+    """P1-01：Machine Top120 抓取的 60m 执行结构（抓取时点事实）。
+
+    stale=True 或 quality=UNTRUSTED → 不得当作事实（任务书 §19.6）。
+    """
+
+    state: str = Field(description="UP/SIDEWAYS/DOWN/UNKNOWN")
+    support: float | None = None
+    resistance: float | None = None
+    bar_count: int = Field(default=0, ge=0)
+    stale: bool = False
+    quality: str | None = None
+    known_at: datetime | None = None
+
+
+class DeepContext(V3Contract):
+    """P1-01/02/03：Machine 之后、Deep 之前注入的异步数据上下文。
+
+    minute_60_by_id 只对 Machine selected 的 security_id 提供事实；
+    market_regime_score 按 feature_run_id PIT 绑定（全池共享）；
+    行业上下文本轮无可靠源 → industry_missing_reason 恒
+    NO_RELIABLE_INDUSTRY_CONTEXT。
+    """
+
+    minute_60_by_id: dict[UUID, Minute60Fact] = Field(default_factory=dict)
+    market_regime_score: float | None = Field(default=None, ge=0, le=100)
+    market_regime_source: str | None = None
+    industry_missing_reason: str | None = Field(
+        default="NO_RELIABLE_INDUSTRY_CONTEXT",
+    )
+
+
 class DeepRankEntry(V3Contract):
     """L6 Deep Rank 输出（设计 §22.3 权重，60m/市场/行业 missing 降权）。"""
 
@@ -406,6 +438,9 @@ class DeepRankEntry(V3Contract):
         default=False, description="周K下降+日K上升 且无明确反转证据",
     )
     components: dict[str, float | None] = Field(default_factory=dict)
+    # P1-04：每组件 {raw, normalized, weight, missing, source}，
+    # Why Not 展开可重算 DeepScore 而非只见最终分
+    components_detail: dict[str, dict] = Field(default_factory=dict)
     reasons: tuple[str, ...] = ()
     rank: int = Field(ge=1)
 
@@ -509,6 +544,8 @@ class CandidatePipelineResult(V3Contract):
 # ---------------------------------------------------------------------
 
 GOOD_LABELS = ("A", "B")  # GOOD_OPPORTUNITY = A or B（§26.2）
+# P1-05：AI Review 未接真实模型——Final 恒 RAW_TOP30，不得宣称已复核
+AI_REVIEW_STATUS = "NOT_CONNECTED"
 SHADOW_GROUPS = ("near_miss", "single_expert", "random", "other")  # §31.2
 
 
