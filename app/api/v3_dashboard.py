@@ -127,7 +127,7 @@ a{{color:var(--primary);text-decoration:none}}.dashboard{{max-width:1400px;margi
 
 def initializing_page(message: str) -> HTMLResponse:
     body = (
-        '<section class="card empty"><span class="badge warn">INITIALIZING</span>'
+        '<section class="card empty"><span class="badge warn">准备中</span>'
         '<h1 style="margin-top:12px">V3 行情看板正在准备数据</h1>'
         f'<p>{escape(message)}</p><p>页面将在 10 秒后自动重试。</p></section>'
     )
@@ -138,8 +138,21 @@ def initializing_page(message: str) -> HTMLResponse:
     )
 
 
+_STATUS_LABELS = {
+    "SUCCEEDED": "成功",
+    "COMPLETED": "成功",
+    "FAILED": "失败",
+    "CRITICAL": "严重失败",
+    "SKIPPED": "跳过",
+    "PARTIAL": "部分完成",
+    "WARNING": "告警",
+    "OPEN": "开启中",
+}
+
+
 def _status_badge(status: str) -> str:
-    """Job/事件状态 → 徽章：绿=SUCCEEDED/OPEN 正常、黄=SKIPPED/PARTIAL、红=FAILED。"""
+    """Job/事件状态 → 徽章：绿=成功/开启中、黄=跳过/部分完成/告警、红=失败。
+    徽章显示中文，title 保留原始状态值便于与 API 数据对照。"""
     value = str(status or "—").upper()
     if value in ("SUCCEEDED", "COMPLETED"):
         cls = ""
@@ -151,7 +164,8 @@ def _status_badge(status: str) -> str:
         cls = " info"
     else:
         cls = " mute"
-    return f'<span class="badge{cls}">{escape(value or "—")}</span>'
+    label = _STATUS_LABELS.get(value, value) or "—"
+    return f'<span class="badge{cls}" title="{escape(value)}">{escape(label)}</span>'
 
 
 def _live_status_section(status: dict[str, Any] | None) -> str:
@@ -196,9 +210,9 @@ def _pipeline_section(pipeline: dict[str, Any] | None) -> str:
     )
     return (
         '<section class="card section"><div class="section-head"><div><h2>EOD 流水线（Pipeline）</h2>'
-        f'<p class="subtitle">各 Job 最近一次运行状态 · 整体 {_status_badge(overall)}</p></div></div>'
-        '<div class="table-wrap"><table><thead><tr><th>Job</th><th>状态</th><th class="num">Attempt</th>'
-        '<th>交易日</th><th>错误摘要</th><th>known_at</th></tr></thead>'
+        f'<p class="subtitle">各任务最近一次运行状态 · 整体 {_status_badge(overall)}</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th class="num">尝试</th>'
+        '<th>交易日</th><th>错误摘要</th><th>事实时间</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
 
@@ -217,12 +231,12 @@ def _attention_section(events: list[Any]) -> str:
             f"<td>{escape(str(getattr(event, 'known_at', '—')))}</td>"
             "</tr>"
         )
-    body = "".join(rows) if rows else '<tr><td colspan="6">当前无 OPEN Attention 事件</td></tr>'
+    body = "".join(rows) if rows else '<tr><td colspan="6">当前无开启中的 Attention 事件</td></tr>'
     return (
-        '<section class="card section"><div class="section-head"><div><h2>Attention 事件（OPEN）</h2>'
+        '<section class="card section"><div class="section-head"><div><h2>Attention 事件（开启中）</h2>'
         '<p class="subtitle">只读展示客观触发事实；处理状态以 API 为准。</p></div></div>'
         '<div class="table-wrap"><table><thead><tr><th>类型</th><th>级别</th><th>市场</th><th>代码</th>'
-        '<th>dedupe_key</th><th>known_at</th></tr></thead>'
+        '<th>去重键</th><th>事实时间</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
 
@@ -291,7 +305,7 @@ def _scan_top_section(rows: list[Any], stage: str) -> str:
     return (
         f'<section class="card section"><div class="section-head"><div><h2>扫描 {escape(stage)} 榜单</h2>'
         '<p class="subtitle">机器排序口径分（非统一评分，不构成投资建议）。</p></div></div>'
-        '<div class="table-wrap"><table><thead><tr><th class="num">Rank</th><th>代码</th>'
+        '<div class="table-wrap"><table><thead><tr><th class="num">名次</th><th>代码</th>'
         '<th class="num">分数</th><th>轨迹</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
@@ -366,7 +380,7 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
             f'<td class="num">{_pct(item.get("atr_pct"), fraction=True)}</td>'
             f'<td class="num" title="{_text(item.get("amount"))}">{_amount(item.get("amount"))}</td>'
             f'<td class="num">{_pct(item.get("coverage"), fraction=True)}</td>'
-            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"STALE" if item.get("stale") else "FRESH"}</span></td>'
+            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"过期" if item.get("stale") else "新鲜"}</span></td>'
             f'<td class="missing" title="{_text(", ".join(missing))}">{_text(", ".join(missing))}</td>'
             "</tr>"
         )
@@ -375,9 +389,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
         stale_reason = getattr(regime, "stale_reason", None) or {}
         cause = stale_reason.get("cause")
         stale_badge = (
-            '<span class="badge bad">REGIME STALE</span>'
+            '<span class="badge bad">市场状态已过期</span>'
             if regime.stale
-            else '<span class="badge">REGIME FRESH</span>'
+            else '<span class="badge">市场状态新鲜</span>'
         )
         cause_note = (
             f' · {escape(str(stale_reason.get("stale_count")))}'
@@ -396,9 +410,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
             + "</div></section>"
         )
     body = f"""
-<section class="card hero"><div><span class="badge">V3 READ-ONLY</span><h1 style="margin-top:8px">V3 全市场行情特征看板</h1>
+<section class="card hero"><div><span class="badge">V3 只读</span><h1 style="margin-top:8px">V3 全市场行情特征看板</h1>
 <p class="subtitle">展示不可变 Feature Run 的事实特征；当前排序不是统一评分，也不构成投资建议。</p></div>
-<div class="meta">数据时点：{_text(page.as_of.isoformat())}<br>Feature Version：{_text(page.feature_version)}<br>Run ID：{_text(page.feature_run_id)}</div></section>
+<div class="meta">数据时点：{_text(page.as_of.isoformat())}<br>特征版本：{_text(page.feature_version)}<br>运行 ID：{_text(page.feature_run_id)}</div></section>
 <div class="stats"><section class="card stat"><span>本轮证券总数</span><strong>{expected:,}</strong></section>
 <section class="card stat"><span>成功</span><strong>{successful:,}</strong></section><section class="card stat"><span>失败</span><strong>{failed:,}</strong></section>
 <section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页陈旧</span><strong>{stale_count}</strong></section></div>

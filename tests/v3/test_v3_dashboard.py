@@ -138,7 +138,7 @@ def test_dashboard_returns_initializing_without_published_feature_run(monkeypatc
         response = client.get("/v3/dashboard")
 
     assert response.status_code == 503
-    assert "INITIALIZING" in response.text
+    assert "准备中" in response.text
     assert "10 秒后自动重试" in response.text
 
 
@@ -171,8 +171,10 @@ def test_dashboard_renders_v24_sections(monkeypatch):
     html = response.text
     assert "盘中状态（Live Status）" in html
     assert "EOD 流水线（Pipeline）" in html
-    assert "Attention 事件（OPEN）" in html
-    assert "features" in html and "SUCCEEDED" in html
+    assert "Attention 事件（开启中）" in html
+    # 状态徽章显示中文，title 保留原始状态值（SUCCEEDED）便于与 API 对照
+    assert "成功" in html
+    assert 'title="SUCCEEDED"' in html
     # regime stale 徽章（fake regime 未配置 → None → 不出 regime 区块）
     assert "REGIME" in html or "<section" in html
 
