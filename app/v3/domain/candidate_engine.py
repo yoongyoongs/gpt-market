@@ -536,14 +536,27 @@ class OutcomeLabelResult(V3Contract):
 
 
 class MetricsEntry(V3Contract):
-    """单条指标（Recall/Precision/NDCG）。"""
+    """单条指标（Recall/Precision/NDCG）。
+
+    P0-12：value=None + status=PENDING/NOT_APPLICABLE 显式区分
+    「未成熟」与「池不足 K」，不返回伪装成真实差的 0。
+    """
 
     metric: str
     k: int
-    value: float = Field(ge=0, le=1)
+    value: float | None = Field(default=None, ge=0, le=1)
     numerator: int = Field(ge=0, description="命中 GOOD 数")
     denominator: int = Field(ge=0, description="分母（全部 GOOD 或 K）")
     pool: str | None = Field(default=None, description="Recall 池名（Precision/NDCG 为 None）")
+    ranking_source: str | None = Field(
+        default=None, description="Precision/NDCG 的排名来源（machine/deep/final）",
+    )
+    status: str = Field(
+        default="OK", description="OK / PENDING / NOT_APPLICABLE",
+    )
+    reason: str | None = Field(
+        default=None, description="PENDING=OUTCOME_WINDOW_NOT_MATURE 等",
+    )
 
 
 class MissAuditEntry(V3Contract):

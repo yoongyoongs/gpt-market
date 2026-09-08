@@ -184,46 +184,58 @@ async def stock_scan_trace(
 
 @router.get("/backtest/metrics")
 async def backtest_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
-    """Recall@K / Precision@K / NDCG@K（§27-§29；观察窗成熟后有效）。"""
+    """Recall@K / Precision@K / NDCG@K（§27-§29；任务书 §14 Pool 语义）。"""
     async with _uow() as uow:
         run = await _resolve_run(scan_id, uow)
 
-        async def _pool(stage: str) -> list[tuple[str, int]]:
+        async def _pool(stage: str, *, alive_only: bool = True) -> list[tuple[str, int]]:
             rows = await uow.scans.snapshots(
-                run.scan_run_id, stage=stage, alive_only=True, limit=1_000_000,
+                run.scan_run_id, stage=stage, alive_only=alive_only, limit=1_000_000,
             )
             return [(row.code, row.rank) for row in rows if row.rank is not None]
 
-        machine = await _pool("MACHINE")
-        final = await _pool("FINAL")
+        # P0-12：Machine 全量 ranking（不限 alive），Top300/Top120 才真正可分
+        machine_ranking = await _pool("MACHINE", alive_only=False)
+        deep_ranking = await _pool("DEEP")
+        final_ranking = await _pool("FINAL")
+        eligible_rows = await uow.scans.snapshots(
+            run.scan_run_id, stage="SAFETY", alive_only=True, limit=1_000_000,
+        )
         pools = {
             "recall_pool": await _pool("RECALL"),
             "pareto_pool": await _pool("PARETO"),
-            "top300": [(code, rank) for code, rank in machine if rank <= 300],
-            "top120": [(code, rank) for code, rank in machine if rank <= 120],
-            "top60": await _pool("DEEP"),
-            "top30": final,
-            "final": final,
         }
         label_rows = await uow.scans.outcome_labels(run.scan_run_id)
         labels = [
             OutcomeLabelResult(code=row.code, label=row.label) for row in label_rows
         ]
         result = BacktestMetricsService().compute(
-            labels, pools, scan_id=run.scan_run_id,
+            labels, pools,
+            rankings={
+                "machine": machine_ranking,
+                "deep": deep_ranking,
+                "final": final_ranking,
+            },
+            scan_id=run.scan_run_id,
+            eligible_codes={row.code for row in eligible_rows},
         )
+        metrics_status = "PENDING" if not label_rows else "OK"
         return {
             "scan_id": str(run.scan_run_id),
             "good_count": result.good_count,
             "labeled_count": result.labeled_count,
+            "status": metrics_status,
             "metrics": [
                 {
                     "metric": entry.metric,
                     "pool": entry.pool,
+                    "ranking_source": entry.ranking_source,
                     "k": entry.k,
                     "value": entry.value,
                     "numerator": entry.numerator,
                     "denominator": entry.denominator,
+                    "status": entry.status,
+                    "reason": entry.reason,
                 }
                 for entry in result.entries
             ],

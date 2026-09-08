@@ -149,16 +149,22 @@ def _labels() -> list[OutcomeLabelResult]:
 
 
 class TestBacktestMetrics:
+    """任务书 P0-12/P0-13：Pool 语义 + Recall300≠120 + Precision@60[DEEP]
+    + NDCG 漏选惩罚 + PENDING。"""
+
     def setup_method(self):
         self.svc = BacktestMetricsService()
         self.labels = _labels()
+
+    def _rankings(self, machine=None, deep=None, final=None):
+        return {"machine": machine or [], "deep": deep or [], "final": final or []}
 
     def test_recall_pools_denominator_all_good(self):
         pools = {
             "recall_pool": [("600001", 1), ("600004", 2), ("600009", 3)],
             "pareto_pool": [("600001", 1), ("600002", 2), ("600003", 3), ("600005", 4)],
         }
-        result = self.svc.compute(self.labels, pools)
+        result = self.svc.compute(self.labels, pools, rankings=self._rankings())
         entries = {e.pool: e for e in result.entries if e.pool}
         assert result.good_count == 3  # A+B+A
         assert result.labeled_count == 4  # 三个评级 + 一个 None
@@ -168,42 +174,127 @@ class TestBacktestMetrics:
         assert entries["pareto_pool"].value == 1.0
         assert entries["pareto_pool"].k == 4
 
-    def test_precision_head_of_final_ranking(self):
-        ranking = [(f"6000{index:02d}", index) for index in range(1, 61)]
-        # 600001(A), 600002(B), 600005(A) 是 GOOD，其余不是
-        pools = {"final": ranking}
-        result = self.svc.compute(self.labels, pools)
-        entries = {(e.metric, e.k): e for e in result.entries}
-        assert entries[("precision", 10)].numerator == 3
-        assert entries[("precision", 10)].value == 0.3
-        assert entries[("precision", 60)].numerator == 3
+    def test_recall300_differs_from_120(self):
+        """任务书 P0-13：A 类在 Machine rank=250 → Recall@300 命中、@120 不命中。"""
+        # Machine 全量 ranking 350 只；600005(A) 排 250
+        machine = [(f"9{i:04d}", i) for i in range(1, 250)]
+        machine += [("600005", 250)]
+        machine += [(f"9{i:04d}", i) for i in range(250, 350)]
+        # 显式池只给 recall_pool，TopK 池由 ranking 派生
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(machine=machine),
+        )
+        entries = {e.pool: e for e in result.entries if e.pool}
+        assert entries["top300_machine"].numerator == 1  # rank250 ∈ Top300
+        assert abs(entries["top300_machine"].value - 1 / 3) < 1e-9
+        assert entries["top120_machine"].numerator == 0  # rank250 ∉ Top120
+        assert entries["top120_machine"].value == 0.0
+        # 派生池 k 取实际容量
+        assert entries["top300_machine"].k == 300
+        assert entries["top120_machine"].k == 120
 
-    def test_ndcg_manual(self):
-        # final 顺序 [B, A]：DCG = 3/1 + 7/log2(3)；IDCG = 7/1 + 3/log2(3)
-        pools = {"final": [("600002", 1), ("600001", 2)]}
-        result = self.svc.compute(self.labels, pools)
-        ndcg10 = [e for e in result.entries if e.metric == "ndcg" and e.k == 10][0]
-        assert abs(ndcg10.value - 1.0) > 1e-6  # B 在前不是理想序
-        # 理想序 [A, B]
-        pools = {"final": [("600001", 1), ("600002", 2)]}
-        result = self.svc.compute(self.labels, pools)
-        ndcg10 = [e for e in result.entries if e.metric == "ndcg" and e.k == 10][0]
+    def test_precision60_uses_deep_source(self):
+        """Deep 有 60 只 → Precision@60 用 DEEP；Final 只有 30 不硬凑。"""
+        deep = [(f"8{i:04d}", i) for i in range(1, 61)]
+        deep[0] = ("600001", 1)  # Deep 第 1 名是 A
+        deep[29] = ("600002", 30)  # Deep 第 30 名是 B
+        final = [(f"7{i:04d}", i) for i in range(1, 31)]
+        final[0] = ("600005", 1)  # Final 第 1 名是 A
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(deep=deep, final=final),
+        )
+        entries = {(e.metric, e.k): e for e in result.entries}
+        p60 = entries[("precision", 60)]
+        assert p60.ranking_source == "deep"
+        assert p60.numerator == 2  # 600001 + 600002
+        assert abs(p60.value - 2 / 60) < 1e-9
+        p30 = entries[("precision", 30)]
+        assert p30.ranking_source == "final"
+        assert p30.numerator == 1
+        p10 = entries[("precision", 10)]
+        assert p10.value == 0.1
+
+    def test_precision_source_smaller_than_k_not_applicable(self):
+        """任务书 §14.4 方案 A：Final30 无 Precision@60、Deep 不足 → NOT_APPLICABLE。"""
+        final = [(f"7{i:04d}", i) for i in range(1, 31)]
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(final=final),
+        )
+        entries = {(e.metric, e.k): e for e in result.entries}
+        p60 = entries[("precision", 60)]
+        assert p60.status == "NOT_APPLICABLE"
+        assert p60.value is None
+        assert p60.reason == "POOL_SMALLER_THAN_K"
+
+    def test_ndcg_missed_a_penalized(self):
+        """任务书 P0-13：GT 有 A+B，ranking 只含 B → NDCG<1（旧版=1 是 bug）。"""
+        # 只把 600002(B) 排进 final；600001(A)/600005(A) 漏选
+        final = [("600002", 1)]
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(final=final),
+        )
+        ndcg10 = [e for e in result.entries
+                  if e.metric == "ndcg" and e.k == 10 and e.ranking_source == "final"][0]
+        assert ndcg10.value < 1.0
+        # DCG = 3（B gain2→2^2-1=3）
+        # GT 理想序 gains [3,3,2,1]（A,A,B,C）→ IDCG = 7/1+7/l3+3/l4+1/l5
+        dcg = 3.0
+        idcg = 7.0 + 7.0 / _log2(3) + 3.0 / _log2(4) + 1.0 / _log2(5)
+        assert abs(ndcg10.value - dcg / idcg) < 1e-9
+
+    def test_ndcg_ideal_order_is_one(self):
+        # ranking 覆盖 GT 全部正例（A,A,B,C）且按理想序 → NDCG=1
+        final = [("600001", 1), ("600005", 2), ("600002", 3), ("600003", 4)]
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(final=final),
+        )
+        ndcg10 = [e for e in result.entries
+                  if e.metric == "ndcg" and e.k == 10 and e.ranking_source == "final"][0]
         assert abs(ndcg10.value - 1.0) < 1e-9
 
     def test_ndcg_partial_gain_order(self):
         # final 只含 600003(C, gain=1) 与 600005(A, gain=3)，K=10
-        pools = {"final": [("600003", 1), ("600005", 2)]}
-        result = self.svc.compute(self.labels, pools)
-        ndcg10 = [e for e in result.entries if e.metric == "ndcg" and e.k == 10][0]
-        # DCG = 1/1 + 7/log2(3)；IDCG = 7/1 + 1/log2(3)
+        # IDCG 来自 GT（A,A,B,C 理想序），不再是 ranking 自身 gains
+        final = [("600003", 1), ("600005", 2)]
+        result = self.svc.compute(
+            self.labels, {}, rankings=self._rankings(final=final),
+        )
+        ndcg10 = [e for e in result.entries
+                  if e.metric == "ndcg" and e.k == 10 and e.ranking_source == "final"][0]
         dcg = 1.0 + 7.0 / _log2(3)
-        idcg = 7.0 + 1.0 / _log2(3)
+        idcg = 7.0 + 7.0 / _log2(3) + 3.0 / _log2(4) + 1.0 / _log2(5)
         assert abs(ndcg10.value - dcg / idcg) < 1e-9
 
+    def test_pending_when_no_matured(self):
+        """任务书 P0-13：无成熟 outcome → status=PENDING / value=None。"""
+        labels = [OutcomeLabelResult(code="600001", label=None),
+                  OutcomeLabelResult(code="600002", label=None)]
+        result = self.svc.compute(
+            labels, {}, rankings=self._rankings(final=[("600001", 1)]),
+        )
+        assert result.entries
+        for entry in result.entries:
+            assert entry.status == "PENDING"
+            assert entry.value is None
+            assert entry.reason == "OUTCOME_WINDOW_NOT_MATURE"
+
     def test_no_good_no_crash(self):
-        result = self.svc.compute([OutcomeLabelResult(code="600001", label=None)], {})
+        labels = [OutcomeLabelResult(code="600001", label="C")]
+        result = self.svc.compute(
+            labels, {}, rankings=self._rankings(final=[("600001", 1)]),
+        )
         assert result.good_count == 0
-        assert all(e.value == 0.0 for e in result.entries)
+        # 已成熟但域内无 GOOD → Recall NOT_APPLICABLE 不伪装 0；
+        # NDCG 域内有 C（gain=1）仍可算；Precision 分母是 K，0 命中是真实 0
+        by_metric = {}
+        for entry in result.entries:
+            by_metric.setdefault(entry.metric, set()).add(entry.status)
+        assert by_metric["recall"] == {"NOT_APPLICABLE"}
+        assert by_metric["ndcg"] == {"OK"}
+        # final 仅 1 只 < K、deep 空 → Precision 全 NOT_APPLICABLE（不硬凑）
+        assert by_metric["precision"] == {"NOT_APPLICABLE"}
+        assert all(entry.value is None for entry in result.entries
+                   if entry.metric != "ndcg")
 
 
 def _log2(value: float) -> float:
