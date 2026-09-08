@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+from types import SimpleNamespace
 from typing import Any
 from datetime import datetime, timezone
 
@@ -226,6 +227,19 @@ def _attention_section(events: list[Any]) -> str:
     )
 
 
+def _snap_view(r) -> SimpleNamespace:
+    """快照行抽平为轻量对象：渲染在 uow session 外进行，
+    直接传 ORM 行会因 commit expire 触发 DetachedInstanceError。"""
+    return SimpleNamespace(
+        code=r.code,
+        stage=r.stage,
+        alive=r.alive,
+        score=r.score,
+        rank=r.rank,
+        drop_reason=r.drop_reason,
+    )
+
+
 def _scan_funnel_section(run, expert_counts: dict[str, int] | None = None) -> str:
     """§37.1 漏斗 + §37.2 专家召回计数（候选扫描最新一轮）。"""
     if run is None:
@@ -447,22 +461,44 @@ async def v3_dashboard(
         regime = await uow.features.latest_regime()
         attention_events = await uow.attention.open_events(limit=20)
         # §37 候选扫描区块（无扫描数据/UoW 无 scans 时各 section 自动缺席）
+        # scan_run 抽成 SimpleNamespace：ORM 行在 uow commit 后 expire，
+        # 渲染发生在 session 外，直接传 model 会触发 DetachedInstanceError
         scans = getattr(uow, "scans", None)
-        scan_run = await scans.latest_run() if scans is not None else None
+        scan_run_model = await scans.latest_run() if scans is not None else None
+        scan_run = None
         scan_expert_counts = scan_top_rows = why_not_rows = None
-        if scans is not None and scan_run is not None:
+        if scans is not None and scan_run_model is not None:
+            scan_run = SimpleNamespace(
+                scan_run_id=scan_run_model.scan_run_id,
+                scan_time=scan_run_model.scan_time,
+                market_date=scan_run_model.market_date,
+                universe_count=scan_run_model.universe_count,
+                eligible_count=scan_run_model.eligible_count,
+                recall_count=scan_run_model.recall_count,
+                pareto_count=scan_run_model.pareto_count,
+                machine_count=scan_run_model.machine_count,
+                deep_count=scan_run_model.deep_count,
+                final_count=scan_run_model.final_count,
+                duration_ms=scan_run_model.duration_ms,
+            )
             expert_rows = await uow.scans.expert_rows(scan_run.scan_run_id)
             counts: dict[str, int] = {}
             for row in expert_rows:
                 counts[row.expert] = counts.get(row.expert, 0) + 1
             scan_expert_counts = counts
-            scan_top_rows = await uow.scans.snapshots(
-                scan_run.scan_run_id, stage="FINAL", alive_only=True, limit=30,
-            )
-            if whynot:
-                why_not_rows = await uow.scans.snapshots(
-                    scan_run.scan_run_id, code=whynot, limit=64,
+            scan_top_rows = [
+                _snap_view(r)
+                for r in await uow.scans.snapshots(
+                    scan_run.scan_run_id, stage="FINAL", alive_only=True, limit=30,
                 )
+            ]
+            if whynot:
+                why_not_rows = [
+                    _snap_view(r)
+                    for r in await uow.scans.snapshots(
+                        scan_run.scan_run_id, code=whynot, limit=64,
+                    )
+                ]
     intraday_status = await MarketIntradayStatusService(
         clock=clock, is_trading_day=_trading_day,
     ).execute()
