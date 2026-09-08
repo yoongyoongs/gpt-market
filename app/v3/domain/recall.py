@@ -45,6 +45,20 @@ class RecallFeatureView(V3Contract):
     volume_expansion: bool | None = None
     relative_index_strength: float | None = None
     relative_industry_strength: float | None = None
+    # 候选引擎需要的宽表补充字段（additive，旧调用方不受影响）
+    return_10d: float | None = None
+    return_60d: float | None = None
+    return_120d: float | None = None
+    return_250d: float | None = None
+    position_120d: float | None = Field(default=None, ge=0, le=1)
+    position_250d: float | None = Field(default=None, ge=0, le=1)
+    ma60_slope: float | None = None
+    atr14: float | None = None
+    atr_pct: float | None = None
+    volatility20: float | None = None
+    distance_60d_high: float | None = None
+    distance_60d_low: float | None = None
+    amount: float | None = None
     coverage: float = Field(ge=0, le=1)
     stale: bool
     features: dict[str, Any] = Field(default_factory=dict)
