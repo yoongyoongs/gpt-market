@@ -340,11 +340,28 @@ CROWDING_BOUNDARY = 1.0e9  # NSGA-II 边界解拥挤度（inf 不可序列化，
 MAX_PENALTY = 30.0  # 设计 §20 总处罚封顶（Safety 硬风险不在此列）
 
 
+class StructureLevel(V3Contract):
+    """P1-06：RR 结构候选位——每个支撑/压力必须带来源与时间戳。
+
+    type 约定：SWING_LOW_60M / SWING_HIGH_60M（60m 结构）、
+    MA20 / MA60（均线）、PULLBACK_LOW（突破回踩位）、
+    LOW_60D / HIGH_60D / HIGH_120D（区间高低点回退代理）。
+    swing 价格不在特征行时不得伪造候选（missing ≠ 0 语义）。
+    """
+
+    price: float = Field(gt=0)
+    type: str
+    as_of: datetime | None = None
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
 class RiskRewardAssessment(V3Contract):
     """L4/L5 风险回报评估（设计 §17）。
 
     invalidation 用最近有效 swing low（v1 以 60 日低点为代理），
     禁止固定百分比止损；RR 极高（>4）反而降档，防支撑识别过近。
+    P1-06：显式注入结构候选（levels）时 invalidation 优先结构低点，
+    机械 60 日最低点只作回退代理；levels 记录本次评估实际用到的候选。
     """
 
     support: float | None = Field(default=None, description="支撑位（60日低点代理）")
@@ -356,6 +373,9 @@ class RiskRewardAssessment(V3Contract):
     rr: float | None = Field(default=None, ge=0)
     score: float = Field(default=0.0, ge=0, le=100)
     confidence: float = Field(default=1.0, ge=0, le=1)
+    levels: tuple[StructureLevel, ...] = Field(
+        default=(), description="本次评估实际采用的结构候选（P1-06）",
+    )
 
 
 class PenaltyAssessment(V3Contract):
