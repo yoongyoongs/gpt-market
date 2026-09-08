@@ -13,6 +13,7 @@ MACD（含 histogram delta）、OBV 斜率、swing high/low 局部极值与
 from __future__ import annotations
 
 import statistics
+from datetime import datetime
 from typing import Sequence
 
 BarLike = tuple[float, float, float]  # (high, low, volume) 的最小 bar 投影
@@ -348,31 +349,32 @@ def ma_slope_delta(
 
 
 def rs_metrics(
-    stock_closes: Sequence[float],
-    benchmark_closes: Sequence[float],
+    stock_series: Sequence[tuple[datetime, float]],
+    benchmark_series: Sequence[tuple[datetime, float]],
 ) -> dict[str, float | None]:
     """相对强度序列指标（设计 §10）。
 
-    rs_t = stock_t / benchmark_t（按尾部对齐 min(len)）：
+    rs_t = stock_t / benchmark_t。两输入均为 (交易日, 收盘价) 序列，
+    按交易日 inner join 对齐（第二轮 P0-04 §6.3）：个股停牌/缺失
+    交易日时不再按尾部 zip 错位，基准多出的交易日被跳过。
     rs_5d_slope / rs_20d_slope（价格归一回归斜率）、
     rs_slope_delta（5d 斜率 - 前 5d 斜率）、rs_low_higher（swing low 斜率>0 的 0/1）。
     benchmark 缺失时全部 None（missing ≠ 0 分）。
     """
-    if not stock_closes or not benchmark_closes:
-        return {
-            "rs_5d_slope": None,
-            "rs_20d_slope": None,
-            "rs_slope_delta": None,
-            "rs_low_higher": None,
-        }
-    n = min(len(stock_closes), len(benchmark_closes))
-    rs = [s / b for s, b in zip(stock_closes[-n:], benchmark_closes[-n:]) if b > 0]
     result: dict[str, float | None] = {
         "rs_5d_slope": None,
         "rs_20d_slope": None,
         "rs_slope_delta": None,
         "rs_low_higher": None,
     }
+    if not stock_series or not benchmark_series:
+        return result
+    benchmark_by_date = dict(benchmark_series)
+    rs = [
+        close / benchmark_by_date[bar_time]
+        for bar_time, close in stock_series
+        if bar_time in benchmark_by_date and benchmark_by_date[bar_time] > 0
+    ]
     if len(rs) < 25:
         return result
 

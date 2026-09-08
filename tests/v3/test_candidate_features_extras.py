@@ -1,7 +1,7 @@
 """候选引擎扩展指标（calculate_features._candidate_engine_extras）测试。
 
 验证：additive extras 键真实产出、missing=None 语义、28 字段
-coverage 语义不受影响、benchmark_closes 参数驱动 RS 指标。
+coverage 语义不受影响、benchmark_series（(交易日, 收盘价) 对）驱动 RS 指标。
 """
 
 from __future__ import annotations
@@ -65,10 +65,15 @@ def _rising_closes(n: int = 260) -> list[float]:
 def test_extras_keys_present_with_rising_market() -> None:
     service = CalculateSecurityFeatureService()
     closes = _rising_closes()
-    bench = [10.0 * (1 + 0.0005) ** i for i in range(len(closes))]
+    # P0-04：基准以 (交易日, 收盘价) 序列传入，日期轴与个股日K一致
+    bench_dates = [NOW - timedelta(days=len(closes) - i) for i in range(len(closes))]
+    bench = list(zip(
+        bench_dates,
+        (10.0 * (1 + 0.0005) ** i for i in range(len(closes))),
+    ))
     result = service.execute(
         feature_run_id=uuid4(), revision=_revision_from(closes), as_of=NOW,
-        benchmark_closes=bench,
+        benchmark_series=bench,
     )
     extras = result.features
     # RV / BT / AC / NonChase / RS 关键键全部存在

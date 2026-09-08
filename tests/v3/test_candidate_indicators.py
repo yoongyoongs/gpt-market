@@ -8,6 +8,7 @@ missing 语义：数据不足必须 None，不得用 0 伪装。
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 
 from app.v3.candidate_engine.indicators import (
     atr_contraction,
@@ -208,20 +209,35 @@ class TestMASlopeDelta:
 
 
 class TestRS:
+    @staticmethod
+    def _series(closes: list[float]) -> list[tuple[datetime, float]]:
+        base = datetime(2026, 1, 1)
+        return [(base + timedelta(days=i), close) for i, close in enumerate(closes)]
+
     def test_missing_benchmark_all_none(self):
-        metrics = rs_metrics([10.0] * 40, [])
+        metrics = rs_metrics(self._series([10.0] * 40), [])
         assert all(value is None for value in metrics.values())
 
     def test_outperforming_stock_positive_slope(self):
-        bench = _trending_closes(60, drift=0.001)
-        stock = _trending_closes(60, drift=0.01)
+        bench = self._series(_trending_closes(60, drift=0.001))
+        stock = self._series(_trending_closes(60, drift=0.01))
         metrics = rs_metrics(stock, bench)
         assert metrics["rs_5d_slope"] is not None and metrics["rs_5d_slope"] > 0
         assert metrics["rs_20d_slope"] is not None and metrics["rs_20d_slope"] > 0
 
     def test_short_series_all_none(self):
-        metrics = rs_metrics([10.0] * 10, [10.0] * 10)
+        metrics = rs_metrics(self._series([10.0] * 10), self._series([10.0] * 10))
         assert all(value is None for value in metrics.values())
+
+    def test_aligns_by_date_not_by_length(self):
+        """P0-04：个股停牌缺一日时按日期 inner join 对齐，不按尾部 zip 错位。"""
+        base = [datetime(2026, 1, 1) + timedelta(days=i) for i in range(40)]
+        bench = [(base[i], 10.0 + i) for i in range(40)]
+        # 个股缺第 10 个交易日（停牌），其余价格与基准一致 → 对齐后 rs 恒 1.0
+        stock = [(base[i], 10.0 + i) for i in range(40) if i != 10]
+        metrics = rs_metrics(stock, bench)
+        assert metrics["rs_5d_slope"] == 0.0
+        assert metrics["rs_20d_slope"] == 0.0
 
 
 class TestWeeklyDecline:

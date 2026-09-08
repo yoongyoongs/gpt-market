@@ -54,6 +54,18 @@ class RunFullMarketFeaturesService:
         index_return = self._index_return_calculator.execute(
             revision=index_revision, as_of=as_of
         )
+        # P0-04：从同一 PIT 指数 revision 构造 (交易日, 收盘价) 基准序列
+        # 传给 Calculator，RS 指标按日期与个股日K inner join 对齐；
+        # 基准缺失时保持 None 并由 Calculator 落 missing 语义。
+        benchmark_series = (
+            tuple(
+                (bar.bar_time, bar.close)
+                for bar in index_revision.bars
+                if bar.bar_time <= as_of
+            )
+            if index_revision is not None
+            else None
+        )
         features = []
         revision_manifest: list[tuple[str, str]] = []
         errors: dict[str, str] = {}
@@ -79,6 +91,7 @@ class RunFullMarketFeaturesService:
                         feature_run_id=UUID(int=0), revision=revision, as_of=as_of,
                         weekly_revision=weekly.get(revision.security_id),
                         index_return_20d=index_return.return_20d,
+                        benchmark_series=benchmark_series,
                     )
                     features.append(item)
                     revision_manifest.append((str(revision.security_id), revision.content_hash))

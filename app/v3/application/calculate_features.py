@@ -29,7 +29,7 @@ class CalculateSecurityFeatureService:
         weekly_revision: BarSeriesRevision | None = None,
         index_return_20d: float | None = None,
         industry_return_20d: float | None = None,
-        benchmark_closes: Sequence[float] | None = None,
+        benchmark_series: Sequence[tuple[datetime, float]] | None = None,
         stale_after: timedelta = timedelta(days=7),
     ) -> SecurityFeature:
         if revision.period is not BarPeriod.DAY or revision.adjust_type is not AdjustType.QFQ:
@@ -118,7 +118,7 @@ class CalculateSecurityFeatureService:
         }
         extras.update(
             self._candidate_engine_extras(
-                bars, closes, weekly_revision, as_of, benchmark_closes, values
+                bars, closes, weekly_revision, as_of, benchmark_series, values
             )
         )
         return SecurityFeature.build(
@@ -294,7 +294,7 @@ class CalculateSecurityFeatureService:
         closes: list[float],
         weekly_revision: BarSeriesRevision | None,
         as_of: datetime,
-        benchmark_closes: Sequence[float] | None,
+        benchmark_series: Sequence[tuple[datetime, float]] | None,
         values: dict[str, object],
     ) -> dict[str, object]:
         """候选引擎扩展指标（additive，全部落在 features JSONB）。
@@ -371,10 +371,13 @@ class CalculateSecurityFeatureService:
             extra["weekly_slope_8w"] = None
             extra["weekly_decline_deceleration"] = None
 
-        # RS 相对强度序列指标（设计 §10）：benchmark 序列缺失全 None
+        # RS 相对强度序列指标（设计 §10）：按交易日 inner join（P0-04），
+        # benchmark 序列缺失时全 None（missing ≠ 0 分）
         extra.update(
-            ce_ind.rs_metrics(closes, benchmark_closes)
-            if benchmark_closes
+            ce_ind.rs_metrics(
+                [(bar.bar_time, bar.close) for bar in bars], benchmark_series
+            )
+            if benchmark_series
             else {
                 "rs_5d_slope": None,
                 "rs_20d_slope": None,
