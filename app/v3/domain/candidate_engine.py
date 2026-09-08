@@ -414,3 +414,87 @@ class DeepRankResult(V3Contract):
     evaluated_count: int = Field(ge=0)
     top_n: int = Field(ge=0)
     entries: tuple[DeepRankEntry, ...] = ()
+
+
+# ---------------------------------------------------------------------
+# Step 13：全链 Trace（设计 原则E / §35.2 / §37.4）
+# 任何淘汰都必须可解释、可追溯；每只股票在每个阶段留一行状态。
+# ---------------------------------------------------------------------
+
+TRACE_STAGES = (
+    "UNIVERSE",
+    "SAFETY",
+    "RECALL",
+    "PARETO",
+    "MACHINE",
+    "DEEP",
+    "FINAL",
+)
+
+
+class CandidateStageRecord(V3Contract):
+    """单股在单阶段的状态（candidate_snapshot 行语义）。"""
+
+    stage: str
+    alive: bool
+    score: float | None = None
+    rank: int | None = None
+    drop_reason: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateTrace(V3Contract):
+    """单股完整生命轨迹（§37.4 Why Not 数据源）。"""
+
+    security_id: UUID
+    code: str
+    records: tuple[CandidateStageRecord, ...] = ()
+
+    @property
+    def last_alive_stage(self) -> str | None:
+        alive = [record.stage for record in self.records if record.alive]
+        return alive[-1] if alive else None
+
+    @property
+    def drop_stage(self) -> str | None:
+        dead = [record for record in self.records if not record.alive]
+        return dead[0].stage if dead else None
+
+    @property
+    def drop_reason(self) -> str | None:
+        dead = [record for record in self.records if not record.alive]
+        return dead[0].drop_reason if dead else None
+
+    def stage(self, name: str) -> CandidateStageRecord | None:
+        return next((record for record in self.records if record.stage == name), None)
+
+
+class ScanTraceResult(V3Contract):
+    """一次扫描的全量 trace。"""
+
+    scan_id: UUID
+    trade_date: datetime
+    traces: tuple[CandidateTrace, ...] = ()
+
+    def for_code(self, code: str) -> CandidateTrace | None:
+        return next((trace for trace in self.traces if trace.code == code), None)
+
+
+class CandidatePipelineResult(V3Contract):
+    """候选生成主链路整体输出（Safety→…→Deep + Final + 漏斗 + Trace）。"""
+
+    scan_id: UUID
+    trade_date: datetime
+    strategy_version: str
+    parameter_version: str
+    funnel: ScanFunnel
+    trace: ScanTraceResult
+    safety: SafetyFilterResult
+    union: RecallUnionResult
+    enrichment: EnrichmentResult
+    pareto: ParetoResult
+    machine: MachineRankResult
+    deep: DeepRankResult
+    final_entries: tuple[DeepRankEntry, ...] = Field(
+        description="RAW_TOP30（§24/§25）；AI Review 接入后叠加 ai_rank/decision",
+    )
