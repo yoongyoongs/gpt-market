@@ -25,7 +25,7 @@ def _ok():
     return {"ok": True}
 
 
-def _client(*, public_market_read: bool = True) -> TestClient:
+def _client(*, public_market_read: bool = True, public_scan_read: bool = False) -> TestClient:
     app = FastAPI()
     app.add_middleware(
         V3AuthMiddleware,
@@ -35,6 +35,7 @@ def _client(*, public_market_read: bool = True) -> TestClient:
             strategy_admin_token="admin-secret",
             strategy_admin_principal_id="admin-1",
             public_market_read=public_market_read,
+            public_scan_read=public_scan_read,
         ),
     )
 
@@ -73,6 +74,20 @@ def _client(*, public_market_read: bool = True) -> TestClient:
         "/api/v3/raw-opportunities",
         "/api/v3/market-reviews",
         "/api/v3/candidates/comparison-pack",
+    ):
+        app.get(path)(_ok)
+
+    # P0-14：策略输出面默认 MARKET_READ（V3_PUBLIC_SCAN_READ=false）
+    for path in (
+        "/api/v3/scan/latest",
+        "/api/v3/scan/1/funnel",
+        "/api/v3/scan/1/experts",
+        "/api/v3/scan/1/pareto",
+        "/api/v3/scan/1/top",
+        "/api/v3/backtest/metrics",
+        "/api/v3/backtest/misses",
+        "/api/v3/shadow/groups",
+        "/api/v3/stock/600000/scan-trace",
     ):
         app.get(path)(_ok)
 
@@ -192,6 +207,47 @@ def test_market_read_can_be_protected_by_configuration() -> None:
         response = client.get("/api/v3/universe/features")
     assert response.status_code == 401
     assert response.json()["details"]["required_scope"] == "MARKET_READ"
+
+
+# P0-14（任务书 §16）：scan/trace/backtest/shadow 属策略输出，默认认证
+SCAN_READ_PATHS = (
+    "/api/v3/scan/latest",
+    "/api/v3/scan/1/funnel",
+    "/api/v3/scan/1/experts",
+    "/api/v3/scan/1/pareto",
+    "/api/v3/scan/1/top",
+    "/api/v3/backtest/metrics",
+    "/api/v3/backtest/misses",
+    "/api/v3/shadow/groups",
+    "/api/v3/stock/600000/scan-trace",
+)
+
+
+def test_scan_read_requires_token_by_default() -> None:
+    """无 token GET /api/v3/scan/latest => 401（默认 V3_PUBLIC_SCAN_READ=false）。"""
+    with _client() as client:
+        for path in SCAN_READ_PATHS:
+            response = client.get(path)
+            assert response.status_code == 401, path
+            assert response.json()["details"]["required_scope"] == "MARKET_READ"
+
+
+def test_scan_read_with_valid_token() -> None:
+    """有效 MARKET_READ token => 200。"""
+    with _client() as client:
+        for path in SCAN_READ_PATHS:
+            response = client.get(
+                path, headers={"Authorization": "Bearer write-secret"},
+            )
+            assert response.status_code == 200, path
+
+
+def test_scan_read_public_when_configured() -> None:
+    """V3_PUBLIC_SCAN_READ=true 时看板可匿名读策略输出。"""
+    with _client(public_scan_read=True) as client:
+        for path in SCAN_READ_PATHS:
+            response = client.get(path)
+            assert response.status_code == 200, path
 
 
 def test_portfolio_read_and_write_require_authentication() -> None:

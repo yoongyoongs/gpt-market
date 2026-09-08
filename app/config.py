@@ -105,6 +105,12 @@ class Settings(BaseSettings):
         default_factory=lambda: os.getenv("V3_PUBLIC_MARKET_READ", "true").lower()
         in {"1", "true", "yes", "on"}
     )
+    # P0-14：策略输出面（scan/trace）默认要求 MARKET_READ，
+    # 仅看板明确需要匿名读时显式开 V3_PUBLIC_SCAN_READ=true
+    v3_public_scan_read: bool = Field(
+        default_factory=lambda: os.getenv("V3_PUBLIC_SCAN_READ", "false").lower()
+        in {"1", "true", "yes", "on"}
+    )
     kline_refresh_trading_seconds: int = Field(
         default_factory=lambda: int(os.getenv("KLINE_REFRESH_TRADING_SECONDS", "300"))
     )

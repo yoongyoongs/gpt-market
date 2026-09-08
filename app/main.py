@@ -47,6 +47,7 @@ api.add_middleware(
         strategy_admin_token=settings.v3_strategy_admin_token,
         strategy_admin_principal_id=settings.v3_strategy_admin_principal_id,
         public_market_read=settings.v3_public_market_read,
+        public_scan_read=settings.v3_public_scan_read,
     ),
 )
 api.include_router(router)

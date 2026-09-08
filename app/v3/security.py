@@ -72,16 +72,15 @@ PUBLIC_MARKET_READ_EXACT: frozenset[str] = frozenset(
         "/raw-opportunities",
         "/market/intraday-status",
         "/health/data-quality",
-        "/scan/latest",
     }
 )
 # R4-P1-005：/evidence/ 不再任意 prefix 公开——subject_type 是自由字符串，
 # 未来新增 POSITION/ACCOUNT 等 subject 不许自动变公开；改用下方明确
 # allowlist。/context-packs/{id} 同理回归认证（R3-P1-004）。
-# Step 15（设计 §36）：候选扫描漏斗/专家/Pareto/Top/trace 属纯市场
-# 事实读取，/scan/{id}/* 公开；backtest/shadow 属策略内部语义，
-# 保持认证。模板第三段逐个登记，不用 /scan/ 整段 prefix。
-PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = ("/scan/",)
+# P0-14（任务书 §16）：scan/trace 属策略输出（专家排名/Pareto/Machine/
+# Deep/Why Not），不再写死公开 allowlist——默认 MARKET_READ，仅在
+# V3_PUBLIC_SCAN_READ=true 时匿名可读。
+PUBLIC_MARKET_READ_PREFIXES: tuple[str, ...] = ()
 # 只有明确"公开语义"的 Evidence subject_type 匿名可读；其余一律认证。
 PUBLIC_EVIDENCE_SUBJECT_TYPES: frozenset[str] = frozenset(
     {"SECURITY", "PUBLIC_INDUSTRY", "PUBLIC_POLICY"}
@@ -89,12 +88,32 @@ PUBLIC_EVIDENCE_SUBJECT_TYPES: frozenset[str] = frozenset(
 PUBLIC_MARKET_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
     ("stocks", "*", "evidence"),
     ("stocks", "*", "context-pack"),
+)
+
+# P0-14：策略输出面（扫描结果/个股轨迹/回测/影子池），受 public_scan_read 开关控制
+SCAN_READ_EXACT: frozenset[str] = frozenset({"/scan/latest"})
+SCAN_READ_PREFIXES: tuple[str, ...] = ("/scan/", "/backtest/", "/shadow/")
+SCAN_READ_TEMPLATES: tuple[tuple[str, ...], ...] = (
     ("stock", "*", "scan-trace"),
 )
 
 
-def is_public_market_read(path: str) -> bool:
-    """path 为去掉 /api/v3 前缀后的路由（如 /universe/features）。"""
+def _matches_template(
+    segments: tuple[str, ...], templates: tuple[tuple[str, ...], ...]
+) -> bool:
+    return any(
+        len(segments) == len(template)
+        and all(part == "*" or part == segment for part, segment in zip(template, segments))
+        for template in templates
+    )
+
+
+def is_public_market_read(path: str, *, scan_public: bool = False) -> bool:
+    """path 为去掉 /api/v3 前缀后的路由（如 /universe/features）。
+
+    scan_public=False（默认）：/scan/*、/stock/*/scan-trace 一律认证；
+    scan_public=True（V3_PUBLIC_SCAN_READ=true）：看板可匿名读策略输出。
+    """
     if path in PUBLIC_MARKET_READ_EXACT:
         return True
     if path.startswith(PUBLIC_MARKET_READ_PREFIXES):
@@ -106,11 +125,12 @@ def is_public_market_read(path: str) -> bool:
         and segments[1].upper() in PUBLIC_EVIDENCE_SUBJECT_TYPES
     ):
         return True
-    for template in PUBLIC_MARKET_READ_TEMPLATES:
-        if len(segments) == len(template) and all(
-            part == "*" or part == segment
-            for part, segment in zip(template, segments)
-        ):
+    if _matches_template(segments, PUBLIC_MARKET_READ_TEMPLATES):
+        return True
+    if scan_public:
+        if path in SCAN_READ_EXACT or path.startswith(SCAN_READ_PREFIXES):
+            return True
+        if _matches_template(segments, SCAN_READ_TEMPLATES):
             return True
     return False
 
@@ -122,6 +142,7 @@ class V3AuthPolicy:
     strategy_admin_token: str | None
     strategy_admin_principal_id: str
     public_market_read: bool = True
+    public_scan_read: bool = False
 
     def required_scope(self, method: str, path: str) -> V3Scope | None:
         if not path.startswith("/api/v3"):
@@ -141,7 +162,9 @@ class V3AuthPolicy:
             # 别名与 /portfolio/preferences 同源，不得绕开 PORTFOLIO_READ
             return V3Scope.PORTFOLIO_READ
         relative = path[len("/api/v3"):]
-        if self.public_market_read and is_public_market_read(relative):
+        if self.public_market_read and is_public_market_read(
+            relative, scan_public=self.public_scan_read,
+        ):
             return None
         return V3Scope.MARKET_READ
 
