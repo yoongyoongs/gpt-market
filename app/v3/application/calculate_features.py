@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 import statistics
 from datetime import datetime, timedelta
-from typing import Iterable
+from typing import Iterable, Sequence
 from uuid import UUID
 
+from app.v3.candidate_engine import indicators as ce_ind
 from app.v3.domain.features import SecurityFeature
 from app.v3.domain.hashing import canonical_hash
 from app.v3.domain.market_data import AdjustType, BarPeriod, BarSeriesRevision, MarketBar
@@ -28,6 +29,7 @@ class CalculateSecurityFeatureService:
         weekly_revision: BarSeriesRevision | None = None,
         index_return_20d: float | None = None,
         industry_return_20d: float | None = None,
+        benchmark_closes: Sequence[float] | None = None,
         stale_after: timedelta = timedelta(days=7),
     ) -> SecurityFeature:
         if revision.period is not BarPeriod.DAY or revision.adjust_type is not AdjustType.QFQ:
@@ -114,6 +116,11 @@ class CalculateSecurityFeatureService:
             "overheated": bool(values["position_60d"] is not None and values["position_60d"] >= 0.9),
             "liquidity_quality": self._liquidity_quality(bars[-1].amount),
         }
+        extras.update(
+            self._candidate_engine_extras(
+                bars, closes, weekly_revision, as_of, benchmark_closes, values
+            )
+        )
         return SecurityFeature.build(
             feature_run_id=feature_run_id,
             security_id=revision.security_id,
@@ -279,6 +286,126 @@ class CalculateSecurityFeatureService:
         if amount >= 20_000_000:
             return "MEDIUM"
         return "LOW"
+
+    @classmethod
+    def _candidate_engine_extras(
+        cls,
+        bars: tuple[MarketBar, ...],
+        closes: list[float],
+        weekly_revision: BarSeriesRevision | None,
+        as_of: datetime,
+        benchmark_closes: Sequence[float] | None,
+        values: dict[str, object],
+    ) -> dict[str, object]:
+        """候选引擎扩展指标（additive，全部落在 features JSONB）。
+
+        缺失一律为 None（missing ≠ 0 分，设计 §11.3）；不计入
+        feature_fields/coverage（28 字段语义冻结，向后兼容）。
+        指标定义见 app/v3/candidate_engine/indicators.py。
+        """
+        highs = [bar.high for bar in bars]
+        lows = [bar.low for bar in bars]
+        volumes = [bar.volume for bar in bars]
+        close = closes[-1]
+
+        macd_hist, macd_hist_delta = ce_ind.macd(closes)
+        obv_z = ce_ind.obv_slope_z(closes, volumes)
+        # 5/20 日量能关系（设计 §8.4）
+        volume_5_20 = None
+        if len(volumes) >= 20:
+            mean5 = statistics.fmean(volumes[-5:])
+            mean20 = statistics.fmean(volumes[-20:])
+            volume_5_20 = mean5 / mean20 if mean20 > 0 else None
+        ma20, ma60 = values.get("ma20"), values.get("ma60")
+        extra: dict[str, object] = {
+            # RV 反转启动（设计 §7）
+            "macd_hist": macd_hist,
+            "macd_hist_delta": macd_hist_delta,
+            "ma20_slope_delta": ce_ind.ma_slope_delta(closes, 20),
+            "ma20_ma60_gap": (
+                ma20 / ma60 - 1
+                if isinstance(ma20, (int, float)) and isinstance(ma60, (int, float)) and ma60 > 0
+                else None
+            ),
+            "price_ma20_distance": (
+                close / ma20 - 1 if isinstance(ma20, (int, float)) and ma20 > 0 else None
+            ),
+            "swing_low_trend": ce_ind.swing_low_trend(lows, baseline=close),
+            # BT 筑底（设计 §6）
+            "atr_contraction": ce_ind.atr_contraction(highs, lows, closes),
+            "daily_range_contraction": ce_ind.daily_range_contraction(highs, lows, closes),
+            "down_volume_ratio": ce_ind.down_volume_ratio(closes, volumes),
+            "up_down_volume_ratio": ce_ind.up_down_volume_ratio(closes, volumes),
+            "low_slope_20": ce_ind.low_slope(lows, window=20),
+            "base_duration": ce_ind.base_duration(closes),
+            # AC 资金潜伏（设计 §8）
+            "obv_slope_z": obv_z,
+            "volume_5_20": volume_5_20,
+            # NonChase / Penalty（设计 §19.2/§20）
+            "consecutive_up_days": ce_ind.consecutive_up_days(closes),
+            "volume_spike": ce_ind.volume_spike(volumes),
+            # LP 低位（设计 §5.2）：250d 高点距离补充
+            "distance_250d_high": (
+                cls._distance_to_window_high(bars, 250)
+            ),
+            # PB 回踩（设计 §9）：close 相对前 20 日平台高点的超出幅度
+            "breakout_extension_20d": (
+                cls._breakout_extension(bars, 20)
+            ),
+        }
+
+        # 周K 跌速（设计 §6.2.4）：须发布 QFQ WEEK revision
+        if weekly_revision is not None and (
+            weekly_revision.period is BarPeriod.WEEK
+            and weekly_revision.adjust_type is AdjustType.QFQ
+        ):
+            weekly_closes = [
+                bar.close
+                for bar in weekly_revision.bars
+                if bar.bar_time <= as_of and not bar.provisional
+            ]
+            recent, _prev, decel = ce_ind.weekly_decline_metrics(weekly_closes)
+            extra["weekly_slope_8w"] = recent
+            extra["weekly_decline_deceleration"] = decel
+        else:
+            extra["weekly_slope_8w"] = None
+            extra["weekly_decline_deceleration"] = None
+
+        # RS 相对强度序列指标（设计 §10）：benchmark 序列缺失全 None
+        extra.update(
+            ce_ind.rs_metrics(closes, benchmark_closes)
+            if benchmark_closes
+            else {
+                "rs_5d_slope": None,
+                "rs_20d_slope": None,
+                "rs_slope_delta": None,
+                "rs_low_higher": None,
+            }
+        )
+        return extra
+
+    @staticmethod
+    def _distance_to_window_high(
+        bars: tuple[MarketBar, ...], window: int
+    ) -> float | None:
+        sample = bars[-window:] if len(bars) >= window else None
+        if sample is None or not sample:
+            return None
+        high = max(bar.high for bar in sample)
+        return bars[-1].close / high - 1 if high > 0 else None
+
+    @staticmethod
+    def _breakout_extension(
+        bars: tuple[MarketBar, ...], window: int
+    ) -> float | None:
+        """close 相对前 window 日平台高点（不含当日）的超出幅度。
+
+        >0 = 已突破（幅度=延伸度，PB 用它控追高）；<=0 = 未突破。
+        """
+        if len(bars) <= window:
+            return None
+        prev_high = max(bar.high for bar in bars[-window - 1:-1])
+        return bars[-1].close / prev_high - 1 if prev_high > 0 else None
 
 
 def mean_available(values: Iterable[float | None]) -> float | None:
