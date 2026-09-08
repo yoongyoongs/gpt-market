@@ -207,3 +207,64 @@ class RecallExpert(Protocol):
     def evaluate(self, stock: ExpertInput) -> ExpertScore | None:
         """评分；None = 核心特征缺失，本专家不召回该股。"""
         ...
+
+
+class UnionEntry(V3Contract):
+    """Recall Union 后的单股聚合（设计 §13）。
+
+    不设「命中最少专家数」：单路命中且排名足够高同样保留。
+    """
+
+    security_id: UUID
+    code: str
+    hits: tuple[ExpertHit, ...] = ()
+    expert_names: tuple[str, ...] = ()
+    best_score: float = Field(ge=0, le=100, description="单专家最高分")
+    rrf_raw: float = Field(ge=0)
+    rrf_norm: float = Field(ge=0, le=100)
+    union_rank: int = Field(ge=1)
+
+
+class RecallUnionResult(V3Contract):
+    """Recall Union + RRF 融合结果（设计 §13-§14）。"""
+
+    evaluated_count: int = Field(ge=0, description="送入专家的股票数")
+    union_count: int = Field(ge=0, description="至少命中一路专家的股票数")
+    entries: tuple[UnionEntry, ...] = ()
+
+    @property
+    def entry_ids(self) -> tuple[UUID, ...]:
+        return tuple(entry.security_id for entry in self.entries)
+
+
+class EnrichmentCoverage(V3Contract):
+    """L3 特征补全覆盖标记（设计 §2.1 L3：周K/日K/60m/资金/基本面/催化）。
+
+    minute_60 在 Union 阶段恒 False（60m 数据在 Machine Top120 后
+    才拉取，设计 §38 成本约束）；False 是明确的缺失语义，
+    不影响候选资格。
+    """
+
+    daily_kline: bool = False
+    weekly_kline: bool = False
+    fundamental_evidence: bool = False
+    catalyst_evidence: bool = False
+    minute_60: bool = False
+
+
+class EnrichedCandidate(V3Contract):
+    """L3 补全后的候选（UnionEntry + 完整特征/证据视图）。"""
+
+    entry: UnionEntry
+    feature: ExpertFeatureView
+    evidence_count: int = Field(ge=0)
+    coverage: EnrichmentCoverage
+
+
+class EnrichmentResult(V3Contract):
+    """L3 输出：补全候选 + 可观测异常计数。"""
+
+    candidates: tuple[EnrichedCandidate, ...] = ()
+    missing_input_count: int = Field(
+        ge=0, description="Union 命中但无特征行的股票数（数据异常，不得静默）"
+    )
