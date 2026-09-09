@@ -5,3 +5,4 @@ __pycache__
 .env
 docs/acceptance_results.json
 data
+backups
