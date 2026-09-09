@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from dataclasses import dataclass, fields
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timedelta
 from typing import Any
 
 from app.config import Settings
@@ -51,6 +51,51 @@ def _is_trading_time(value: datetime) -> bool:
 def _should_use_provisional(value: datetime) -> bool:
     local = value.astimezone(SHANGHAI)
     return local.weekday() < 5 and datetime_time(9, 15) <= local.time() < datetime_time(15, 10)
+
+
+_KLINE_PERIOD_SECONDS = {
+    "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "60m": 3600,
+    "day": 86400, "week": 604800, "month": 2592000,
+}
+
+
+def _last_trading_day(value: datetime):
+    """最近一个"bar 已全部产出"的工作日（周末简化口径，与 _is_trading_time 同精度）。
+
+    盘后当日（工作日 ≥15:00）→ 当日；盘前/周末 → 往前最近的工作日。"""
+    local = value.astimezone(SHANGHAI)
+    date = local.date()
+    if date.weekday() < 5 and local.time() >= datetime_time(15, 0):
+        return date
+    offset = timedelta(days=1)
+    while (date - offset).weekday() >= 5:
+        offset += timedelta(days=1)
+    return date - offset
+
+
+def _kline_result_stale(
+    last_bar_time: datetime, period: str, now: datetime, *,
+    trading_threshold_seconds: int, closed_threshold_seconds: int,
+) -> bool:
+    """K 线新鲜度 = 时段感知 + 周期感知（区别于实时快照语义）。
+
+    DataQualityService 的 stale_after=30s 只适用于实时 quote 快照；
+    K 线最后 bar 天然落后于抓取时点（收盘后 60m 最后 bar 15:00，
+    age 数小时），用快照阈值评 K 线会把聚合回退路径系统性判
+    stale/UNAVAILABLE，下游按"stale 不当事实"拒收——P1-01 真实
+    全市场扫描 minute60_usable=0 的根因。规则：
+
+    - 交易时段：age > max(2×周期, 交易时段刷新阈值) → stale
+    - 非交易时段：最后 bar 属于当日或最近交易日 → fresh
+      （该产出周期已全部产出，不存在更新）；更早 → stale
+    """
+    if last_bar_time.tzinfo is None:
+        last_bar_time = last_bar_time.replace(tzinfo=SHANGHAI)
+    if _is_trading_time(now):
+        period_seconds = _KLINE_PERIOD_SECONDS.get(period, 86400)
+        threshold = max(2 * period_seconds, trading_threshold_seconds)
+        return (now - last_bar_time).total_seconds() > threshold
+    return last_bar_time.astimezone(SHANGHAI).date() < _last_trading_day(now)
 
 
 def _merge_klines(period: str, *groups: list[Kline], limit: int) -> list[Kline]:
@@ -236,6 +281,19 @@ class MarketDataService(MarketDataProvider):
             source=source,
             complete=len(klines) >= min(limit, 20),
             server_timestamp=now,
+        )
+        # K 线新鲜度按时段/周期感知语义重判（_kline_result_stale）：
+        # assess 的 30s 快照阈值对最后 bar 天然落后的 K 线永远
+        # UNAVAILABLE，系统性误杀聚合路径（P1-01 真实扫描实锤）。
+        stale = _kline_result_stale(
+            klines[-1].timestamp, period, now,
+            trading_threshold_seconds=self.settings.kline_refresh_trading_seconds,
+            closed_threshold_seconds=self.settings.kline_refresh_closed_seconds,
+        )
+        quality.update(
+            stale=stale,
+            quality=quality["quality"] if stale else "LIVE",
+            confidence=quality["confidence"] if stale else "MEDIUM",
         )
         return KlineResult(code=code, period=period, klines=klines, **quality)
 
