@@ -12,8 +12,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -153,6 +154,72 @@ class SQLAlchemyScanRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def published_run_on(
+        self,
+        as_of: datetime,
+        *,
+        strategy_version: str = "v3",
+        parameter_version: str = "v1",
+    ) -> ScanRunModel | None:
+        """R2.1-P1-02（任务书 §10.5）：幂等查重——同一上海交易日、同
+        strategy/parameter 版本已有 PUBLISHED scan 则返回之。
+
+        scan_runs 无 feature_run_id 列（FOLLOW-UP）：任务书四元组幂等
+        退化为三键（market_date/strategy_version/parameter_version），
+        feature_run_id 差异视为同键不重复发布——语义为任务书要求的
+        严格子集（更保守，不偷跑）。
+        """
+        local_day = as_of.astimezone(ZoneInfo("Asia/Shanghai")).date()
+        day_start = datetime(
+            local_day.year, local_day.month, local_day.day,
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        )
+        day_end = day_start + timedelta(days=1)
+        result = await self._session.execute(
+            select(ScanRunModel)
+            .where(
+                ScanRunModel.status == "PUBLISHED",
+                ScanRunModel.strategy_version == strategy_version,
+                ScanRunModel.parameter_version == parameter_version,
+                ScanRunModel.market_date >= day_start,
+                ScanRunModel.market_date < day_end,
+            )
+            .order_by(ScanRunModel.scan_time.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def pending_mature_scan_ids(
+        self, *, older_than: datetime, limit: int = 10,
+    ) -> list[UUID]:
+        """R2.1-P1-03（任务书 §11）：仍 PENDING 的历史 scan 候选。
+
+        "仍 PENDING" = 尚无任何 outcome 行（从未回填，含历史失败日）
+        或存在 label IS NULL 行（部分未成熟）。older_than 由调用方按
+        "≥20 未来交易日" 的保守自然日上界计算（多抓无害：成熟判定由
+        bars 观察窗兜底，已成熟行不可变）。
+        """
+        has_any = exists().where(
+            OutcomeLabelModel.scan_run_id == ScanRunModel.scan_run_id
+        )
+        has_pending = exists().where(
+            and_(
+                OutcomeLabelModel.scan_run_id == ScanRunModel.scan_run_id,
+                OutcomeLabelModel.label.is_(None),
+            )
+        )
+        result = await self._session.execute(
+            select(ScanRunModel.scan_run_id)
+            .where(
+                ScanRunModel.status == "PUBLISHED",
+                ScanRunModel.market_date < older_than,
+                or_(~has_any, has_pending),
+            )
+            .order_by(ScanRunModel.market_date.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def run_by_id(self, scan_run_id: UUID) -> ScanRunModel | None:
         result = await self._session.execute(
@@ -347,7 +414,13 @@ class SQLAlchemyScanRepository:
     async def save_outcome_labels(
         self, scan_run_id: UUID, labels: list[OutcomeLabelResult]
     ) -> int:
-        """按 (scan_run_id, code) upsert；重跑 mature 覆盖旧值。"""
+        """按 (scan_run_id, code) upsert。
+
+        R2.1-P1-03（任务书 §11）：已成熟行（label IS NOT NULL）不可变——
+        补跑只回填 PENDING（NULL）行，绝不覆盖历史评级；revision 语义
+        由"首评不可变"承载（outcome_labels 无 calculation_version 列，
+        升级重算属 FOLLOW-UP）。
+        """
         if not labels:
             return 0
         rows = [
@@ -389,6 +462,8 @@ class SQLAlchemyScanRepository:
                         "bars_used": stmt.excluded.bars_used,
                         "label": stmt.excluded.label,
                     },
+                    # P1-03：仅未成熟（NULL）行可被更新
+                    where=OutcomeLabelModel.label.is_(None),
                 )
             )
         return len(rows)

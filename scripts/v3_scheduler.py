@@ -5,8 +5,10 @@
   → 指数基准（东财失败逐基准降级腾讯，RT §23.1）→ 全市场 Feature Run + Market Regime
   → Evidence 增量（24h 窗口，RT §7.2 Step 09）
   → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11，
-    RawOpp 由 RunMultiRecallService.publish 一并落库）；
-- 独立每日维护链：Corporate Action Match、Projection Verify。
+    RawOpp 由 RunMultiRecallService.publish 一并落库）
+  → Candidate Scan（R2.1-P1-02，候选扫描；与 Full Recall 并行）；
+- 独立每日维护链：Corporate Action Match、Projection Verify、
+  Candidate Outcome Mature（R2.1-P1-03，历史 PENDING scan 批量成熟）。
 
 每个 Job 的运行记录（status/as_of/known_at/attempt/error/metrics）由
 Orchestrator 落库到 v3.orchestrator_job_runs；按交易日幂等，重复执行
@@ -51,6 +53,7 @@ from app.v3.application.mature_recall_observations import (
     MatureRecallObservationsService,
     RecallMissThreshold,
 )
+from app.v3.application.mature_scan_outcomes import MatureScanOutcomesService
 from app.v3.application.register_expected_task import RegisterExpectedTaskService
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.release_resolver import ReleaseResolver
@@ -61,6 +64,7 @@ from app.v3.application.run_evidence_registry import (
 )
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.run_multi_recall import RunMultiRecallService
+from app.v3.application.scan_universe import UniverseScanOrchestrator
 from app.v3.application.shadow_executor import ShadowExecutorService
 from app.v3.application.verify_position_projections import (
     VerifyPositionProjectionsService,
@@ -186,6 +190,16 @@ def build_orchestrators(
 
     eastmoney = EastmoneyProvider(settings)
 
+    # R2.1-P1-02：candidate-scan 的 60m Deep 数据源与盘中循环同源
+    # （ProviderManager 东财/腾讯 fallback），只抓 Machine Top120
+    candidate_scan_deep_service = DeepMarketDataService(
+        ProviderManager(
+            eastmoney,
+            TencentProvider(settings, DataQualityService()),
+        ),
+        source="legacy-provider",
+    )
+
     async def market_data_handler(context) -> dict:
         report = await execute_market_job(
             build_job_parser().parse_args(["--mode", "all"])
@@ -303,6 +317,57 @@ def build_orchestrators(
             "failed_channel_count": run.failed_channel_count,
             "hit_security_count": run.hit_security_count,
         }
+
+    async def candidate_scan_handler(context) -> dict:
+        """R2.1-P1-02（任务书 §10）：候选扫描进主链。
+
+        数据依赖 = market-data（Universe）→ features（特征行/PIT）→
+        evidence-increment（PIT 证据）；full-recall 是独立 Recall 通道、
+        非本 Job 输入，二者可并行（任务书 §10 允许）。PIT 一致：显式
+        传同一编排 features Job 的 feature_run_id（同 market_date/同一
+        as_of）。幂等：同上海交易日同 strategy/parameter 版本已有
+        PUBLISHED scan → already_scanned，绝不静默创建重复 Published
+        Scan。mode=V2 时本 Job 随策略链被 Release Gate 排除；Research
+        Shadow 开启时照常执行，仅产出扫描数据事实，无任何 Trade
+        side effects。
+        """
+        feature_run_id = await _resolve_feature_run_id(context)
+        async with context.uow_factory() as uow:
+            summary = await UniverseScanOrchestrator(
+                deep_service=candidate_scan_deep_service,
+            ).execute(
+                uow,
+                as_of=context.as_of,
+                feature_run_id=UUID(feature_run_id),
+            )
+            if summary.get("status") == "ok":
+                await uow.commit()
+        return {
+            "status": summary.get("status"),
+            "scan_run_id": summary.get("scan_run_id"),
+            "feature_run_id": summary.get("feature_run_id"),
+            "final_count": summary.get("final_count"),
+            "minute60_fetched": summary.get("minute60_fetched"),
+            "minute60_usable": summary.get("minute60_usable"),
+            "m60_available": summary.get("m60_available"),
+            "m60_stale": summary.get("m60_stale"),
+            "m60_error": summary.get("m60_error"),
+            "market_regime_score": summary.get("market_regime_score"),
+        }
+
+    async def candidate_outcome_mature_handler(context) -> dict:
+        """R2.1-P1-03（任务书 §11）：候选 Outcome 批量成熟进维护链。
+
+        绝不只成熟 latest scan：查所有仍 PENDING（无 outcome 行或存在
+        NULL label 行）且已过 ≥20 未来交易日保守窗口（45 自然日）的
+        历史 scan 补跑——此前成熟失败的今日必须能补上。已 MATURED 行
+        不可变（upsert WHERE label IS NULL），revision 语义由"首评不可
+        变"承载；batch_limit 按 scan 分批（V3_CANDIDATE_MATURE_BATCH_LIMIT）。
+        """
+        service = MatureScanOutcomesService()
+        return await service.execute_pending(
+            context.uow_factory, as_of=context.as_of,
+        )
 
     async def index_benchmarks_handler(context) -> dict:
         service = IngestIndexBenchmarksService(
@@ -516,6 +581,13 @@ def build_orchestrators(
                 job_id="full-recall", handler=full_recall_handler,
                 depends_on=("evidence-increment",),
             ),
+            # R2.1-P1-02（任务书 §10）：候选扫描——依赖 evidence-increment，
+            # 与 full-recall 并行（Recall Run 非其输入）；策略链成员，
+            # mode=V2 无 Research Shadow 时被 Release Gate 排除
+            JobDefinition(
+                job_id="candidate-scan", handler=candidate_scan_handler,
+                depends_on=("evidence-increment",),
+            ),
         ),
         advisory_lock_key="v3-scheduler-main",
     )
@@ -545,6 +617,12 @@ def build_orchestrators(
             JobDefinition(
                 job_id="expected-run-registry",
                 handler=expected_run_registry_handler,
+            ),
+            # R2.1-P1-03（任务书 §11）：候选 Outcome 批量成熟（历史
+            # PENDING scan 补跑，MATURED 不可变）
+            JobDefinition(
+                job_id="candidate-outcome-mature",
+                handler=candidate_outcome_mature_handler,
             ),
         ),
         advisory_lock_key="v3-scheduler-maintenance",

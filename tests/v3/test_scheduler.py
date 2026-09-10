@@ -42,12 +42,13 @@ def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
     )
     assert main.execution_order() == (
         "market-data", "index-benchmarks", "features",
-        "evidence-increment", "full-recall",
+        "evidence-increment", "candidate-scan", "full-recall",
     )
     assert set(maintenance.execution_order()) == {
         "corporate-action-match", "projection-verify",
         "performance-mature", "recall-observation-mature",
         "shadow-observation", "expected-run-registry",
+        "candidate-outcome-mature",
     }
 
 
@@ -707,3 +708,345 @@ def test_annotate_catchup_runs_marks_historical_dates() -> None:
     ]
     assert annotated[0]["idempotency_key"] == "2026-09-01"
     assert runs[0] == {"status": "COMPLETED", "idempotency_key": "2026-09-01"}
+
+
+# --- R2.1-P1-02/P1-03：candidate-scan / candidate-outcome-mature Job ---
+
+
+def _commit_uow_factory(calls: dict | None = None):
+    """带 commit 计数的 fake UoW 工厂（handler 测试用）。"""
+    seen = calls if calls is not None else {}
+
+    class _Uow:
+        async def __aenter__(self):
+            seen["entered"] = seen.get("entered", 0) + 1
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            seen["commits"] = seen.get("commits", 0) + 1
+
+    def factory():
+        return _Uow()
+
+    return factory, seen
+
+
+def _job_context(uow_factory, *, artifacts=None):
+    from datetime import timezone
+
+    from app.v3.jobs.orchestrator import JobContext
+
+    return JobContext(
+        trade_date=datetime(2026, 9, 2).date(),
+        as_of=datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc),
+        uow_factory=uow_factory,
+        artifacts=artifacts or {},
+    )
+
+
+def test_candidate_scan_handler_runs_scan_with_pit_feature_run(monkeypatch) -> None:
+    """Test A（§12）：candidate-scan Job 接入主链——handler 用同一编排
+    features Job 的 feature_run_id（PIT 一致），扫描成功后提交 UoW。"""
+    import asyncio
+    from datetime import timezone
+
+    module = _scheduler_module()
+    factory, seen = _commit_uow_factory()
+    calls: dict = {}
+
+    class _FakeScanOrchestrator:
+        def __init__(self, *, deep_service=None):
+            calls["deep_service"] = deep_service
+
+        async def execute(self, uow, *, as_of=None, feature_run_id=None, **kwargs):
+            calls["as_of"] = as_of
+            calls["feature_run_id"] = feature_run_id
+            return {
+                "status": "ok",
+                "scan_run_id": "cccccccc-dddd-eeee-ffff-000000000001",
+                "feature_run_id": str(feature_run_id),
+                "final_count": 30,
+                "minute60_fetched": 120,
+                "minute60_usable": 100,
+                "m60_available": 100,
+                "m60_stale": 3,
+                "m60_error": 1,
+                "market_regime_score": 62.5,
+            }
+
+    monkeypatch.setattr(module, "UniverseScanOrchestrator", _FakeScanOrchestrator)
+    artifacts = {"features": {"feature_run_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}
+    context = _job_context(factory, artifacts=artifacts)
+    assert context.as_of.tzinfo is timezone.utc
+    handler = module.build_orchestrators(
+        "postgresql+asyncpg://invalid"
+    )[0]._jobs["candidate-scan"].handler
+    metrics = asyncio.run(handler(context))
+
+    # PIT 一致：显式传同编排 features 产物
+    assert str(calls["feature_run_id"]) == artifacts["features"]["feature_run_id"]
+    assert calls["as_of"] == context.as_of
+    assert calls["deep_service"] is not None  # 60m 抓取真实接线
+    assert metrics["status"] == "ok"
+    assert metrics["scan_run_id"] == "cccccccc-dddd-eeee-ffff-000000000001"
+    assert seen.get("commits") == 1  # 扫描成功必须提交
+
+
+def test_candidate_scan_skipped_when_features_failed() -> None:
+    """Test B（§12）：features 失败 → candidate-scan=SKIPPED
+    （DEPENDENCY_FAILED），不拿旧 Feature Run 偷跑。"""
+    import asyncio
+    from uuid import uuid4
+
+    from app.v3.jobs.orchestrator import JobDefinition, Orchestrator
+    from tests.v3.test_orchestrator_retry_fallback import _FakeOrchRepo, _FakeUow
+
+    async def features_handler(context):
+        raise RuntimeError("features upstream broken")
+
+    async def ok_handler(context):
+        return {"status": "ok"}
+
+    candidate_calls: list = []
+
+    async def candidate_handler(context):
+        candidate_calls.append(context)
+        return {"status": "ok"}
+
+    orchestrator = Orchestrator(
+        lambda: _FakeUow(_FakeOrchRepo()),
+        (
+            JobDefinition(job_id="features", handler=features_handler),
+            JobDefinition(
+                job_id="evidence-increment", handler=ok_handler,
+                depends_on=("features",),
+            ),
+            JobDefinition(
+                job_id="candidate-scan", handler=candidate_handler,
+                depends_on=("evidence-increment", "features"),
+            ),
+        ),
+    )
+    from datetime import date as _date
+
+    report = asyncio.run(orchestrator.execute(
+        trade_date=_date(2026, 9, 2),
+    ))
+    by_job = {job["job_id"]: job for job in report["jobs"]}
+    assert by_job["features"]["status"] == "FAILED"
+    assert by_job["candidate-scan"]["status"] == "SKIPPED"
+    assert by_job["candidate-scan"]["error_type"] == "DEPENDENCY_FAILED"
+    assert not candidate_calls, "features 失败时 candidate-scan 绝不偷跑"
+
+
+def test_candidate_scan_v2_research_shadow_no_trade_side_effects(monkeypatch) -> None:
+    """Test C（§12）：mode=V2 + Research Shadow 时 candidate-scan 可执行，
+    仅产出扫描数据事实——绝不触碰 Trade 相关存储。"""
+    import asyncio
+
+    module = _scheduler_module()
+    touched: set[str] = set()
+
+    class _ProbeUow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+        @property
+        def scans(self):
+            touched.add("scans")
+            return _ProbeScans()
+
+        @property
+        def trades(self):  # pragma: no cover —— 触碰即失败
+            touched.add("trades")
+            raise AssertionError("candidate-scan 不得产生 Trade side effects")
+
+        @property
+        def trade_drafts(self):  # pragma: no cover
+            touched.add("trade_drafts")
+            raise AssertionError("candidate-scan 不得产生 TradeDraft")
+
+    class _ProbeScans:
+        async def published_run_on(self, as_of, **kwargs):
+            return None
+
+    class _FakeScanOrchestrator:
+        def __init__(self, *, deep_service=None):
+            pass
+
+        async def execute(self, uow, **kwargs):
+            uow.scans  # 触碰 scans（真实扫描会读写），Trade 探针在 property 里
+            return {"status": "ok", "scan_run_id": "s1"}
+
+    monkeypatch.setattr(module, "UniverseScanOrchestrator", _FakeScanOrchestrator)
+    monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _ProbeUow())
+    handler = module.build_orchestrators(
+        "postgresql+asyncpg://invalid"
+    )[0]._jobs["candidate-scan"].handler
+    # artifacts 提供 feature_run_id → _resolve_feature_run_id 不触 features repo
+    context = _job_context(
+        _ProbeUow,
+        artifacts={"features": {"feature_run_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}},
+    )
+    metrics = asyncio.run(handler(context))
+    assert metrics["status"] == "ok"
+    assert "trades" not in touched and "trade_drafts" not in touched
+    assert touched == {"scans"}
+
+
+def test_candidate_outcome_mature_processes_multiple_pending_scans(monkeypatch) -> None:
+    """Test D（§12）：mature Job 处理多个历史 PENDING scan——绝不只
+    成熟 latest；此前失败的历史 scan 今日补跑。"""
+    import asyncio
+    from uuid import uuid4
+
+    module = _scheduler_module()
+    id_a, id_b = uuid4(), uuid4()
+    service_calls: list = []
+
+    class _FakeMatureService:
+        async def execute_pending(self, uow_factory, *, as_of=None, batch_limit=None):
+            service_calls.append({
+                "as_of": as_of, "batch_limit": batch_limit,
+                "uow_factory": uow_factory,
+            })
+            return {
+                "status": "ok",
+                "candidate_count": 2,
+                "processed_count": 2,
+                "matured_scans": 1,
+                "pending_count": 1,
+                "matured_labels": 5,
+                "pending_labels": 3,
+                "error_count": 0,
+                "errors": [],
+                "_scan_ids": [id_a, id_b],
+            }
+
+    monkeypatch.setattr(module, "MatureScanOutcomesService", _FakeMatureService)
+    factory, seen = _commit_uow_factory()
+    handler = module.build_orchestrators(
+        "postgresql+asyncpg://invalid"
+    )[1]._jobs["candidate-outcome-mature"].handler
+    metrics = asyncio.run(handler(_job_context(factory)))
+
+    assert metrics["status"] == "ok"
+    assert metrics["processed_count"] == 2  # 多个历史 scan 都被处理
+    assert metrics["matured_scans"] == 1 and metrics["pending_count"] == 1
+    assert service_calls[0]["as_of"] is not None
+    assert service_calls[0]["uow_factory"] is factory
+
+
+def test_candidate_outcome_mature_single_scan_failure_isolated(monkeypatch) -> None:
+    """Test D 补充（§11）：批量补跑单 scan 失败隔离，其余 scan 照常
+    成熟（此前失败的历史 scan 今日必须能补上）。"""
+    import asyncio
+    from uuid import uuid4
+
+    from app.v3.application.mature_scan_outcomes import MatureScanOutcomesService
+
+    id_bad, id_good = uuid4(), uuid4()
+    executed: list = []
+
+    async def fake_execute(self, scans, *, scan_id=None):
+        executed.append(scan_id)
+        if scan_id == id_bad:
+            raise RuntimeError("bars unavailable")
+        return {"status": "ok", "matured": 5, "pending": 0}
+
+    class _FakeScans:
+        async def pending_mature_scan_ids(self, *, older_than, limit):
+            return [id_bad, id_good]
+
+    class _Uow:
+        scans = _FakeScans()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+    service = MatureScanOutcomesService()
+    original = MatureScanOutcomesService.execute
+    MatureScanOutcomesService.execute = fake_execute
+    try:
+        from datetime import timezone as _tz
+
+        report = asyncio.run(service.execute_pending(
+            lambda: _Uow(),
+            as_of=datetime(2026, 9, 2, 10, 0, tzinfo=_tz.utc),
+        ))
+    finally:
+        MatureScanOutcomesService.execute = original
+
+    assert executed == [id_bad, id_good]  # 失败不阻断后续 scan
+    assert report["processed_count"] == 1
+    assert report["matured_scans"] == 1
+    assert report["error_count"] == 1
+    assert report["errors"][0]["scan_run_id"] == str(id_bad)
+
+
+def test_candidate_outcome_mature_batch_limit_and_pending_window(monkeypatch) -> None:
+    """Test E（§12）：batch_limit 分批生效；候选窗口 = as_of−45 自然日
+    （20 未来交易日保守上界）——窗口内观察窗不足的 scan 保持 PENDING
+    （pending_count 如实计数，绝不伪装成熟）。"""
+    import asyncio
+    from datetime import timedelta
+    from datetime import timezone as tz
+    from uuid import uuid4
+
+    from app.v3.application.mature_scan_outcomes import MatureScanOutcomesService
+
+    as_of = datetime(2026, 9, 2, 10, 0, tzinfo=tz.utc)
+    seen_windows: list = []
+
+    class _FakeScans:
+        async def pending_mature_scan_ids(self, *, older_than, limit):
+            seen_windows.append({"older_than": older_than, "limit": limit})
+            return [uuid4()]
+
+    class _Uow:
+        scans = _FakeScans()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+    async def fake_execute(self, scans, *, scan_id=None):
+        # 观察窗不足 20 交易日 → 该 scan 保持 PENDING（label=None）
+        return {"status": "ok", "matured": 0, "pending": 5}
+
+    service = MatureScanOutcomesService()
+    original = MatureScanOutcomesService.execute
+    MatureScanOutcomesService.execute = fake_execute
+    try:
+        report = asyncio.run(service.execute_pending(
+            lambda: _Uow(), as_of=as_of, batch_limit=3,
+        ))
+    finally:
+        MatureScanOutcomesService.execute = original
+
+    assert seen_windows[0]["limit"] == 3
+    # 45 自然日保守窗口：观察窗不足（<20 未来交易日）的 scan 不会进窗口
+    assert seen_windows[0]["older_than"] == as_of - timedelta(days=45)
+    assert report["matured_scans"] == 0
+    assert report["pending_count"] == 1  # 保持 PENDING，不伪装成熟
+    assert report["pending_labels"] == 5

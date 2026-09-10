@@ -15,6 +15,8 @@ assemble → run_to_machine（Safety→Recall→Pareto→Machine Top120）
 60m 为抓取时点事实：stale/UNTRUSTED 不当事实（§19.6）；provider
 失败逐股降级 missing，不阻断扫描。mature 回填由 run_mature_backfill
 在观察期后执行。调用方负责 UoW 提交（编排器内不 commit）。
+R2.1-P1-02：同上海交易日同版本幂等（already_scanned，§10.5），
+操作员强制重扫 force=True。
 """
 
 from __future__ import annotations
@@ -81,10 +83,33 @@ class UniverseScanOrchestrator:
         *,
         as_of: datetime | None = None,
         feature_run_id=None,
+        strategy_version: str = "v3",
+        parameter_version: str = "v1",
+        force: bool = False,
     ) -> dict:
         """feature_run_id 显式指定时跳过 latest_run（操作员决策通道，
-        例如最新 run 头数据异常但特征行有效）。"""
+        例如最新 run 头数据异常但特征行有效）。
+
+        R2.1-P1-02（任务书 §10.5）幂等：同上海交易日同
+        strategy/parameter 版本已有 PUBLISHED scan → 返回
+        already_scanned（携带既有 scan_run_id），不静默创建重复
+        Published Scan；操作员强制重扫走 force=True。
+        """
         as_of = as_of or _default_as_of()
+
+        if not force:
+            existing = await uow.scans.published_run_on(
+                as_of,
+                strategy_version=strategy_version,
+                parameter_version=parameter_version,
+            )
+            if existing is not None:
+                return {
+                    "status": "already_scanned",
+                    "scan_run_id": str(existing.scan_run_id),
+                    "strategy_version": strategy_version,
+                    "parameter_version": parameter_version,
+                }
 
         snapshot = await uow.universes.latest()
         if snapshot is None:
@@ -108,7 +133,11 @@ class UniverseScanOrchestrator:
             ))
 
         # P1-01 Phase A：Safety→Recall→Pareto→Machine Top120
-        state = self._pipeline.run_to_machine(candidates, stocks, trade_date=as_of)
+        state = self._pipeline.run_to_machine(
+            candidates, stocks, trade_date=as_of,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+        )
 
         # Phase B 数据注入：60m（Top120 限并发）+ Regime（feature_run_id PIT）
         deep_context = await self._build_deep_context(
