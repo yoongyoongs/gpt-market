@@ -27,6 +27,7 @@ __all__ = [
     "risk_reward_score",
     "structure_levels_from_features",
     "structure_levels_from_minute60",
+    "merge_structure_levels",
 ]
 
 # 设计 §17.5 评分锚点：(RR, score)
@@ -100,6 +101,7 @@ def _level_from_distance(
         return None
     return StructureLevel(
         price=round(price, 6), type=level_type,
+        source="FEATURE_ROW",
         as_of=view.as_of, confidence=_LEVEL_CONFIDENCE[level_type],
     )
 
@@ -148,10 +150,31 @@ def structure_levels_from_minute60(
             continue
         levels.append(StructureLevel(
             price=round(price, 6), type=level_type,
+            source="DEEP_MARKET_DATA",
             as_of=as_of or fact.get("known_at"),
             confidence=_LEVEL_CONFIDENCE[level_type],
         ))
     return tuple(levels)
+
+
+def merge_structure_levels(
+    *groups: tuple[StructureLevel, ...] | list[StructureLevel],
+) -> tuple[StructureLevel, ...]:
+    """P1-01：多源结构候选合并（R2.1 任务书 §9.2 Deep 阶段）。
+
+    传入顺序即优先序（60m 抓取事实先于特征行反推）；
+    按 (type, price) 去重、同键保留先到者——去重不改 provenance。
+    """
+    merged: list[StructureLevel] = []
+    seen: set[tuple[str, float]] = set()
+    for group in groups:
+        for level in group:
+            key = (level.type, round(level.price, 6))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(level)
+    return tuple(merged)
 
 
 def _pick(

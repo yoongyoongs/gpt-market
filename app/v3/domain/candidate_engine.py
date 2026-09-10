@@ -351,6 +351,8 @@ class StructureLevel(V3Contract):
 
     price: float = Field(gt=0)
     type: str
+    # R2.1-P1-01：来源系统——FEATURE_ROW（特征行反推）/ DEEP_MARKET_DATA（60m 抓取）
+    source: str | None = None
     as_of: datetime | None = None
     confidence: float = Field(default=0.5, ge=0, le=1)
 

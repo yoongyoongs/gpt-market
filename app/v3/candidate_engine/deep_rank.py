@@ -147,7 +147,8 @@ class DeepRankService:
                 "minute_60_execution": m60_norm,
                 "market_regime": item.get("market_regime_score"),
                 "industry_context": None,  # P1-03：无可靠源恒 missing
-                "risk_reward_refined": item.get("rr_score"),
+                # R2.1-P1-01：Deep 用 RiskRewardRefined（merge levels 重评估）
+                "risk_reward_refined": item.get("rr_refined_score"),
             }
             parts = [
                 (name, WEIGHTS[name], None if raws[name] is None else raws[name] / 100.0)
@@ -183,6 +184,9 @@ class DeepRankService:
                 "risk_reward_refined": self._detail(raws["risk_reward_refined"],
                                                     WEIGHTS["risk_reward_refined"], "rr_engine"),
             }
+            # R2.1-P1-01：实际采用的结构位（含 provenance）进 Why Not 证据
+            if item.get("rr_levels"):
+                components_detail["risk_reward_refined"]["levels"] = item["rr_levels"]
             ranked.append((round(value, 4), item["code"], item["security_id"], {
                 "confidence": confidence,
                 "conflict": conflict,

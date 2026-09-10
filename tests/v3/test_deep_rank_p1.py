@@ -217,7 +217,7 @@ class TestComponentsDetail:
         assert detail["missing"] is True
 
     def test_rr_component_source(self):
-        item = _deep_item(rr_score=70.0)
+        item = _deep_item(rr_refined_score=70.0)
         entry = DeepRankService().execute([item]).entries[0]
         detail = entry.components_detail["risk_reward_refined"]
         assert detail["source"] == "rr_engine"
@@ -388,3 +388,113 @@ class TestDeepFullPoolTrace:
         # Deep #61~120：无 FINAL 行（死在 DEEP，从未进 Final 候选池）
         tail = result.entries[63]
         assert traces[tail.security_id].stage("FINAL") is None
+
+
+# ---------------------------------------------------------------------------
+# R2.1-P1-01：结构化 RR 真正接入 Machine/Deep 主链
+# ---------------------------------------------------------------------------
+
+
+from app.v3.candidate_engine.risk_reward import RiskRewardService
+
+
+class _SpyRR(RiskRewardService):
+    """记录每次 evaluate 收到的 levels（Machine/Deep 接线断言用）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.calls: list = []
+
+    def evaluate(self, view, levels=None):
+        self.calls.append(levels)
+        return super().evaluate(view, levels=levels)
+
+
+class TestStructuredRRWiring:
+    def test_merge_levels_dedupe_and_provenance(self):
+        from datetime import datetime, timezone
+
+        from app.v3.candidate_engine.risk_reward import (
+            merge_structure_levels,
+            structure_levels_from_minute60,
+        )
+        from app.v3.domain.candidate_engine import StructureLevel
+
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        m60 = structure_levels_from_minute60(
+            {"support": 9.0, "resistance": 12.0, "known_at": now}
+        )
+        feat = (
+            StructureLevel(price=9.0, type="SWING_LOW_60M",
+                           source="FEATURE_ROW", as_of=now),
+        )
+        merged = merge_structure_levels(m60, feat)
+        # 同 (type, price) 去重：60m 先到保留（provenance=DEEP_MARKET_DATA）
+        assert len(merged) == 2
+        lows = [lv for lv in merged if lv.type == "SWING_LOW_60M"]
+        assert len(lows) == 1
+        assert lows[0].source == "DEEP_MARKET_DATA"
+        assert lows[0].as_of == now
+        # 顺序：60m 组在前
+        assert merged[0].type == "SWING_LOW_60M"
+        assert merged[1].type == "SWING_HIGH_60M"
+
+    def test_minute60_levels_require_known_at_for_replay(self):
+        from app.v3.candidate_engine.risk_reward import structure_levels_from_minute60
+
+        levels = structure_levels_from_minute60(
+            {"support": 9.0, "resistance": 12.0, "known_at": None}
+        )
+        # §9.3：无 known_at 的外部分钟结构不能用于历史回放——as_of=None 保留
+        assert all(level.as_of is None for level in levels)
+
+    def test_machine_stage_passes_feature_levels(self):
+        candidates = _universe()
+        pipeline = CandidatePipeline()
+        spy = _SpyRR()
+        pipeline._risk_reward = spy
+        pipeline.execute(candidates, _stocks_by_id(candidates), trade_date=NOW)
+        assert spy.calls, "Machine 阶段应调用 RR"
+        # 只有 Machine 接线路径传 feature levels（Pareto 维度仍是 v1 调用）
+        feature_calls = [levels for levels in spy.calls if levels]
+        assert feature_calls, "Machine 阶段应注入特征行结构候选"
+        assert all(
+            lv.source == "FEATURE_ROW"
+            for levels in feature_calls for lv in levels
+        )
+
+    def test_deep_stage_uses_merged_levels_with_provenance(self):
+        candidates = _universe()
+        stocks = _stocks_by_id(candidates)
+        pipeline = CandidatePipeline()
+        state = pipeline.run_to_machine(candidates, stocks, trade_date=NOW)
+        top_id = state.machine.entries[0].security_id
+        context = DeepContext(minute_60_by_id={
+            top_id: Minute60Fact(
+                state="UP", support=9.0, resistance=12.0, known_at=NOW,
+            )
+        })
+        result = pipeline.complete_deep(state, deep_context=context)
+        entry = next(
+            e for e in result.deep.entries if e.security_id == top_id
+        )
+        detail = entry.components_detail["risk_reward_refined"]
+        levels = detail["levels"]
+        # 60m swing 位被实际采用（优先级 0 > 特征行 MA/区间）
+        sources = {lv["source"] for lv in levels}
+        assert "DEEP_MARKET_DATA" in sources
+        for lv in levels:
+            if lv["source"] == "DEEP_MARKET_DATA":
+                assert lv["as_of"] == NOW
+
+    def test_deep_without_minute60_falls_back_to_feature_levels(self):
+        candidates = _universe()
+        result = CandidatePipeline().execute(
+            candidates, _stocks_by_id(candidates), trade_date=NOW,
+        )
+        for entry in result.deep.entries:
+            detail = entry.components_detail["risk_reward_refined"]
+            if detail.get("levels"):
+                assert all(
+                    lv["source"] == "FEATURE_ROW" for lv in detail["levels"]
+                )

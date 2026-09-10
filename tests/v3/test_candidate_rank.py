@@ -323,7 +323,7 @@ class TestDeepRank:
         item = _deep_item(
             weekly_state="UP",
             daily_state="UP",
-            rr_score=80.0,
+            rr_refined_score=80.0,
         )
         result = DeepRankService().execute([item])
         entry = result.entries[0]
