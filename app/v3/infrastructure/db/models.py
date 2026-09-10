@@ -2404,7 +2404,8 @@ class OutcomeLabelModel(Base):
 
     __tablename__ = "outcome_labels"
     __table_args__ = (
-        CheckConstraint("label IS NULL OR label IN ('A','B','C')", name="valid_label"),
+        # R2.1-P0-03：NONE=成熟负样本（status=MATURED）；NULL=未成熟 PENDING
+        CheckConstraint("label IS NULL OR label IN ('A','B','C','NONE')", name="valid_label"),
         UniqueConstraint("scan_run_id", "code", name="uq_outcome_labels_run_code"),
         {"schema": V3_SCHEMA},
     )

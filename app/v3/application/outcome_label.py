@@ -8,7 +8,9 @@ T 日扫描收盘为基准，取其后 ≤20 个交易日日K：
   A: MFE20≥15% 且触及 +15% 前回撤 ≥-5% 且 ≤15 交易日
   B: MFE20≥10% 且触及 +10% 前回撤 ≥-6% 且 ≤15 交易日
   C: MFE20≥8% 且 MAE20 ≥-8%
+  NONE: 成熟但普通走势（R2.1-P0-03，status=MATURED）
 GOOD_OPPORTUNITY = A or B。
+status 语义：PENDING=未来不足 20 根（label=None）/ MATURED=已成熟（label 必非 None）。
 
 纯函数式：bars 以 (high, low) 序列传入，不触碰数据库。
 """
@@ -68,18 +70,34 @@ class OutcomeLabelService:
         *,
         security_id=None,
     ) -> OutcomeLabelResult:
-        """future_bars: 按交易日升序的 (high, low) 序列（≤horizon 截断）。"""
+        """future_bars: 按交易日升序的 (high, low) 序列（≤horizon 截断）。
+
+        R2.1-P0-03：status=MATURED 且不达标 → label="NONE"（成熟负样本），
+        不再与 status=PENDING（未来不足 20 根 → label=None）混淆。
+        """
         t = self._t
         if not close_t or close_t <= 0:
             # 无 T 日基准（停牌/数据缺失）：不给评级，宁可 PENDING 不可猜
             return OutcomeLabelResult(
                 code=code, security_id=security_id, close_t=None,
-                label=None, bars_used=0,
+                status="PENDING", label=None, bars_used=0,
             )
         bars = future_bars[: t.horizon]
         stats = self._stats(close_t, bars)
 
-        label = self._grade(close_t, bars, stats)
+        if len(bars) < t.horizon:
+            # 观察窗不完整：PENDING，不给评级不可猜测（§5.4）
+            return OutcomeLabelResult(
+                code=code,
+                security_id=security_id,
+                close_t=close_t,
+                mfe_5=stats.mfe_5, mfe_10=stats.mfe_10, mfe_20=stats.mfe_20,
+                mae_5=stats.mae_5, mae_10=stats.mae_10, mae_20=stats.mae_20,
+                time_to_8=stats.time_to_8, time_to_10=stats.time_to_10,
+                time_to_15=stats.time_to_15,
+                status="PENDING", label=None, bars_used=len(bars),
+            )
+        label = self._grade(close_t, bars, stats) or "NONE"
         return OutcomeLabelResult(
             code=code,
             security_id=security_id,
@@ -88,8 +106,7 @@ class OutcomeLabelService:
             mae_5=stats.mae_5, mae_10=stats.mae_10, mae_20=stats.mae_20,
             time_to_8=stats.time_to_8, time_to_10=stats.time_to_10,
             time_to_15=stats.time_to_15,
-            label=label,
-            bars_used=len(bars),
+            status="MATURED", label=label, bars_used=len(bars),
         )
 
     def _stats(self, close_t: float, bars: list[tuple[float, float]]) -> _MfeMae:
@@ -120,9 +137,10 @@ class OutcomeLabelService:
         )
 
     def _grade(self, close_t: float, bars: list[tuple[float, float]], stats: _MfeMae) -> str | None:
+        """A/B/C/None（None=成熟但普通走势，evaluate 层转 MATURED/NONE）。"""
         t = self._t
         if len(bars) < t.horizon:
-            return None  # 观察窗不完整：不给评级，宁可 PENDING 不可猜测
+            return None  # 防御：evaluate 已保证完整窗才调用
 
         highs = [high / close_t - 1.0 for high, _ in bars]
         lows = [low / close_t - 1.0 for _, low in bars]

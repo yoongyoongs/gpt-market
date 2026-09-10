@@ -61,8 +61,8 @@ def evaluate_reversal_evidence(item: dict) -> bool:
     return base
 
 _STATE_SCORE = {"UP": 90.0, "FLAT": 60.0, "DOWN": 30.0}
-# P1-01 §19.5：60m 状态 → 执行分
-_MINUTE60_STATE_SCORE = {"UP": 90.0, "SIDEWAYS": 60.0, "DOWN": 30.0, "UNKNOWN": None}
+# P1-01 §19.5：60m 状态 → 执行分（R2.1-P0-01 §3.5：RANGE 同 SIDEWAYS=60）
+_MINUTE60_STATE_SCORE = {"UP": 90.0, "SIDEWAYS": 60.0, "RANGE": 60.0, "DOWN": 30.0, "UNKNOWN": None}
 _MINUTE60_TRUSTED_QUALITY = "UNTRUSTED"  # 该 quality 一律不可当事实
 
 

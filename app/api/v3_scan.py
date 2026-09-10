@@ -14,7 +14,13 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.v3 import _uow
 from app.v3.application.backtest_metrics import BacktestMetricsService
-from app.v3.domain.candidate_engine import GOOD_LABELS, OutcomeLabelResult, TRACE_STAGES
+from app.v3.domain.candidate_engine import (
+    GOOD_LABELS,
+    MATURED_LABELS,
+    OutcomeLabelResult,
+    TRACE_STAGES,
+    status_from_label,
+)
 
 router = APIRouter(prefix="/api/v3", tags=["V3 Scan"])
 
@@ -206,8 +212,13 @@ async def backtest_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
             "pareto_pool": await _pool("PARETO"),
         }
         label_rows = await uow.scans.outcome_labels(run.scan_run_id)
+        # R2.1-P0-03：DB 行 → status（label NULL=PENDING；A/B/C/NONE=MATURED）
         labels = [
-            OutcomeLabelResult(code=row.code, label=row.label) for row in label_rows
+            OutcomeLabelResult(
+                code=row.code, label=row.label,
+                status=status_from_label(row.label),
+            )
+            for row in label_rows
         ]
         result = BacktestMetricsService().compute(
             labels, pools,
@@ -219,12 +230,14 @@ async def backtest_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
             scan_id=run.scan_run_id,
             eligible_codes={row.code for row in eligible_rows},
         )
-        metrics_status = "PENDING" if not label_rows else "OK"
+        # R2.1-P0-04：顶层三态由 matured_count 驱动（禁"label rows 存在=OK"）
         return {
             "scan_id": str(run.scan_run_id),
             "good_count": result.good_count,
             "labeled_count": result.labeled_count,
-            "status": metrics_status,
+            "status": result.status,
+            "matured_count": result.matured_count,
+            "pending_count": result.pending_count,
             "metrics": [
                 {
                     "metric": entry.metric,
@@ -239,7 +252,7 @@ async def backtest_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
                 }
                 for entry in result.entries
             ],
-            "note": None if label_rows else "outcome labels pending maturity window",
+            "note": None if result.status == "OK" else "outcome labels pending maturity window",
         }
 
 
@@ -270,7 +283,11 @@ async def backtest_misses(
 
 @router.get("/shadow/metrics")
 async def shadow_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
-    """影子池对照（§31.2/§32）：各组 GOOD rate + 淘汰原因分布，对照 Final 组。"""
+    """影子池对照（§31.2/§32）：各组 GOOD rate + 淘汰原因分布，对照 Final 组。
+
+    R2.1-P0-05：分母只取 matured_count；未成熟不得显示假 0%——
+    matured=0 → status=PENDING / good_rate=null。
+    """
     async with _uow() as uow:
         run = await _resolve_run(scan_id, uow)
         rows = await uow.scans.shadow_rows(run.scan_run_id)
@@ -279,33 +296,47 @@ async def shadow_metrics(scan_id: UUID | None = Query(default=None)) -> dict:
             run.scan_run_id, stage="FINAL", alive_only=True, limit=100,
         )
         final_labels = [labels.get(row.code) for row in final_rows]
-        final_good = sum(1 for label in final_labels if label in GOOD_LABELS)
+        final_matured = [
+            label for label in final_labels if label in MATURED_LABELS
+        ]
+        final_good = sum(1 for label in final_matured if label in GOOD_LABELS)
+
+        def _summary(count: int, good: int, matured: int) -> dict:
+            pending = count - matured
+            return {
+                "sample_count": count,
+                "matured_count": matured,
+                "pending_count": pending,
+                "good_count": good,
+                "status": "PENDING" if matured == 0 else (
+                    "PARTIAL" if pending else "OK"
+                ),
+                "good_rate": None if matured == 0 else good / matured,
+            }
 
         groups: dict[str, dict] = {}
         for row in rows:
             bucket = groups.setdefault(
                 row.sample_group,
-                {"count": 0, "good": 0, "drop_reasons": {}},
+                {"count": 0, "good": 0, "matured": 0, "drop_reasons": {}},
             )
             bucket["count"] += 1
             label = row.outcome_label or labels.get(row.code)
-            if label in GOOD_LABELS:
-                bucket["good"] += 1
+            if label in MATURED_LABELS:  # A/B/C/NONE=成熟；None=PENDING 不进分母
+                bucket["matured"] += 1
+                if label in GOOD_LABELS:
+                    bucket["good"] += 1
             bucket["drop_reasons"][row.drop_reason] = (
                 bucket["drop_reasons"].get(row.drop_reason, 0) + 1
             )
-        for bucket in groups.values():
-            bucket["good_rate"] = (
-                bucket["good"] / bucket["count"] if bucket["count"] else 0.0
-            )
         return {
             "scan_id": str(run.scan_run_id),
-            "groups": groups,
-            "final_group": {
-                "count": len(final_labels),
-                "good": final_good,
-                "good_rate": final_good / len(final_labels) if final_labels else 0.0,
+            "groups": {
+                name: _summary(bucket["count"], bucket["good"], bucket["matured"])
+                | {"drop_reasons": bucket["drop_reasons"]}
+                for name, bucket in groups.items()
             },
+            "final_group": _summary(len(final_labels), final_good, len(final_matured)),
             "note": None if rows else "shadow pool pending mature backfill",
         }
 

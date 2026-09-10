@@ -445,6 +445,8 @@ class DeepContext(V3Contract):
     industry_missing_reason: str | None = Field(
         default="NO_RELIABLE_INDUSTRY_CONTEXT",
     )
+    # R2.1-P0-01：60m 抓取 Gate 观测（available/missing/stale/error + reason 计数）
+    m60_stats: dict = Field(default_factory=dict)
 
 
 class DeepRankEntry(V3Contract):
@@ -564,13 +566,24 @@ class CandidatePipelineResult(V3Contract):
 # ---------------------------------------------------------------------
 
 GOOD_LABELS = ("A", "B")  # GOOD_OPPORTUNITY = A or B（§26.2）
+MATURED_LABELS = ("A", "B", "C", "NONE")  # label 非 NULL 即成熟（R2.1-P0-03）
+
+
+def status_from_label(label: str | None) -> str:
+    """DB 行 → status：label NULL=PENDING；A/B/C/NONE=MATURED。"""
+    return "MATURED" if label in MATURED_LABELS else "PENDING"
 # P1-05：AI Review 未接真实模型——Final 恒 RAW_TOP30，不得宣称已复核
 AI_REVIEW_STATUS = "NOT_CONNECTED"
 SHADOW_GROUPS = ("near_miss", "single_expert", "random", "other")  # §31.2
 
 
 class OutcomeLabelResult(V3Contract):
-    """单股单次扫描的结果标签（§26.1-§26.2）。"""
+    """单股单次扫描的结果标签（§26.1-§26.2）。
+
+    R2.1-P0-03：status 与 label 语义分离——
+    PENDING（未来不足 20 根）→ label=None；MATURED → label=A/B/C/NONE
+    （成熟负样本显式 NONE，不再与未成熟混淆）。
+    """
 
     code: str
     security_id: UUID | None = None
@@ -584,8 +597,15 @@ class OutcomeLabelResult(V3Contract):
     time_to_8: int | None = Field(default=None, description="首次 +8% 的交易日序（None=未达）")
     time_to_10: int | None = None
     time_to_15: int | None = None
-    label: str | None = Field(default=None, description="A/B/C；None=未达标")
-    bars_used: int = Field(default=0, ge=0, description="可用未来交易日数（<20 时 label 恒 None）")
+    status: str = Field(
+        default="PENDING",
+        description="PENDING（未来不足20根）/ MATURED（已成熟，label 必非 None）",
+    )
+    label: str | None = Field(
+        default=None,
+        description="A/B/C/NONE；None 仅在 status=PENDING 时允许（NONE=成熟负样本）",
+    )
+    bars_used: int = Field(default=0, ge=0, description="可用未来交易日数（<20 时 status 恒 PENDING）")
 
     @property
     def is_good(self) -> bool:
@@ -645,9 +665,17 @@ class ShadowSampleEntry(V3Contract):
 
 
 class BacktestMetricsResult(V3Contract):
-    """一次扫描的 Recall/Precision/NDCG 汇总（§27-§29）。"""
+    """一次扫描的 Recall/Precision/NDCG 汇总（§27-§29）。
+
+    R2.1-P0-04：顶层三态按 matured_count 判——
+    PENDING（成熟样本 0）/ PARTIAL（部分成熟）/ OK（全部成熟）；
+    指标分母只允许 status=MATURED 的 outcome。
+    """
 
     scan_id: UUID | None = None
     good_count: int = Field(ge=0, description="Universe 中 GOOD_OPPORTUNITY 总数")
     labeled_count: int = Field(ge=0, description="已出标签的股票数")
+    status: str = Field(default="PENDING", description="PENDING/PARTIAL/OK")
+    matured_count: int = Field(default=0, ge=0, description="status=MATURED 的 outcome 数")
+    pending_count: int = Field(default=0, ge=0, description="status=PENDING 的 outcome 数")
     entries: tuple[MetricsEntry, ...] = ()

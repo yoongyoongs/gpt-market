@@ -272,7 +272,9 @@ class SQLAlchemyScanRepository:
             .join(MarketBarModel, MarketBarModel.revision_id == ranked.c.revision_id)
             .where(
                 ranked.c.rn == 1,
-                MarketBarModel.bar_time > since,
+                # R2.1-P0-02：>= 含 T 日首根（日K bar_time==since=T日00:00），
+                # 此前 > 把 T 日排除 → _split_t_day 拿不到 close_T → 永远 PENDING
+                MarketBarModel.bar_time >= since,
                 MarketBarModel.bar_time < window_end,
             )
             .order_by(ranked.c.security_id, MarketBarModel.bar_time)

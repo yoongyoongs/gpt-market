@@ -111,8 +111,9 @@ async def test_mature_backfill_pending_and_read_back() -> None:
         await uow.commit()
         assert summary["status"] == "ok"
         assert summary["labels_upserted"] == len(result.trace.traces)
+        # R2.1-P0-03：无 bar → 全 PENDING；matured=0（旧键 labeled 已删）
         assert summary["pending"] == len(result.trace.traces)
-        assert summary["labeled"] == 0
+        assert summary["matured"] == 0
 
         label_rows = await uow.scans.outcome_labels(scan_run_id)
         assert len(label_rows) == len(result.trace.traces)
@@ -133,5 +134,72 @@ async def test_mature_backfill_pending_and_read_back() -> None:
         assert summary["shadow_rows"] == len(expected_shadow)
         counts = await uow.scans.shadow_group_counts(scan_run_id)
         assert sum(counts.values()) == len(expected_shadow)
+
+    await engine.dispose()
+
+
+async def test_bars_from_includes_t_day_boundary() -> None:
+    """R2.1-P0-02：bars_from 用 >= 含 T 日首根（bar_time==since）。
+
+    旧实现 > 把 T 日 K 排除 → _split_t_day 拿不到 close_T → 全部 PENDING。
+    """
+    from datetime import timedelta
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.v3.application.mature_scan_outcomes import (
+        MatureScanOutcomesService,
+        t_day_window,
+    )
+    from app.v3.infrastructure.db.models import (
+        BarSeriesRevisionModel,
+        MarketBarModel,
+        SecurityModel,
+    )
+    from app.v3.infrastructure.db.uow import SQLAlchemyUnitOfWork
+
+    engine = create_async_engine(DATABASE_URL)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    security_id = uuid4()
+    revision_id = uuid4()
+    market_date = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+    since, t_ordinal = t_day_window(market_date)  # 上海 09-01 00:00（UTC）
+    # T 日首根 bar_time 恰等于 since（00:00 口径）——旧 > 条件下必被排除
+    bar_times = [since + timedelta(days=i) for i in range(21)]
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        uow._session.add(SecurityModel(
+            security_id=security_id, code="900001", market="SH", name="边界测试",
+        ))
+        uow._session.add(BarSeriesRevisionModel(
+            revision_id=revision_id, security_id=security_id,
+            period="DAY", adjust_type="QFQ", source="test", upstream_source="test",
+            raw_bar_available=True, point_in_time_precision="FULL",
+            known_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+            content_hash=f"r21-p002-{revision_id.hex}", status="PUBLISHED",
+        ))
+        for i, bar_time in enumerate(bar_times):
+            price = Decimal("10.5") + i
+            uow._session.add(MarketBarModel(
+                revision_id=revision_id, bar_time=bar_time,
+                open=price, high=price, low=price, close=price,
+                volume=1000, amount=price * 1000,
+                event_time=bar_time, fetch_time=bar_time,
+            ))
+        await uow.commit()
+
+    async with SQLAlchemyUnitOfWork(sessions) as uow:
+        bars = await uow.scans.bars_from([security_id], since)
+        assert bars[security_id][0][0] == since  # T 日首根在内
+        assert len(bars[security_id]) == 21      # T + 20 观察窗
+
+        close_t, future = MatureScanOutcomesService._split_t_day(
+            bars[security_id], t_ordinal,
+        )
+        assert close_t == 10.5
+        assert len(future) == 20
 
     await engine.dispose()

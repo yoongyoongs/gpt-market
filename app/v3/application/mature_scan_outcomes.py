@@ -62,14 +62,19 @@ class MatureScanOutcomesService:
 
         labels: list[OutcomeLabelResult] = []
         pending = 0
+        matured = 0
         for view in views:
             series = bars.get(view.security_id) or []
             close_t, future = self._split_t_day(series, t_ordinal)
             label = self._labels.evaluate(
                 view.code, close_t, future, security_id=view.security_id,
             )
-            if label.label is None:
+            # R2.1-P0-03 §5.6：按 status 计数——成熟负样本（MATURED/NONE）
+            # 不再被误计为 pending
+            if label.status == "PENDING":
                 pending += 1
+            else:
+                matured += 1
             labels.append(label)
 
         miss_entries = self._miss.collect(views, labels)
@@ -87,7 +92,7 @@ class MatureScanOutcomesService:
             "scan_run_id": str(run.scan_run_id),
             "market_date": run.market_date.isoformat(),
             "labels_upserted": saved_labels,
-            "labeled": saved_labels - pending,
+            "matured": matured,
             "pending": pending,
             "miss_audit_rows": saved_miss,
             "shadow_rows": saved_shadow,
