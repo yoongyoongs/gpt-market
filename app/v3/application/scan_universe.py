@@ -40,9 +40,10 @@ from app.v3.domain.market_data import SecurityMember
 
 __all__ = ["UniverseScanOrchestrator"]
 
-# P1-01 §19.4：Machine Top120 分钟K 抓取默认并发 12（8~16 建议带内），
+# P1-01 §19.4：Machine Top120 分钟K 抓取默认并发 4（run_once 资源治理
+# 降峰，2026-09 SSH 失联整改——12 过高会与日K backfill 叠加打满 2G 宿主机），
 # 环境变量 V3_SCAN_MINUTE60_CONCURRENCY 可覆盖
-_DEFAULT_MINUTE60_CONCURRENCY = 12
+_DEFAULT_MINUTE60_CONCURRENCY = 4
 
 # RecallFeatureView 顶层宽表字段（专家输入特征字典的补充来源）
 _WIDE_COLUMNS = (

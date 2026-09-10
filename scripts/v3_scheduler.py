@@ -6,7 +6,8 @@
   → Evidence 增量（24h 窗口，RT §7.2 Step 09）
   → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11，
     RawOpp 由 RunMultiRecallService.publish 一并落库）
-  → Candidate Scan（R2.1-P1-02，候选扫描；与 Full Recall 并行）；
+  → Candidate Scan（R2.1-P1-02，候选扫描；与 Full Recall 无数据依赖，
+    可独立排序执行，Runtime 仍按拓扑顺序串行）；
 - 独立每日维护链：Corporate Action Match、Projection Verify、
   Candidate Outcome Mature（R2.1-P1-03，历史 PENDING scan 批量成熟）。
 
@@ -21,9 +22,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import re
+from dataclasses import dataclass, field
 from typing import Any
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -179,9 +182,51 @@ def build_database(database_url: str) -> V3Database:
     )
 
 
+@dataclass
+class SchedulerBundle:
+    """P1-03（run_once 资源治理）：Scheduler 构建的 Provider/DB 生命周期收口。
+
+    build_orchestrators() 每次调用都会新建 EastmoneyProvider、
+    candidate ProviderManager、index 腾讯 fallback 等长连接资源——常驻
+    scheduler 每天重复 run_once() 时必须显式关闭，不依赖 OS 进程回收。
+    close() 幂等（_closed 门闩），逐项关闭且吞异常（关闭失败不掩盖主
+    流程结果）。保留 __iter__/__getitem__ 兼容旧式三元组解构/索引访问。
+    """
+
+    main: Orchestrator
+    maintenance: Orchestrator
+    database: V3Database
+    closeables: tuple = field(default=())
+    candidate_scan_deep_service: DeepMarketDataService | None = None
+    _closed: bool = field(default=False, repr=False)
+
+    def __iter__(self):
+        yield self.main
+        yield self.maintenance
+        yield self.database
+
+    def __getitem__(self, index: int):
+        return (self.main, self.maintenance, self.database)[index]
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for closeable in self.closeables:
+            try:
+                closer = getattr(closeable, "close", None)
+                if closer is None:
+                    continue
+                result = closer()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # noqa: BLE001 - 关闭失败不影响主流程
+                pass
+
+
 def build_orchestrators(
     database_url: str, release: dict | None = None, database: V3Database | None = None,
-) -> tuple[Orchestrator, Orchestrator, V3Database]:
+) -> SchedulerBundle:
     settings = Settings(_env_file=None, v3_database_url=database_url)
     database = database if database is not None else build_database(database_url)
 
@@ -189,15 +234,24 @@ def build_orchestrators(
         return SQLAlchemyUnitOfWork(database.sessions)
 
     eastmoney = EastmoneyProvider(settings)
+    # index-benchmarks 的腾讯 fallback 提到 build 级共享（原 handler 每次
+    # 新建从不 close）——与 candidate 的腾讯实例分开，生命周期互不纠缠（§19）
+    index_tencent = TencentProvider(settings, DataQualityService())
 
     # R2.1-P1-02：candidate-scan 的 60m Deep 数据源与盘中循环同源
-    # （ProviderManager 东财/腾讯 fallback），只抓 Machine Top120
+    # （ProviderManager 东财/腾讯 fallback），只抓 Machine Top120。
+    # P0-03（run_once 资源治理）：candidate Engine 只消费 periods["60m"]，
+    # 默认 DEEP_PERIODS=("5m","15m","60m") 中 5m/15m 属无效负载——本服务
+    # 显式 periods=("60m",)，请求量 360→120（-66.7%），选股结果不变。
+    # ProviderManager 单独命名，由 SchedulerBundle 统一收口生命周期。
+    candidate_provider_manager = ProviderManager(
+        eastmoney,
+        TencentProvider(settings, DataQualityService()),
+    )
     candidate_scan_deep_service = DeepMarketDataService(
-        ProviderManager(
-            eastmoney,
-            TencentProvider(settings, DataQualityService()),
-        ),
+        candidate_provider_manager,
         source="legacy-provider",
+        periods=("60m",),
     )
 
     async def market_data_handler(context) -> dict:
@@ -323,7 +377,8 @@ def build_orchestrators(
 
         数据依赖 = market-data（Universe）→ features（特征行/PIT）→
         evidence-increment（PIT 证据）；full-recall 是独立 Recall 通道、
-        非本 Job 输入，二者可并行（任务书 §10 允许）。PIT 一致：显式
+        非本 Job 输入，二者无数据依赖、可独立排序执行（任务书 §10 允许；
+        Orchestrator Runtime 仍按拓扑顺序串行）。PIT 一致：显式
         传同一编排 features Job 的 feature_run_id（同 market_date/同一
         as_of）。幂等：同上海交易日同 strategy/parameter 版本已有
         PUBLISHED scan → already_scanned，绝不静默创建重复 Published
@@ -353,6 +408,10 @@ def build_orchestrators(
             "m60_stale": summary.get("m60_stale"),
             "m60_error": summary.get("m60_error"),
             "market_regime_score": summary.get("market_regime_score"),
+            # P1-02（run_once 资源治理）：60m 慢到底是东财慢还是腾讯
+            # fallback 多——ProviderManager 健康度直接进 Job metrics，
+            # request_count/success_rate/timeout_count/avg_latency_ms/status
+            "provider_health": candidate_provider_manager.health(),
         }
 
     async def candidate_outcome_mature_handler(context) -> dict:
@@ -372,7 +431,7 @@ def build_orchestrators(
     async def index_benchmarks_handler(context) -> dict:
         service = IngestIndexBenchmarksService(
             context.uow_factory, eastmoney,
-            fallback_provider=TencentProvider(settings, DataQualityService()),
+            fallback_provider=index_tencent,
             clock=lambda: context.as_of,
         )
         report = await service.execute()
@@ -582,7 +641,8 @@ def build_orchestrators(
                 depends_on=("evidence-increment",),
             ),
             # R2.1-P1-02（任务书 §10）：候选扫描——依赖 evidence-increment，
-            # 与 full-recall 并行（Recall Run 非其输入）；策略链成员，
+            # 与 full-recall 无数据依赖（Recall Run 非其输入）、可独立排序，
+            # Orchestrator 仍串行执行；策略链成员，
             # mode=V2 无 Research Shadow 时被 Release Gate 排除
             JobDefinition(
                 job_id="candidate-scan", handler=candidate_scan_handler,
@@ -627,7 +687,15 @@ def build_orchestrators(
         ),
         advisory_lock_key="v3-scheduler-maintenance",
     )
-    return main, maintenance, database
+    # P1-03：Provider/DB 生命周期集中收口——关闭顺序 candidate PM →
+    # index tencent → eastmoney → database（各 close 均幂等）
+    return SchedulerBundle(
+        main=main,
+        maintenance=maintenance,
+        database=database,
+        closeables=(candidate_provider_manager, index_tencent, eastmoney, database),
+        candidate_scan_deep_service=candidate_scan_deep_service,
+    )
 
 
 
@@ -769,96 +837,101 @@ async def run_once(output: Path) -> dict:
         lambda: SQLAlchemyUnitOfWork(database.sessions), v3_enabled=v3_enabled,
     ).resolve("production")
     # STR-002：解析结果接线进 Orchestrator（Recall 策略版本按 configuration 选择）
-    main, maintenance, database = build_orchestrators(
+    # P1-03：Provider/DB 生命周期收口——成功/异常路径都必须 close
+    # （原实现仅成功路径关闭 database，异常时泄漏）
+    bundle = build_orchestrators(
         database_url, release=report["release_resolution"], database=database,
     )
-    resolution = report["release_resolution"]
-    # R3-P0-002：Release Gate 只控制 Strategy Runtime（full-recall）。
-    # market-data / index-benchmarks / features / evidence-increment 是
-    # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
-    # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
-    effective_v3 = resolution.get("effective_mode") == "V3"
-    # F6-09/§17：V2 Live + V3 Research Shadow 产品裁决——用户要求正式
-    # 策略保持 V2，但 V3 每个交易日实际跑低位埋伏候选用于观察效果。
-    # V3_RESEARCH_SHADOW_ENABLED=true 且有效 Release 非 V3 时，主链
-    # 照常包含 full-recall（Recall/Raw Opportunity 数据事实每日刷新，
-    # 供 FastLane EOD 源与 Research 观察），但：
-    # - 正式 Release 解析结果不变（effective_mode 仍为 V2）；
-    # - 不产生任何 Trade/TradeDraft（Recall 只写 Recall/Observation）；
-    # - release_gate.strategy_chain 如实标注 SHADOW_RESEARCH_EXECUTED，
-    #   绝不假装是正式 V3 Release 激活。
-    # 该语义不与 Baseline 冲突：Release Gate 管的是"正式策略激活"，
-    # Research Recall 只是数据事实链的延伸；若未来 Baseline 明确禁止，
-    # 关闭该 env 即回到纯 Gate 行为（DESIGN_CONFLICT 不成立）。
-    research_shadow = (
-        not effective_v3
-        and os.getenv("V3_RESEARCH_SHADOW_ENABLED", "false").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
-    report["release_gate"] = {
-        "data_chain": "EXECUTED",
-        "strategy_chain": (
-            "EXECUTED" if effective_v3
-            else "SHADOW_RESEARCH_EXECUTED" if research_shadow
-            else "SKIPPED"
-        ),
-        "research_shadow": research_shadow,
-        "reason": resolution.get("reason"),
-    }
-    if report["trading_day"]:
-        trade_date = latest_completed_session(calendar, now)
-        # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
-        # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全。
-        # 终端标记：策略链启用（含 F6-09 Research Shadow）时取
-        # full-recall（NEW-OPS-002）；V2 且无 Shadow 时 full-recall 被
-        # Gate 跳过，终端标记退回数据链终端 evidence-increment，否则
-        # catch-up 列表永远追不平。
-        strategy_chain_active = effective_v3 or research_shadow
-        last_key = await _latest_main_success_key(
-            database,
-            terminal_job="full-recall" if strategy_chain_active
-            else "evidence-increment",
+    main, maintenance, database = bundle.main, bundle.maintenance, bundle.database
+    try:
+        resolution = report["release_resolution"]
+        # R3-P0-002：Release Gate 只控制 Strategy Runtime（full-recall）。
+        # market-data / index-benchmarks / features / evidence-increment 是
+        # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
+        # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
+        effective_v3 = resolution.get("effective_mode") == "V3"
+        # F6-09/§17：V2 Live + V3 Research Shadow 产品裁决——用户要求正式
+        # 策略保持 V2，但 V3 每个交易日实际跑低位埋伏候选用于观察效果。
+        # V3_RESEARCH_SHADOW_ENABLED=true 且有效 Release 非 V3 时，主链
+        # 照常包含 full-recall（Recall/Raw Opportunity 数据事实每日刷新，
+        # 供 FastLane EOD 源与 Research 观察），但：
+        # - 正式 Release 解析结果不变（effective_mode 仍为 V2）；
+        # - 不产生任何 Trade/TradeDraft（Recall 只写 Recall/Observation）；
+        # - release_gate.strategy_chain 如实标注 SHADOW_RESEARCH_EXECUTED，
+        #   绝不假装是正式 V3 Release 激活。
+        # 该语义不与 Baseline 冲突：Release Gate 管的是"正式策略激活"，
+        # Research Recall 只是数据事实链的延伸；若未来 Baseline 明确禁止，
+        # 关闭该 env 即回到纯 Gate 行为（DESIGN_CONFLICT 不成立）。
+        research_shadow = (
+            not effective_v3
+            and os.getenv("V3_RESEARCH_SHADOW_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
         )
-        last_completed = date.fromisoformat(last_key) if last_key else None
-        pending = catchup_trade_dates(
-            calendar.is_trading_day,
-            last_completed=last_completed, today=trade_date,
+        report["release_gate"] = {
+            "data_chain": "EXECUTED",
+            "strategy_chain": (
+                "EXECUTED" if effective_v3
+                else "SHADOW_RESEARCH_EXECUTED" if research_shadow
+                else "SKIPPED"
+            ),
+            "research_shadow": research_shadow,
+            "reason": resolution.get("reason"),
+        }
+        if report["trading_day"]:
+            trade_date = latest_completed_session(calendar, now)
+            # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
+            # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全。
+            # 终端标记：策略链启用（含 F6-09 Research Shadow）时取
+            # full-recall（NEW-OPS-002）；V2 且无 Shadow 时 full-recall 被
+            # Gate 跳过，终端标记退回数据链终端 evidence-increment，否则
+            # catch-up 列表永远追不平。
+            strategy_chain_active = effective_v3 or research_shadow
+            last_key = await _latest_main_success_key(
+                database,
+                terminal_job="full-recall" if strategy_chain_active
+                else "evidence-increment",
+            )
+            last_completed = date.fromisoformat(last_key) if last_key else None
+            pending = catchup_trade_dates(
+                calendar.is_trading_day,
+                last_completed=last_completed, today=trade_date,
+            )
+            report["catchup"] = [day.isoformat() for day in pending]
+            # NEW-OPS-003：scheduler catch-up 是 **operational 补数**——把缺失
+            # 事实按当前可见数据补齐、按 trade_date 幂等防重，绝不声称
+            # historical point-in-time（as_of 统一为本次运行时刻）。历史时点
+            # 重建属于 Deterministic Replay（PF-02）的职责边界。
+            report["catchup_mode"] = (
+                "operational" if any(day < trade_date for day in pending) else "same-day"
+            )
+            main_job_ids = None if strategy_chain_active else DATA_CHAIN_JOB_IDS
+            report["main"] = _annotate_catchup_runs(
+                trade_date,
+                pending,
+                [await main.execute(trade_date=d, as_of=now, job_ids=main_job_ids)
+                 for d in pending],
+            )
+        # 维护链每个自然日独立执行（幂等键 = 本地日期）
+        report["maintenance"] = await maintenance.execute(
+            trade_date=local.date(), as_of=now
         )
-        report["catchup"] = [day.isoformat() for day in pending]
-        # NEW-OPS-003：scheduler catch-up 是 **operational 补数**——把缺失
-        # 事实按当前可见数据补齐、按 trade_date 幂等防重，绝不声称
-        # historical point-in-time（as_of 统一为本次运行时刻）。历史时点
-        # 重建属于 Deterministic Replay（PF-02）的职责边界。
-        report["catchup_mode"] = (
-            "operational" if any(day < trade_date for day in pending) else "same-day"
-        )
-        main_job_ids = None if strategy_chain_active else DATA_CHAIN_JOB_IDS
-        report["main"] = _annotate_catchup_runs(
-            trade_date,
-            pending,
-            [await main.execute(trade_date=d, as_of=now, job_ids=main_job_ids)
-             for d in pending],
-        )
-    # 维护链每个自然日独立执行（幂等键 = 本地日期）
-    report["maintenance"] = await maintenance.execute(
-        trade_date=local.date(), as_of=now
-    )
-    def _run_statuses(part_report):
-        if isinstance(part_report, list):
-            return [run["status"] for run in part_report]
-        return [part_report["status"]]
+        def _run_statuses(part_report):
+            if isinstance(part_report, list):
+                return [run["status"] for run in part_report]
+            return [part_report["status"]]
 
-    statuses = [
-        status
-        for part in ("main", "maintenance")
-        if part in report
-        for status in _run_statuses(report[part])
-    ]
-    report["status"] = (
-        "COMPLETED" if all(status == "COMPLETED" for status in statuses) else "PARTIAL"
-    )
-    report["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await database.close()
+        statuses = [
+            status
+            for part in ("main", "maintenance")
+            if part in report
+            for status in _run_statuses(report[part])
+        ]
+        report["status"] = (
+            "COMPLETED" if all(status == "COMPLETED" for status in statuses) else "PARTIAL"
+        )
+        report["completed_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
+        await bundle.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=_json_default) + "\n", encoding="utf-8")

@@ -174,7 +174,11 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
             pass
 
     def _fake_build(database_url, release=None, database=None):
-        return _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
+        # P1-03：run_once 经 SchedulerBundle 收口（closeables 留空）
+        return module.SchedulerBundle(
+            main=_FakeOrchestrator(), maintenance=_FakeOrchestrator(),
+            database=_FakeDatabase(),
+        )
 
     monkeypatch.setattr(module, "build_database", lambda url: _FakeDatabase())
     monkeypatch.setattr(module, "build_orchestrators", _fake_build)
@@ -318,7 +322,13 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
 
     def _fake_build_orchestrators(database_url, release=None, database=None):
         seen["build_orchestrator_database"] = database
-        return _FakeOrchestrator(), _FakeOrchestrator(), _FakeDatabase()
+        # P1-03：run_once 通过 SchedulerBundle 收口 Provider/DB 生命周期，
+        # fake 同样返回 bundle（closeables 留空——fake 无真连接）
+        return module.SchedulerBundle(
+            main=_FakeOrchestrator(),
+            maintenance=_FakeOrchestrator(),
+            database=_FakeDatabase(),
+        )
 
     monkeypatch.setattr(module, "ExchangeCalendarsAShareCalendar", _FakeCalendar)
     monkeypatch.setattr(

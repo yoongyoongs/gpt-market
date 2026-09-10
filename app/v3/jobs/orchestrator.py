@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
+
+from app.v3.operations.resource_snapshot import snapshot as resource_snapshot
 
 
 class CyclicDependencyError(ValueError):
@@ -242,6 +245,9 @@ class Orchestrator:
 
         每次尝试都落库为独立 Run 记录；fallback 成功 → SUCCEEDED
         （metrics 带 fallback_used，并保留主失败原因），绝不静默换源。
+        P1-01（run_once 资源治理）：每次尝试自动补 wall_seconds 与
+        resource_before/after 快照——snapshot() 内部全量降级，采集失败
+        绝不影响 Job 成败。
         """
         import asyncio
 
@@ -251,11 +257,18 @@ class Orchestrator:
         last_failure: JobRunReport | None = None
         for attempt in range(1, attempts + 1):
             started_at = self._clock()
+            resource_before = resource_snapshot()
+            perf_started = time.perf_counter()
             try:
                 metrics = await job.handler(context)
             except Exception as exc:  # noqa: BLE001 - 失败必须落库为 Run 记录
                 primary_error_type = type(exc).__name__
                 primary_error = str(exc)[:1000]
+                wall = {
+                    "wall_seconds": round(time.perf_counter() - perf_started, 3),
+                    "resource_before": resource_before,
+                    "resource_after": resource_snapshot(),
+                }
                 # attempt 一律由 DB next_attempt 分配（跨运行唯一）
                 last_failure = await self._record(
                     orchestrator_run_id, job.job_id, key,
@@ -263,22 +276,30 @@ class Orchestrator:
                     started_at=started_at,
                     error_type=primary_error_type,
                     error_summary=primary_error,
+                    metrics=wall,
                 )
                 if attempt < attempts:
                     if job.retry_delay_seconds > 0:
                         await asyncio.sleep(job.retry_delay_seconds)
                     continue
                 break
+            resource_metrics = {
+                "wall_seconds": round(time.perf_counter() - perf_started, 3),
+                "resource_before": resource_before,
+                "resource_after": resource_snapshot(),
+            }
             return await self._record(
                 orchestrator_run_id, job.job_id, key,
                 status="SUCCEEDED", known_at=known_at, as_of=as_of,
                 started_at=started_at,
-                metrics=dict(metrics or {}),
+                metrics={**resource_metrics, **dict(metrics or {})},
             )
         if job.fallback is None:
             assert last_failure is not None
             return last_failure
         started_at = self._clock()
+        resource_before = resource_snapshot()
+        perf_started = time.perf_counter()
         try:
             metrics = await job.fallback(context)
         except Exception as exc:  # noqa: BLE001
@@ -291,8 +312,16 @@ class Orchestrator:
                     f"primary failed after {attempts} attempt(s): "
                     f"{primary_error}; fallback failed: {str(exc)[:500]}"
                 ),
+                metrics={
+                    "wall_seconds": round(time.perf_counter() - perf_started, 3),
+                    "resource_before": resource_before,
+                    "resource_after": resource_snapshot(),
+                },
             )
         fallback_metrics = dict(metrics or {})
+        fallback_metrics.setdefault("wall_seconds", round(time.perf_counter() - perf_started, 3))
+        fallback_metrics.setdefault("resource_before", resource_before)
+        fallback_metrics.setdefault("resource_after", resource_snapshot())
         fallback_metrics["fallback_used"] = True
         summary = (
             f"primary failed after {attempts} attempt(s): {primary_error}; "
