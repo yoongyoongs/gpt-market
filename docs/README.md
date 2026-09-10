@@ -45,6 +45,3 @@
 | `archive/v3-design-inputs/` | V3 设计输入材料 |
 | `adr/0001` | 架构决策记录（Phase1 持久化） |
 
-## 待清理（等用户确认后删）
-
-- `acceptance_results.json`、`eastmoney_probe.json`——一次性验收/探针输出，早已过期。
