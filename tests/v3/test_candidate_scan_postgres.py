@@ -174,6 +174,9 @@ async def test_bars_from_includes_t_day_boundary() -> None:
         uow._session.add(SecurityModel(
             security_id=security_id, code="900001", market="SH", name="边界测试",
         ))
+        # 裸表无 relationship，flush 按表名字母序（bar_series_revisions < securities）
+        # 会先插 revision 触发 FK 失败——显式 flush 保证父行先行
+        await uow._session.flush()
         uow._session.add(BarSeriesRevisionModel(
             revision_id=revision_id, security_id=security_id,
             period="DAY", adjust_type="QFQ", source="test", upstream_source="test",

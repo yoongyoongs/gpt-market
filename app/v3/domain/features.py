@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -95,10 +96,25 @@ class FeatureRun(V3Contract):
             "feature_run_id", "status", "started_at", "completed_at", "content_hash"
         }))
 
-    def published(self, *, completed_at: datetime) -> "FeatureRun":
-        payload = self.model_copy(
-            update={"status": FeatureRunStatus.PUBLISHED, "completed_at": completed_at, "content_hash": None}
+    def _quantized_coverage(self) -> float:
+        """与 PG Numeric(8,7) 同规则量化（四舍五入，half away from zero），
+        保证 content_hash 输入在落库往返后可复现。"""
+        return float(
+            Decimal(str(self.coverage)).quantize(
+                Decimal("0.0000001"), rounding=ROUND_HALF_UP,
+            )
         )
+
+    def published(self, *, completed_at: datetime) -> "FeatureRun":
+        # coverage 列为 Numeric(8,7)：落库会截断到 7 位小数。哈希输入必须
+        # 先与 DB 精度对齐量化，否则写侧全精度哈希在读侧重算（截断值）必不
+        # 匹配（coverage<1 且小数位>7 时稳定复现，如 5558/5560）。
+        payload = self.model_copy(update={
+            "status": FeatureRunStatus.PUBLISHED,
+            "completed_at": completed_at,
+            "content_hash": None,
+            "coverage": self._quantized_coverage(),
+        })
         return payload.model_copy(
             update={"content_hash": payload.computed_content_hash()}
         )
