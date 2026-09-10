@@ -6,6 +6,36 @@
 
 ---
 
+## 0. 工作总账（整个 V3 候选引擎需求）
+
+### 已完成（本分支 10 commits，全部已 push，head=08eddf9）
+
+| 块 | 内容 | 证明 |
+|---|---|---|
+| Round2.1 代码 | R2.1-P0-01~06 + P1-01~06 全落地（60m 读取路径、Outcome bars_from、三态语义、Deep #61~120 trace、结构化 RR、candidate-scan/outcome-mature 接入 Scheduler 等） | commits 41ad6c8~2707d22；回归 823 passed / 101 skipped |
+| coverage 哈希 bug | FeatureRun Numeric(8,7) 精度对齐（7c191ae）；存量 3 坏哈希只能新 run 顶替（DB immutable 触发器禁 UPDATE） | 同日已确认 |
+| run_once 资源治理 | P0-01~06 + P1-01~04（26a3fa9）+ 报告（cc27295）；专项 13 测试 | tests/v3/test_run_once_resource_governance.py |
+| 生产部署 | r10（alembic 0019）→ **r11 现役**：资源笼子 + 治理 env + healthcheck 修正 | 交接文档 §1 |
+| PG 隔离测试 | gpt_market_test 库 6/6 通过（§H） | 用户授权建库 |
+| 生产验收进行中 | 手动 run_once 16:49 启动，SSH 探针 ok=39 fail=0 | 本文档 §3 做完后勾 |
+
+### 未完成（今晚另一台电脑接手，按序）
+
+1. **run_once 结果验收**（§3 命令现成）——回填资源优化报告 §50 Production 项。
+2. **§C/§G** 扫描解锁：新 run 顶坏哈希后 run_full_scan 真实扫描 + 同日 already_scanned 幂等。
+3. **§E** Deep trace 抽查 2~3 只。
+4. **§D** Outcome 三态查询（A/NONE 等 10 月中旬，如实记录）。
+5. **§F** orchestrator_job_runs 链核对（candidate-scan V2 Gate 排除=正确语义，如实记录）。
+6. **报告回填 + commit + push**（补验报告 C~H + 资源优化报告 Production 项）。
+7. **资源调参**：按 run_once 实测 rss/load 决定并发 3→4→6。
+8. **明天 18:45 常驻轮**：验证 catchup 追平 + 正常调度。
+
+### 明确不做
+
+- P0-07 保留 checkpoint、P0-08 禁止减股票；§23-25 日 K 增量化=二期独立立项。
+
+---
+
 ## 1. 当前状态快照（2026-09-10 17:30 CST 写入）
 
 | 项 | 值 |
