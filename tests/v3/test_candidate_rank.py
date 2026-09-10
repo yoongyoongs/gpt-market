@@ -402,14 +402,19 @@ class TestDeepRank:
         # raw = machine 36 + weekly 15 = 51，有效权重 60 → P0-05 归一 85.0
         assert result.entries[0].deep_score == pytest.approx(51.0 / 60.0 * 100.0, abs=1e-3)
 
-    def test_top60_truncation(self):
+    def test_top60_selection_full_pool_kept(self):
+        """R2.1-P0-06：不再截断——全池保留 rank/score，Top60 才 selected。"""
         pool = [_deep_item(machine_score=float(90 - i)) for i in range(70)]
         result = DeepRankService().execute(pool)
         assert result.evaluated_count == 70
         assert result.top_n == 60
-        assert len(result.entries) == 60
+        assert len(result.entries) == 70
         assert result.entries[0].deep_score >= result.entries[-1].deep_score
-        assert [entry.rank for entry in result.entries] == list(range(1, 61))
+        assert [entry.rank for entry in result.entries] == list(range(1, 71))
+        assert all(entry.selected for entry in result.entries[:60])
+        assert not any(entry.selected for entry in result.entries[60:])
+        # #61~70 保留真实分数（不许 0 分占位）
+        assert result.entries[60].deep_score > 0
 
     def test_state_scores(self):
         from app.v3.candidate_engine.deep_rank import _state_score, _slope_proxy

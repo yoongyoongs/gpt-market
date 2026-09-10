@@ -5,7 +5,8 @@ P1-01/02/03：60m（Machine Top120 抓取）、市场 regime（feature_run_id PI
 行业上下文（无可靠源 → missing + NO_RELIABLE_INDUSTRY_CONTEXT）按
 weighted_combine 有效权重归一（missing ≠ 负分）；
 周K下降+日K上升 且无反转证据 → trend_conflict，压 DailyStructure（§22.2）。
-Top60。
+入选 Top60；R2.1-P0-06：全池（≤120）entries 都保留 rank/score，
+未入选者 selected=False（Trace 记 deep_rank_below_top60 dead 行）。
 """
 
 from __future__ import annotations
@@ -192,7 +193,10 @@ class DeepRankService:
 
         ranked.sort(key=lambda entry: (-entry[0], entry[1], entry[2]))
         entries: list[DeepRankEntry] = []
-        for rank, (score, code, security_id, meta) in enumerate(ranked[: self.top_n], start=1):
+        # R2.1-P0-06：不再截断 top_n——全池（Machine Top120）都保留
+        # rank/score/components，selected=rank<=top_n；#61~120 供
+        # Trace dead 行（deep_rank_below_top60）与 Why Not 审计。
+        for rank, (score, code, security_id, meta) in enumerate(ranked, start=1):
             entries.append(DeepRankEntry(
                 security_id=security_id,
                 code=code,
@@ -203,10 +207,11 @@ class DeepRankService:
                 components_detail=meta["components_detail"],
                 reasons=tuple(meta["reasons"]),
                 rank=rank,
+                selected=rank <= self.top_n,
             ))
         return DeepRankResult(
             evaluated_count=len(pool),
-            top_n=len(entries),
+            top_n=min(self.top_n, len(entries)),
             entries=tuple(entries),
         )
 

@@ -316,7 +316,7 @@ class TestFinalContract:
         assert final_record.detail["ai_review_status"] == "NOT_CONNECTED"
 
     def test_deep_tail_final_dead_row(self):
-        """Deep Top60 未进 Final 的股票带 alive=False 行（final_not_top30）。"""
+        """Deep Top60 未进 Final 的股票带 alive=False 行（final_rank_below_top30）。"""
         candidates = _universe()
         result = CandidatePipeline().execute(candidates, _stocks_by_id(candidates),
                                              trade_date=NOW)
@@ -327,4 +327,64 @@ class TestFinalContract:
         trace = result.trace.for_code(tail.code)
         record = trace.stage("FINAL")
         assert record.alive is False
-        assert record.drop_reason == "final_not_top30"
+        assert record.drop_reason == "final_rank_below_top30"
+
+
+# ---------------------------------------------------------------------------
+# R2.1-P0-06：Deep 全池（≤Top120）保留 rank/score + trace dead 行
+# ---------------------------------------------------------------------------
+
+
+class TestDeepFullPoolTrace:
+    """DeepRankService 不再截断 top_n——#61~120 selected=False，
+    Trace 记 deep_rank_below_top60 dead 行（Why Not 可查 Deep #85）。"""
+
+    @staticmethod
+    def _pool(n: int) -> list[dict]:
+        return [_deep_item(machine_score=80.0 - i * 0.1) for i in range(n)]
+
+    @staticmethod
+    def _ranked(n: int):
+        result = DeepRankService(top_n=60).execute(TestDeepFullPoolTrace._pool(n))
+        builder = ScanTraceBuilder(scan_id=uuid4(), trade_date=NOW)
+        builder.record_deep(result)
+        return result, builder
+
+    def test_full_pool_kept_not_truncated(self):
+        result, _ = self._ranked(65)
+        assert len(result.entries) == 65
+        assert result.top_n == 60
+        assert sum(1 for entry in result.entries if entry.selected) == 60
+        assert all(entry.selected for entry in result.entries[:60])
+        assert not any(entry.selected for entry in result.entries[60:])
+        assert [entry.rank for entry in result.entries] == list(range(1, 66))
+        # 未入选者保留真实分数（不许 0 分占位）
+        assert result.entries[63].deep_score > 0
+
+    def test_trace_dead_rows_keep_rank_score(self):
+        result, builder = self._ranked(65)
+        traces = {t.security_id: t for t in builder.build().traces}
+        tail = result.entries[63]
+        record = traces[tail.security_id].stage("DEEP")
+        assert record.alive is False
+        assert record.drop_reason == "deep_rank_below_top60"
+        assert record.rank == 64
+        assert record.score == tail.deep_score
+        # 入选者仍 alive
+        head = traces[result.entries[0].security_id].stage("DEEP")
+        assert head.alive is True
+
+    def test_final_tail_reason_and_61_120_no_final_row(self):
+        result, builder = self._ranked(65)
+        builder.record_final(tuple(result.entries[:30]))
+        traces = {t.security_id: t for t in builder.build().traces}
+        # Deep #31~60：FINAL dead final_rank_below_top30（保留 deep rank/score）
+        mid = result.entries[44]
+        final_record = traces[mid.security_id].stage("FINAL")
+        assert final_record.alive is False
+        assert final_record.drop_reason == "final_rank_below_top30"
+        assert final_record.rank == 45
+        assert final_record.score == mid.deep_score
+        # Deep #61~120：无 FINAL 行（死在 DEEP，从未进 Final 候选池）
+        tail = result.entries[63]
+        assert traces[tail.security_id].stage("FINAL") is None

@@ -465,6 +465,8 @@ class DeepRankEntry(V3Contract):
     components_detail: dict[str, dict] = Field(default_factory=dict)
     reasons: tuple[str, ...] = ()
     rank: int = Field(ge=1)
+    # R2.1-P0-06：全池（≤Top120）都保留 rank/score，仅 rank<=top_n 入选
+    selected: bool = Field(default=True, description="rank<=top_n 才进 Final 候选池")
 
 
 class DeepRankResult(V3Contract):
