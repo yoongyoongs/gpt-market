@@ -21,6 +21,11 @@ from app.v3.domain.candidate_engine import (
     TRACE_STAGES,
     status_from_label,
 )
+from app.v3.presentation.zh_cn_labels import (
+    DROP_REASON_LABELS,
+    STAGE_LABELS,
+    SUPPORT_NOTE_LABEL,
+)
 
 router = APIRouter(prefix="/api/v3", tags=["V3 Scan"])
 
@@ -145,14 +150,23 @@ async def scan_top(
         rows = await uow.scans.snapshots(
             run.scan_run_id, stage=stage, alive_only=True, limit=limit,
         )
+        # 设计 §83：附 market/name/stage_label 展示字段（§85 raw 保留英文）；
+        # 名称批量一次 IN 查询，禁止逐行 N+1。
+        ids = [row.security_id for row in rows if row.security_id is not None]
+        names = await uow.scans.security_names(ids) if ids else {}
         return {
             "scan_id": str(run.scan_run_id),
             "stage": stage,
+            "stage_label": STAGE_LABELS.get(stage, stage),
             "rows": [
                 {
                     "code": row.code,
                     "score": _opt(row.score),
                     "rank": row.rank,
+                    "security_id": str(row.security_id) if row.security_id else None,
+                    "name": (names.get(row.security_id) or {}).get("name"),
+                    "market": (names.get(row.security_id) or {}).get("market"),
+                    "stage_label": STAGE_LABELS.get(stage, stage),
                 }
                 for row in rows
             ],
@@ -172,19 +186,31 @@ async def stock_scan_trace(
                 status_code=404,
                 detail=f"code {code} not in scan {run.scan_run_id}",
             )
+        # 设计 §82：轨迹附 stage_label/drop_reason_label 展示字段，
+        # 原始 stage/drop_reason 保留英文（§85 DB/API 不写中文）。
+        trajectory = [
+            {
+                "stage": row.stage,
+                "alive": row.alive,
+                "score": _opt(row.score),
+                "rank": row.rank,
+                "drop_reason": row.drop_reason,
+                "stage_label": STAGE_LABELS.get(row.stage, row.stage),
+                "drop_reason_label": (
+                    SUPPORT_NOTE_LABEL
+                    if str(row.drop_reason) == "support_not_broken"
+                    else DROP_REASON_LABELS.get(row.drop_reason, row.drop_reason)
+                ) if row.drop_reason else None,
+            }
+            for row in rows
+        ]
         return {
             "scan_id": str(run.scan_run_id),
             "code": code,
-            "trajectory": [
-                {
-                    "stage": row.stage,
-                    "alive": row.alive,
-                    "score": _opt(row.score),
-                    "rank": row.rank,
-                    "drop_reason": row.drop_reason,
-                }
-                for row in rows
-            ],
+            "final_alive": any(
+                str(row["stage"]) == "FINAL" and row["alive"] for row in trajectory
+            ),
+            "trajectory": trajectory,
         }
 
 

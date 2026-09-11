@@ -36,6 +36,7 @@ from app.v3.infrastructure.db.models import (
     OutcomeLabelModel,
     ParetoResultRowModel,
     ScanRunModel,
+    SecurityModel,
     ShadowPoolRowModel,
 )
 
@@ -248,6 +249,27 @@ class SQLAlchemyScanRepository:
         stmt = stmt.order_by(CandidateSnapshotModel.stage, CandidateSnapshotModel.rank.nulls_last(), CandidateSnapshotModel.code)
         result = await self._session.execute(stmt.limit(limit))
         return list(result.scalars().all())
+
+    async def security_names(self, security_ids) -> dict[UUID, dict[str, str]]:
+        """设计 §39：批量查股票名称/市场（Final30 名称展示）——一次 IN
+        查询，禁止逐行 N+1；缺 name 的 security 不出现在结果里。"""
+        ids = tuple(security_ids)
+        if not ids:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(
+                    SecurityModel.security_id,
+                    SecurityModel.market,
+                    SecurityModel.code,
+                    SecurityModel.name,
+                ).where(SecurityModel.security_id.in_(ids))
+            )
+        ).all()
+        return {
+            row.security_id: {"name": row.name, "market": row.market, "code": row.code}
+            for row in rows
+        }
 
     async def expert_rows(self, scan_run_id: UUID, *, expert: str | None = None, limit: int = 5000) -> list[ExpertRecallRowModel]:
         stmt = select(ExpertRecallRowModel).where(
