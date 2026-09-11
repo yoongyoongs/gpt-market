@@ -6,6 +6,28 @@
 
 ---
 
+## 2026-09-11 增补：调度四时点拆分（Commit A 已完成并 push）
+
+**设计指导**：《V3_生产调度拆分_run_once优化_看板中文化与交互整改_详细设计指导.md》
+四组 commit 分批：A scheduler（已完成）→ B 资源治理核对 → C 看板中文化 →
+D 行情表局部刷新 → 最终报告（§105 13 项）。
+
+| 项 | 状态 |
+|---|---|
+| Commit A 代码 | **完成并 push**（`9b5debc` scheduler: split daily pipeline into timed groups） |
+| Commit A 测试 | 全量回归 **919 passed / 106 skipped**；§96-100 全覆盖（daily_slots env 链、resolve_next_slot、CLI --group、非交易日、catch-up 追平、§99 candidate 失败不掩盖、§11 EOD 前置检查、LOCKED→PARTIAL） |
+| 附带修复 | `e56f6f1`：phase6 契约测试指向 docs/archive/ 新路径（bcfc619 归档漏改引用） |
+| 部署注意 | 生产 r11 镜像**未更新**——四时点调度要生效需重建 worker 镜像 + `.env` 增四 env（见 .env.example §15）；旧 V3_SCHEDULE_AT 兜底不坏 |
+
+**后续 commit 待办（本机继续或接手电脑继续）**：
+1. **Commit B**：资源治理核对（V3_PHASE2_CONCURRENCY=4、minute60 并发 4、candidate 只抓 60m、yield throttle、docker 资源限制、worker DB pool 3+1）——上轮已做大半，查缺口补齐。
+2. **Commit C**：看板中文化（`app/v3/presentation/zh_cn_labels.py` 十张映射表；observed→纳入统计股票数等 §24-60；Final30 加股票名称禁 N+1；"为什么没入选"任意股票查询；trace= 兼容 whynot=；scan API 附 stage_label/name，raw 保留英文；DB 绝不写入中文）。
+3. **Commit D**：`GET /v3/dashboard/features-fragment` HTML fragment 局部刷新（vanilla JS + fetch、只换 #feature-table-result/#feature-table-summary、history.replaceState、AbortController）。
+4. **报告**：`docs/v3_scheduler_dashboard_usability_refactor_report.md`（§105 13 项）+ 本交接文档更新。
+5. **生产验证（接手电脑）**：SSH 恢复后部署新镜像跑真实四时点 + `--group` 补跑演练；18:45 run_once 结果验收（§3）。
+
+---
+
 ## 0. 工作总账（整个 V3 候选引擎需求）
 
 ### 已完成（本分支 10 commits，全部已 push，head=08eddf9）
