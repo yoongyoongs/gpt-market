@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
@@ -36,20 +36,36 @@ def test_seconds_until_next_run_rolls_to_next_day() -> None:
 
 
 def test_scheduler_job_graph_is_wired_in_dependency_order() -> None:
+    """§8-12：四组编排——15:35 data-prep / 18:20 evidence / 18:45 eod-scan /
+    20:30 maintenance，各自独立 advisory lock（§100 组间不互斥）。"""
     module = _scheduler_module()
-    main, maintenance, database = module.build_orchestrators(
+    bundle = module.build_orchestrators(
         os.getenv("V3_TEST_DATABASE_URL", "postgresql+asyncpg://invalid")
     )
-    assert main.execution_order() == (
-        "market-data", "index-benchmarks", "features",
-        "evidence-increment", "candidate-scan", "full-recall",
-    )
-    assert set(maintenance.execution_order()) == {
+    assert bundle.data_prep.execution_order() == ("market-data", "index-benchmarks")
+    assert bundle.evidence.execution_order() == ("evidence-increment",)
+    # §9：evidence 解除对 features 的运行时人工依赖（handler 自验 Universe）
+    # §10：eod-scan 组内 features → full-recall/candidate-scan
+    # （拓扑排序以字母序入栈，两个策略 Job 的相对次序不构成约束）
+    eod_order = bundle.eod_scan.execution_order()
+    assert set(eod_order) == {"features", "full-recall", "candidate-scan"}
+    assert eod_order.index("features") == 0
+    jobs = bundle.eod_scan._jobs
+    assert jobs["features"].depends_on == ()
+    assert jobs["full-recall"].depends_on == ("features",)
+    assert jobs["candidate-scan"].depends_on == ("features",)
+    assert set(bundle.maintenance.execution_order()) == {
         "corporate-action-match", "projection-verify",
         "performance-mature", "recall-observation-mature",
         "shadow-observation", "expected-run-registry",
         "candidate-outcome-mature",
     }
+    # §100：四组独立 advisory lock——resident 跑 eod-scan 时
+    # --once --group data-prep 不得被无关锁挡住
+    assert bundle.data_prep._advisory_lock_key == "v3-scheduler-data-prep"
+    assert bundle.evidence._advisory_lock_key == "v3-scheduler-evidence"
+    assert bundle.eod_scan._advisory_lock_key == "v3-scheduler-eod-scan"
+    assert bundle.maintenance._advisory_lock_key == "v3-scheduler-maintenance"
 
 
 def test_evidence_failed_capabilities_reports_only_failed() -> None:
@@ -176,7 +192,8 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     def _fake_build(database_url, release=None, database=None):
         # P1-03：run_once 经 SchedulerBundle 收口（closeables 留空）
         return module.SchedulerBundle(
-            main=_FakeOrchestrator(), maintenance=_FakeOrchestrator(),
+            data_prep=_FakeOrchestrator(), evidence=_FakeOrchestrator(),
+            eod_scan=_FakeOrchestrator(), maintenance=_FakeOrchestrator(),
             database=_FakeDatabase(),
         )
 
@@ -199,23 +216,31 @@ def test_run_once_report_is_json_serializable(tmp_path, monkeypatch) -> None:
     loaded = json.loads(output.read_text(encoding="utf-8"))
     assert loaded["status"] == "COMPLETED"
     assert "resolved_at" in loaded["release_resolution"]
-    # RT-05：报表必须显式暴露 catch-up 结果（补跑了哪些交易日）
+    # §6/§13：报表按四组组织，catch-up 交易日跨组汇总暴露
+    assert set(loaded["groups"]) == set(module.GROUP_ORDER)
     assert "catchup" in loaded
-    assert isinstance(loaded["main"], list)
+    for name in module.GROUP_ORDER:
+        part = loaded["groups"][name]
+        if name == "maintenance":
+            # 维护链 = 原始 orchestrator 报告形状（status/jobs）
+            assert "status" in part
+        else:
+            assert isinstance(part["runs"], list)
 
 
-def test_catchup_terminal_marker_uses_full_recall(monkeypatch) -> None:
-    """NEW-OPS-002：追平完成标记必须取主链终端 Job（full-recall），
-    features 成功而 evidence/full-recall 失败时不得误判已追平。"""
+def test_eod_scan_completed_requires_all_required_jobs(monkeypatch) -> None:
+    """§16/§99：EOD 完成判断不再用单一 terminal Job——策略链启用时
+    features+full-recall+candidate-scan 全 SUCCEEDED 才算完成；
+    candidate-scan FAILED 而 full-recall SUCCEEDED 绝不误判已追平。
+    V2 无 Shadow（策略链被 Gate 排除）时只看 features。"""
     import asyncio
 
     module = _scheduler_module()
-    seen: dict = {}
+    succeeded: set[tuple[str, str]] = set()
 
     class _FakeOrchRepo:
-        async def latest_succeeded_idempotency_key(self, job_id):
-            seen["job_id"] = job_id
-            return None
+        async def has_succeeded(self, job_id, idempotency_key):
+            return (job_id, idempotency_key) in succeeded
 
     class _FakeUow:
         orchestrator = _FakeOrchRepo()
@@ -233,8 +258,34 @@ def test_catchup_terminal_marker_uses_full_recall(monkeypatch) -> None:
             pass
 
     monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _FakeUow())
-    assert asyncio.run(module._latest_main_success_key(_FakeDatabase())) is None
-    assert seen["job_id"] == "full-recall"
+    key = "2026-09-02"
+
+    # 全部成功 → 完成
+    succeeded = {("features", key), ("full-recall", key), ("candidate-scan", key)}
+    assert asyncio.run(module.eod_scan_completed(
+        _FakeDatabase(), date(2026, 9, 2), strategy_chain_active=True,
+    )) is True
+
+    # candidate-scan 未成功（FAILED/未跑）→ 未完成（§99 核心场景）
+    succeeded = {("features", key), ("full-recall", key)}
+    assert asyncio.run(module.eod_scan_completed(
+        _FakeDatabase(), date(2026, 9, 2), strategy_chain_active=True,
+    )) is False
+
+    # features 未成功 → 未完成
+    succeeded = {("full-recall", key), ("candidate-scan", key)}
+    assert asyncio.run(module.eod_scan_completed(
+        _FakeDatabase(), date(2026, 9, 2), strategy_chain_active=True,
+    )) is False
+
+    # V2 无 Shadow：策略链被 Gate 排除，features 成功即完成
+    succeeded = {("features", key)}
+    assert asyncio.run(module.eod_scan_completed(
+        _FakeDatabase(), date(2026, 9, 2), strategy_chain_active=False,
+    )) is True
+    assert asyncio.run(module.eod_scan_completed(
+        _FakeDatabase(), date(2026, 9, 2), strategy_chain_active=True,
+    )) is False
 
 
 def test_recall_strategy_version_prefers_release_configuration() -> None:
@@ -251,11 +302,17 @@ def test_recall_strategy_version_prefers_release_configuration() -> None:
     }) == ("recall-v9", "release_configuration")
 
 
-def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
-    """STR-002/R3 主链 Gate 的通用测试装置：Release 解析结果由桩注入。
+def _run_once_with_release(
+    monkeypatch, tmp_path, *, effective_mode, reason,
+    trading_day=True, weekday_calendar=False, latest_success=None,
+    eod_execute_result=None, group="all", prereq_ready=True,
+):
+    """STR-002/R3 Gate 的通用测试装置：Release 解析结果由桩注入。
 
     R3-P0-001 验收要求：Resolver 必须**真消费 uow_factory**（模拟真实
     ReleaseResolver 查库），否则初始化顺序 bug 会被 stub 漏检。
+    latest_success：按 job_id 注入"最近成功幂等键"（catch-up 追平场景）。
+    prereq_ready：§11 EOD 前置检查是否满足（False → 当日无 evidence 运行）。
     """
     import asyncio
     import contextlib
@@ -264,8 +321,13 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
     from datetime import datetime as dt
 
     module = _scheduler_module()
-    seen: dict = {"orch_job_ids": [], "terminal_jobs": [], "resolver_database": None,
-                  "build_orchestrator_database": None}
+    seen: dict = {
+        "executes": {},         # 组名 → [execute kwargs]
+        "required_queried": [], # catch-up 追平查询过的 required Job
+        "resolver_database": None,
+        "build_orchestrator_database": None,
+    }
+    latest_success = dict(latest_success or {})
 
     class _FakeResolution:
         def __init__(self, uow_factory, v3_enabled):
@@ -293,12 +355,20 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
         metadata = _FakeCalendarMeta()
 
         def is_trading_day(self, value):
-            return True
+            if weekday_calendar:
+                return value.weekday() < 5
+            return trading_day
 
     class _FakeOrchRepo:
         async def latest_succeeded_idempotency_key(self, job_id):
-            seen["terminal_jobs"].append(job_id)
-            return None
+            seen["required_queried"].append(job_id)
+            return latest_success.get(job_id)
+
+        async def has_succeeded(self, job_id, idempotency_key):
+            return True
+
+        async def has_run(self, job_id, idempotency_key):
+            return prereq_ready
 
     class _FakeUow:
         orchestrator = _FakeOrchRepo()
@@ -310,8 +380,13 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
             return False
 
     class _FakeOrchestrator:
+        def __init__(self, label):
+            self._label = label
+
         async def execute(self, **kwargs):
-            seen["orch_job_ids"].append(kwargs.get("job_ids"))
+            seen["executes"].setdefault(self._label, []).append(kwargs)
+            if self._label == "eod-scan" and eod_execute_result is not None:
+                return dict(eod_execute_result)
             return {"status": "COMPLETED"}
 
     class _FakeDatabase:
@@ -325,8 +400,10 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
         # P1-03：run_once 通过 SchedulerBundle 收口 Provider/DB 生命周期，
         # fake 同样返回 bundle（closeables 留空——fake 无真连接）
         return module.SchedulerBundle(
-            main=_FakeOrchestrator(),
-            maintenance=_FakeOrchestrator(),
+            data_prep=_FakeOrchestrator("data-prep"),
+            evidence=_FakeOrchestrator("evidence"),
+            eod_scan=_FakeOrchestrator("eod-scan"),
+            maintenance=_FakeOrchestrator("maintenance"),
             database=_FakeDatabase(),
         )
 
@@ -349,7 +426,7 @@ def _run_once_with_release(monkeypatch, tmp_path, *, effective_mode, reason):
     module.build_parser().parse_args(["--once", "--output", str(output)])
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        report = asyncio.run(module.run_once(output))
+        report = asyncio.run(module.run_once(output, group=group))
     report["_seen"] = seen
     return report
 
@@ -370,10 +447,9 @@ def test_run_once_builds_database_before_release_resolution(monkeypatch, tmp_pat
 
 def test_run_once_skips_v3_main_chain_when_effective_mode_is_v2(monkeypatch, tmp_path) -> None:
     """R3-P0-002：effective V2（紧急开关/无 Release/状态不完整）时
-    Release Gate 只跳过策略链（full-recall）——数据事实链
-    （market-data/index-benchmarks/features/evidence-increment）照常运行，
-    否则 V2 期间 V3 数据冻结，无法"先观察再激活"；catch-up 终端标记
-    退回数据链终端 evidence-increment。"""
+    Release Gate 只把策略链（full-recall/candidate-scan）排除出 eod-scan
+    组——数据事实组（data-prep/evidence/features catch-up）照常运行，
+    否则 V2 期间 V3 数据冻结，无法"先观察再激活"。"""
     module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path,
@@ -384,19 +460,27 @@ def test_run_once_skips_v3_main_chain_when_effective_mode_is_v2(monkeypatch, tmp
     assert gate["data_chain"] == "EXECUTED"
     assert gate["strategy_chain"] == "SKIPPED"
     assert gate["reason"] == "V3_DISABLED_FLAG"
-    # 数据链照常运行（每次 execute 只选 4 个数据 Job，full-recall 被排除）
-    assert report["main"], "V2 期间数据链不得停止"
-    assert all(run["status"] == "COMPLETED" for run in report["main"])
-    assert seen["orch_job_ids"], "主链 Orchestrator 必须仍被调度"
-    assert set(seen["orch_job_ids"][0]) == set(module.DATA_CHAIN_JOB_IDS)
-    # catch-up 终端标记退回数据链终端
-    assert seen["terminal_jobs"][-1] == "evidence-increment"
+    groups = report["groups"]
+    assert set(groups) == set(module.GROUP_ORDER)
+    # 数据组照常 catch-up
+    assert all(
+        run["status"] == "COMPLETED"
+        for name in ("data-prep", "evidence") for run in groups[name]["runs"]
+    )
+    # eod-scan 组每次 execute 限定数据 Job（features），策略链被排除
+    eod_executes = seen["executes"]["eod-scan"]
+    assert eod_executes and all(
+        kwargs["job_ids"] == module.EOD_DATA_JOB_IDS for kwargs in eod_executes
+    )
+    # 追平查询以 eod 组唯一 required（features）收尾
+    assert seen["required_queried"][-1] == "features"
     # 维护链（数据运营作业）不受策略版本 Gate 影响，照常执行
-    assert report["maintenance"]["status"] == "COMPLETED"
+    assert groups["maintenance"]["status"] == "COMPLETED"
     assert report["status"] == "COMPLETED"
 
 
 def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp_path) -> None:
+    module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path, effective_mode="V3", reason=None,
     )
@@ -404,26 +488,39 @@ def test_run_once_executes_main_chain_when_effective_mode_is_v3(monkeypatch, tmp
     assert report["release_gate"]["data_chain"] == "EXECUTED"
     assert report["release_gate"]["strategy_chain"] == "EXECUTED"
     assert report["release_gate"]["reason"] is None
-    # V3 生效：全主链（含 full-recall）执行，job_ids 不限选
-    assert all(job_ids is None for job_ids in seen["orch_job_ids"])
-    assert seen["terminal_jobs"][-1] == "full-recall"
-    assert isinstance(report["main"], list) and report["main"]
-    assert all(run["status"] == "COMPLETED" for run in report["main"])
+    # V3 生效：eod-scan 组 execute 不限选 job_ids（full-recall/candidate-scan 照常）
+    eod_executes = seen["executes"]["eod-scan"]
+    assert eod_executes and all(kwargs["job_ids"] is None for kwargs in eod_executes)
+    # 追平查询以策略链三 Job 收尾
+    assert seen["required_queried"][-3:] == [
+        "features", "full-recall", "candidate-scan",
+    ]
+    part = report["groups"]["eod-scan"]
+    assert part["required_jobs"] == ["features", *module.STRATEGY_CHAIN_JOB_IDS]
+    assert all(
+        run["status"] == "COMPLETED"
+        for name in ("data-prep", "evidence", "eod-scan")
+        for run in report["groups"][name]["runs"]
+    )
 
 
 def test_run_once_research_shadow_runs_full_recall_under_v2(monkeypatch, tmp_path) -> None:
     """F6-09/Case J/§17：V2 Live + V3_RESEARCH_SHADOW_ENABLED=true →
-    主链照常包含 full-recall（V3 每日实际跑低位埋伏候选，产出 Recall/
-    Raw Opportunity 数据事实供观察），但正式 Release 解析不变
-    （effective_mode 仍 V2）、release_gate.strategy_chain 如实标注
-    SHADOW_RESEARCH_EXECUTED（绝不假装正式 V3 激活）、无 Trade 路径。
-    env 关闭时回到纯 Gate 行为（SKIPPED + 数据链）。"""
+    eod-scan 组照常包含 full-recall/candidate-scan（V3 每日实际跑低位
+    埋伏候选，产出 Recall/Raw Opportunity 数据事实供观察），但正式
+    Release 解析不变（effective_mode 仍 V2）、release_gate.strategy_chain
+    如实标注 SHADOW_RESEARCH_EXECUTED（绝不假装正式 V3 激活）、无 Trade
+    路径。env 关闭时回到纯 Gate 行为（SKIPPED + 只补 features）。"""
     module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path, effective_mode="V2", reason="V3_DISABLED_FLAG",
     )
     assert report["release_gate"]["strategy_chain"] == "SKIPPED"
     assert report["release_gate"].get("research_shadow") is False
+    assert all(
+        kwargs["job_ids"] == module.EOD_DATA_JOB_IDS
+        for kwargs in report["_seen"]["executes"]["eod-scan"]
+    )
     # --- 开启 Research Shadow ---
     monkeypatch.setenv("V3_RESEARCH_SHADOW_ENABLED", "true")
     report = _run_once_with_release(
@@ -437,13 +534,306 @@ def test_run_once_research_shadow_runs_full_recall_under_v2(monkeypatch, tmp_pat
     assert gate["strategy_chain"] == "SHADOW_RESEARCH_EXECUTED"
     assert gate["research_shadow"] is True
     assert gate["reason"] == "V3_DISABLED_FLAG"
-    # 主链不限选 job_ids——full-recall 照常执行（Recall 数据事实刷新）
-    assert seen["orch_job_ids"], "主链 Orchestrator 必须被调度"
-    assert all(job_ids is None for job_ids in seen["orch_job_ids"])
-    # catch-up 终端标记按策略链终端 full-recall 追平
-    assert seen["terminal_jobs"][-1] == "full-recall"
-    assert all(run["status"] == "COMPLETED" for run in report["main"])
+    # eod-scan 组不限选 job_ids——full-recall 照常执行（Recall 数据事实刷新）
+    eod_executes = seen["executes"]["eod-scan"]
+    assert eod_executes and all(kwargs["job_ids"] is None for kwargs in eod_executes)
+    assert seen["required_queried"][-3:] == [
+        "features", "full-recall", "candidate-scan",
+    ]
+    assert all(
+        run["status"] == "COMPLETED"
+        for run in report["groups"]["eod-scan"]["runs"]
+    )
     assert report["status"] == "COMPLETED"
+
+
+# --- §96：四时点日程（env fallback / 单主循环时点解析 / CLI --group） ---
+
+
+def _clear_slot_env(monkeypatch) -> None:
+    for name in (
+        "V3_DATA_PREP_AT", "V3_EVIDENCE_AT", "V3_EOD_SCAN_AT",
+        "V3_MAINTENANCE_AT", "V3_SCHEDULE_AT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_daily_slots_env_fallback_chain(monkeypatch) -> None:
+    """§13/§15：新四 env 各自生效；V3_EOD_SCAN_AT 未配置时读
+    V3_SCHEDULE_AT（Deprecated）再 fallback 18:45——老部署不坏；
+    非法 env 显式报错而不是静默吃掉。"""
+    module = _scheduler_module()
+    _clear_slot_env(monkeypatch)
+    assert module.daily_slots() == {
+        "data-prep": time(15, 35), "evidence": time(18, 20),
+        "eod-scan": time(18, 45), "maintenance": time(20, 30),
+    }
+    # Deprecated V3_SCHEDULE_AT 仍被读取（老部署不坏）
+    monkeypatch.setenv("V3_SCHEDULE_AT", "19:00")
+    assert module.daily_slots()["eod-scan"] == time(19, 0)
+    # 新 env 优先于 Deprecated
+    monkeypatch.setenv("V3_EOD_SCAN_AT", "18:50")
+    assert module.daily_slots()["eod-scan"] == time(18, 50)
+    # --at 显式传入仅覆盖 eod-scan 时点
+    slots = module.daily_slots(eod_override=time(21, 0))
+    assert slots["eod-scan"] == time(21, 0)
+    assert slots["data-prep"] == time(15, 35)
+    # 非法 env 显式 ValueError
+    monkeypatch.setenv("V3_DATA_PREP_AT", "not-a-time")
+    with pytest.raises(ValueError, match="V3_DATA_PREP_AT"):
+        module.daily_slots()
+
+
+def test_resolve_next_slot_picks_nearest_group_in_stable_order(monkeypatch) -> None:
+    """§13：单一主循环 resolve_next_slot——四时点各自命中；全部过期时
+    滚到次日；同刻并列按 GROUP_ORDER 稳定顺序。"""
+    module = _scheduler_module()
+    _clear_slot_env(monkeypatch)
+    slots = module.daily_slots()
+    # 10:00 → 下一个时点 15:35 data-prep
+    now = datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI)
+    name, seconds = module.resolve_next_slot(now, slots)
+    assert name == "data-prep"
+    assert seconds == module.seconds_until_next_run(now, time(15, 35))
+    # 18:20:30 → eod-scan（18:45 早于 20:30 maintenance）
+    now = datetime(2026, 9, 10, 18, 20, 30, tzinfo=SHANGHAI)
+    assert module.resolve_next_slot(now, slots)[0] == "eod-scan"
+    # 21:00 → 全部过期 → 次日 15:35 data-prep，且秒数必须为正
+    now = datetime(2026, 9, 10, 21, 0, tzinfo=SHANGHAI)
+    name, seconds = module.resolve_next_slot(now, slots)
+    assert name == "data-prep"
+    assert seconds > 0
+    # 同刻并列 → GROUP_ORDER 首组
+    tie = {name_: time(12, 0) for name_ in module.GROUP_ORDER}
+    name, _ = module.resolve_next_slot(
+        datetime(2026, 9, 10, 8, 0, tzinfo=SHANGHAI), tie,
+    )
+    assert name == "data-prep"
+
+
+def test_cli_group_flag_parses_and_validates() -> None:
+    """§14：CLI --group 合法值 = all + 四组名；非法值 argparse 报错。"""
+    module = _scheduler_module()
+    parser = module.build_parser()
+    assert parser.parse_args(["--once"]).group == "all"
+    assert parser.parse_args(["--once", "--group", "eod-scan"]).group == "eod-scan"
+    assert parser.parse_args(["--once", "--group", "data-prep"]).group == "data-prep"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--once", "--group", "nope"])
+
+
+# --- §97：非交易日只跑 maintenance ---
+
+
+def test_run_once_non_trading_day_skips_data_groups_runs_maintenance(
+    monkeypatch, tmp_path,
+) -> None:
+    """§97：非交易日 data-prep/evidence/eod-scan 显式 SKIPPED
+    （NON_TRADING_DAY、无 runs、绝不 execute），maintenance 自然日继续；
+    整体状态不因非交易日 skip 误判 PARTIAL。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+        trading_day=False,
+    )
+    seen = report.pop("_seen")
+    groups = report["groups"]
+    assert not (set(seen["executes"]) & {"data-prep", "evidence", "eod-scan"}), \
+        "非交易日数据组绝不能执行"
+    assert "maintenance" in seen["executes"], "维护链自然日继续"
+    for name in ("data-prep", "evidence", "eod-scan"):
+        assert groups[name]["status"] == "SKIPPED"
+        assert groups[name]["reason"] == "NON_TRADING_DAY"
+        assert groups[name]["runs"] == []
+    assert groups["maintenance"]["status"] == "COMPLETED"
+    assert report["catchup"] == []
+    assert report["status"] == "COMPLETED"
+
+
+# --- §98：catch-up 按组追平 ---
+
+
+def test_run_once_catchup_fills_gap_from_group_last_success(
+    monkeypatch, tmp_path,
+) -> None:
+    """§98：catch-up 按组独立追平——组内 required Job 最近**全部**成功
+    交易日之后的每个交易日补齐；已追平组不重复执行（Orchestrator 幂等
+    是第二道保险，但 catch-up 计算本身就不该产生多余 execute）。
+    fixture：交易日历 = 周一~周五，today = 2026-09-02（周三）。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+        weekday_calendar=True,
+        latest_success={
+            "market-data": "2026-09-02", "index-benchmarks": "2026-09-02",
+            "evidence-increment": "2026-08-31",
+            "features": "2026-08-31", "full-recall": "2026-09-01",
+            "candidate-scan": "2026-08-29",
+        },
+    )
+    seen = report.pop("_seen")
+    groups = report["groups"]
+    # data-prep：min(09-02, 09-02) → 已追平，无 execute
+    assert groups["data-prep"]["pending"] == []
+    assert seen["executes"].get("data-prep") is None
+    # evidence：08-31（周一）之后 → 09-01 / 09-02
+    assert groups["evidence"]["pending"] == ["2026-09-01", "2026-09-02"]
+    assert [k["trade_date"].isoformat() for k in seen["executes"]["evidence"]] == [
+        "2026-09-01", "2026-09-02",
+    ]
+    # 补跑历史日标注 operational-catchup，当日为 same-day
+    assert [r["catchup_mode"] for r in groups["evidence"]["runs"]] == [
+        "operational-catchup", "same-day",
+    ]
+    # eod-scan：组内 min(features 08-31, full-recall 09-01, candidate-scan
+    # 08-29) = 08-29（周六非交易日）→ 08-31 / 09-01 / 09-02
+    assert groups["eod-scan"]["pending"] == [
+        "2026-08-31", "2026-09-01", "2026-09-02",
+    ]
+    # 跨组 pending 并集进 report["catchup"]
+    assert report["catchup"] == ["2026-08-31", "2026-09-01", "2026-09-02"]
+    assert report["catchup_mode"] == "operational"
+    assert report["status"] == "COMPLETED"
+
+
+# --- §99：candidate-scan 失败不被 full-recall 掩盖 ---
+
+
+def test_run_once_candidate_scan_failure_not_masked_by_full_recall(
+    monkeypatch, tmp_path,
+) -> None:
+    """§99：candidate-scan 最近成功落后于 full-recall 时，eod-scan 组
+    追平以组内最落后者（min）为准——次日仍补跑 candidate-scan
+    （Orchestrator 幂等对 FAILED 重跑），绝不因 full-recall 成功而
+    误判 eod 已完成。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+        weekday_calendar=True,
+        latest_success={
+            "market-data": "2026-09-02", "index-benchmarks": "2026-09-02",
+            "evidence-increment": "2026-09-02", "features": "2026-09-02",
+            "full-recall": "2026-09-02", "candidate-scan": "2026-09-01",
+        },
+    )
+    seen = report.pop("_seen")
+    groups = report["groups"]
+    assert groups["data-prep"]["pending"] == []
+    assert groups["evidence"]["pending"] == []
+    # eod-scan：min(09-02 ×3, candidate-scan 09-01) = 09-01 → 只补 09-02
+    assert groups["eod-scan"]["pending"] == ["2026-09-02"]
+    assert len(seen["executes"]["eod-scan"]) == 1
+    assert seen["executes"]["eod-scan"][0]["trade_date"].isoformat() == "2026-09-02"
+
+
+# --- §11：EOD 前置完整性检查 ---
+
+
+def test_ensure_eod_prerequisites_requires_market_index_and_evidence() -> None:
+    """§11：market-data / index-benchmarks 必须 SUCCEEDED、evidence 必须
+    存在当日运行记录；不满足 → EOD_PREREQUISITE_NOT_READY，绝不拿旧数据
+    生成假 Final30。"""
+    import asyncio
+
+    module = _scheduler_module()
+
+    class _Repo:
+        def __init__(self, succeeded, ran):
+            self._succeeded = succeeded
+            self._ran = ran
+
+        async def has_succeeded(self, job_id, key):
+            return key in self._succeeded.get(job_id, ())
+
+        async def has_run(self, job_id, key):
+            return key in self._ran
+
+    class _Uow:
+        def __init__(self, repo):
+            self.orchestrator = repo
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def factory(repo):
+        return lambda: _Uow(repo)
+
+    key = "2026-09-02"
+    full = {"market-data": {key}, "index-benchmarks": {key}}
+    result = asyncio.run(module.ensure_eod_prerequisites(
+        factory(_Repo(full, {key})), date(2026, 9, 2),
+    ))
+    assert result.ready
+    assert result.error is None
+    assert result.checks == {
+        "market-data": True, "index-benchmarks": True, "evidence-increment": True,
+    }
+    # index-benchmarks 未成功 → 不就绪
+    missing = asyncio.run(module.ensure_eod_prerequisites(
+        factory(_Repo({"market-data": {key}}, {key})), date(2026, 9, 2),
+    ))
+    assert not missing.ready
+    assert missing.error == "EOD_PREREQUISITE_NOT_READY"
+    assert missing.checks["index-benchmarks"] is False
+    # evidence 当日完全没跑过 → 不就绪
+    no_evidence = asyncio.run(module.ensure_eod_prerequisites(
+        factory(_Repo(full, set())), date(2026, 9, 2),
+    ))
+    assert not no_evidence.ready
+    assert no_evidence.checks["evidence-increment"] is False
+
+
+def test_run_once_eod_prerequisite_not_ready_skips_eod_day(
+    monkeypatch, tmp_path,
+) -> None:
+    """§11：eod-scan 组待补交易日前置不满足 → 该日记
+    SKIPPED / EOD_PREREQUISITE_NOT_READY（checks 逐项暴露），绝不
+    execute 生成假 Final30；整体状态 PARTIAL 而非 COMPLETED。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+        group="eod-scan", prereq_ready=False,
+    )
+    seen = report.pop("_seen")
+    part = report["groups"]["eod-scan"]
+    assert part["runs"], "至少一个待补交易日"
+    assert all(
+        run["status"] == "SKIPPED"
+        and run["error_type"] == "EOD_PREREQUISITE_NOT_READY"
+        and set(run["checks"]) == {"market-data", "index-benchmarks", "evidence-increment"}
+        for run in part["runs"]
+    )
+    assert seen["executes"] == {}, "前置不满足绝不能 execute"
+    assert report["status"] == "PARTIAL"
+
+
+# --- §100：advisory lock LOCKED → 如实 PARTIAL ---
+
+
+def test_run_once_locked_run_marks_report_partial(monkeypatch, tmp_path) -> None:
+    """§100：eod-scan 组被其它进程 advisory lock 占用（execute 返回
+    LOCKED）→ 该运行如实记入 runs，整体状态 PARTIAL（绝不谎报
+    COMPLETED）；单组 --group 路径不影响其它组。"""
+    module = _scheduler_module()
+    report = _run_once_with_release(
+        monkeypatch, tmp_path, effective_mode="V3", reason=None,
+        group="eod-scan",
+        latest_success={
+            "market-data": "2026-09-02", "index-benchmarks": "2026-09-02",
+            "evidence-increment": "2026-09-02", "features": "2026-09-02",
+            "full-recall": "2026-09-02", "candidate-scan": "2026-09-01",
+        },
+        eod_execute_result={"status": "LOCKED", "jobs": []},
+    )
+    seen = report.pop("_seen")
+    part = report["groups"]["eod-scan"]
+    assert part["pending"] == ["2026-09-02"]
+    assert [run["status"] for run in part["runs"]] == ["LOCKED"]
+    assert len(seen["executes"]["eod-scan"]) == 1
+    assert report["status"] == "PARTIAL"
 
 
 # --- REMAIN-OPS-EXPECTED / R3-P1-005：Expected Run Registry Job ---
@@ -525,10 +915,8 @@ def _expected_run_handler(monkeypatch, *, trading_day=True):
 
 def _maintenance_handler(module, job_id):
     """从 build_orchestrators 取维护链 handler（闭包内函数，不连真库）。"""
-    main, maintenance, _ = module.build_orchestrators(
-        "postgresql+asyncpg://invalid"
-    )
-    return maintenance._jobs[job_id].handler
+    bundle = module.build_orchestrators("postgresql+asyncpg://invalid")
+    return bundle.maintenance._jobs[job_id].handler
 
 
 def test_profile_schedule_slots_contract() -> None:
@@ -793,7 +1181,7 @@ def test_candidate_scan_handler_runs_scan_with_pit_feature_run(monkeypatch) -> N
     assert context.as_of.tzinfo is timezone.utc
     handler = module.build_orchestrators(
         "postgresql+asyncpg://invalid"
-    )[0]._jobs["candidate-scan"].handler
+    ).eod_scan._jobs["candidate-scan"].handler
     metrics = asyncio.run(handler(context))
 
     # PIT 一致：显式传同编排 features 产物
@@ -901,7 +1289,7 @@ def test_candidate_scan_v2_research_shadow_no_trade_side_effects(monkeypatch) ->
     monkeypatch.setattr(module, "SQLAlchemyUnitOfWork", lambda sessions: _ProbeUow())
     handler = module.build_orchestrators(
         "postgresql+asyncpg://invalid"
-    )[0]._jobs["candidate-scan"].handler
+    ).eod_scan._jobs["candidate-scan"].handler
     # artifacts 提供 feature_run_id → _resolve_feature_run_id 不触 features repo
     context = _job_context(
         _ProbeUow,
@@ -946,7 +1334,7 @@ def test_candidate_outcome_mature_processes_multiple_pending_scans(monkeypatch) 
     factory, seen = _commit_uow_factory()
     handler = module.build_orchestrators(
         "postgresql+asyncpg://invalid"
-    )[1]._jobs["candidate-outcome-mature"].handler
+    ).maintenance._jobs["candidate-outcome-mature"].handler
     metrics = asyncio.run(handler(_job_context(factory)))
 
     assert metrics["status"] == "ok"

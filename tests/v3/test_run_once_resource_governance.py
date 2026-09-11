@@ -310,7 +310,8 @@ async def test_bundle_closes_each_provider_exactly_once() -> None:
     provider_b = CloseCountingProvider()
     database = CloseCountingProvider()
     bundle = SchedulerBundle(
-        main=object(), maintenance=object(), database=database,
+        data_prep=object(), evidence=object(), eod_scan=object(),
+        maintenance=object(), database=database,
         closeables=(provider_a, ResourcelessService(), provider_b, database),
     )
 
@@ -329,7 +330,8 @@ async def test_bundle_close_swallows_individual_close_failures() -> None:
     good = CloseCountingProvider()
     bad = CloseCountingProvider(fail=True)
     bundle = SchedulerBundle(
-        main=object(), maintenance=object(), database=good,
+        data_prep=object(), evidence=object(), eod_scan=object(),
+        maintenance=object(), database=good,
         closeables=(bad, good),
     )
 
@@ -400,7 +402,9 @@ async def test_run_once_closes_providers_when_maintenance_fails(
 
     def fake_build_orchestrators(database_url, release=None, database=None):
         return module.SchedulerBundle(
-            main=object(),
+            data_prep=object(),
+            evidence=object(),
+            eod_scan=object(),
             maintenance=_FailingMaintenance(),
             database=_FakeDatabase(),
             closeables=(provider, database),

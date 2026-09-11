@@ -144,7 +144,7 @@ market-data → index-benchmarks → features → evidence-increment → full-re
 - **模型惯例**：UUID PK、`as_of`/`known_at` 对 + `known_at>=as_of` CheckConstraint、`content_hash String(64)` 唯一（内容寻址幂等）、JSONB payload、具名 CheckConstraint、`{"schema": V3_SCHEMA}`。
 - **UoW**：`app/v3/infrastructure/db/uow.py:36-68`（repo 在 `__aenter__` 实例化）；协议 protocols.py:366-392（滞后于实现，新增 repo 需同步协议）。
 - **应用服务惯例**：`app/v3/application/` 一文件一服务、`uow_factory` 注入首参、`execute(...)`。
-- **加 job**：`scripts/v3_scheduler.py` `build_orchestrators()` 内定义 handler（:209-305 样例）+ 主链 tuple（:499-519）追加 `JobDefinition`；幂等/重试/跳过由 Orchestrator 处理（orchestrator.py:115-151）；catch-up 终结 job 键 = `TERMINAL_MAIN_JOB = "full-recall"`（:88,626-638）——**新终结 job 需同步此键，否则 catch-up 判定错位**。
+- **加 job**：`scripts/v3_scheduler.py` `build_orchestrators()` 内定义 handler + 对应组的 `JobDefinition`（data-prep/evidence/eod-scan/maintenance 四组，`GROUP_REQUIRED_JOBS` 登记 required Job）；幂等/重试/跳过由 Orchestrator 处理（orchestrator.py:115-151）；catch-up 按组追平（组内 required Job 最近全部成功日之后补齐，`_group_last_success_key`）——**新 required Job 需同步 `GROUP_REQUIRED_JOBS`，否则该组 catch-up 追平判定缺位**。
 - **API 惯例**：裸 contract 返回（无包装 envelope）、错误 envelope `{code,message,request_id,details,retryable}`（v3/errors.py:45-58）、游标分页 limit∈[1,200] 默认 50、写操作 `_bind_principal`（v3.py:128-139）。**新增公开 GET 必须加入 `app/v3/security.py:63-76` 公开白名单**，否则要求 MARKET_READ token。
 - **前端**：server-rendered HTMLResponse（v3_dashboard.py:316-378 样式；`_status_badge` :140-153、行枚举 :252-270、GET 表单控件 :308-309），可选 vanilla JS `data-*` 排序（live.js 样例）。无 SPA/无图表库。
 - **测试惯例**：`tests/v3/test_<feature>.py` + `test_<feature>_postgres.py`（`skipif not V3_TEST_DATABASE_URL` 样例 test_recall_postgres.py:37）；PG 套件必须 fresh 库单跑（历史测试无清理，二连跑幂等跳过必失败——既有行为）。

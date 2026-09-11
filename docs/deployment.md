@@ -122,7 +122,14 @@ docker compose --profile v3-worker up -d postgres v3-market-worker
 docker compose logs --tail=100 v3-market-worker
 ```
 
-默认按上海时区每日 18:45（`V3_SCHEDULE_AT`，可覆盖）执行正式 Orchestrator 主链：Universe/日线增量/公司行动（Phase2 market job 已并入 market-data Job）→ 指数基准（东财失败逐基准降级腾讯）→ 全市场 Feature/Regime → Evidence 增量 → Full Recall + Raw Opportunity Publish；随后独立维护链（公司行动 Match、Projection Verify、Performance Mature、Recall Observation Mature），并以常驻盘中触发循环评估 Attention（间隔 `V3_INTRADAY_INTERVAL_SECONDS`，默认 300 秒）。旧 Phase2 参数 `V3_PHASE2_*` 仅作用于 market-data Job 内部；PostgreSQL advisory lock 拒绝重叠任务。
+默认按上海时区四时点执行（`V3_DATA_PREP_AT`=15:35 / `V3_EVIDENCE_AT`=18:20 / `V3_EOD_SCAN_AT`=18:45 / `V3_MAINTENANCE_AT`=20:30，均可覆盖；旧 `V3_SCHEDULE_AT` 仅在 `V3_EOD_SCAN_AT` 未配置时作为 eod-scan 时点兜底，Deprecated）：
+
+- **15:35 data-prep**：Universe/日线增量/公司行动（Phase2 market job 已并入 market-data Job）→ 指数基准（东财失败逐基准降级腾讯）；
+- **18:20 evidence**：Evidence 增量（不再依赖 features 先跑，handler 自验 Universe）；
+- **18:45 eod-scan**：全市场 Feature/Regime → Full Recall + Raw Opportunity Publish（effective V3 或 Research Shadow 时含 full-recall/candidate-scan；执行前检查 market-data/index-benchmarks SUCCEEDED 且 evidence 当日已有运行，不满足则显式记 `EOD_PREREQUISITE_NOT_READY`，绝不生成假 Final30）；
+- **20:30 maintenance**：公司行动 Match、Projection Verify、Performance Mature、Recall Observation Mature 等维护链（每个自然日运行）。
+
+常驻进程单一主循环解析"下一个时点"（间隔 `V3_INTRADAY_INTERVAL_SECONDS`，默认 300 秒，评估盘中 Attention 触发）。`--once --group {all,data-prep,evidence,eod-scan,maintenance}` 可只补单组：run_once 按组 catch-up（组内已 SUCCEEDED 跳过、未完成补跑），绝不无脑重抓。各时点独立 advisory lock，互不阻塞。旧 Phase2 参数 `V3_PHASE2_*` 仅作用于 market-data Job 内部。
 
 默认报告写入容器 `/tmp`，用于日志与当次诊断。若改为宿主持久化挂载，目录必须允许非 root 容器用户 UID 10001 写入：
 
