@@ -440,3 +440,77 @@ def test_dashboard_treats_empty_limit_as_default(monkeypatch):
 
     assert response.status_code == 200
     assert features.query_seen.limit == 50
+
+
+def test_features_fragment_returns_bare_nodes_without_doctype(monkeypatch):
+    """§75/§93：fragment 200、只含 summary/result 两节点、不含 doctype。"""
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard/features-fragment?market=SH&limit=20")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"].startswith("no-store")
+    html = response.text
+    assert "<!doctype" not in html.lower()
+    assert "<html" not in html.lower()
+    assert '<span id="feature-table-summary"' in html
+    assert '<div class="table-wrap" id="feature-table-result">' in html
+    assert "603019" in html
+    assert "筛选后可查询 5,551 条" in html
+
+
+def test_features_fragment_passes_filter_params_to_query(monkeypatch):
+    """§94：fragment 与整页共用 _load_feature_table_data，筛选参数全透传。"""
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get(
+            "/v3/dashboard/features-fragment"
+            "?market=SZ&sort_by=return_60d&descending=false&limit=40"
+        )
+
+    assert response.status_code == 200
+    assert features.query_seen.market == "SZ"
+    assert features.query_seen.sort_by.value == "return_60d"
+    assert features.query_seen.descending is False
+    assert features.query_seen.limit == 40
+
+
+def test_features_fragment_rejects_bad_limit(monkeypatch):
+    """fragment 与整页同一校验口径（422），前端 catch 后保留原表格。"""
+    monkeypatch.setattr(container, "v3", _V3(_Features(_page())))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard/features-fragment?limit=200")
+
+    assert response.status_code == 422
+
+
+def test_features_fragment_shows_friendly_empty_state(monkeypatch):
+    """§75：无 Feature Run 时 fragment 返回可读空态而非空白。"""
+    monkeypatch.setattr(container, "v3", _V3(_Features(None)))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard/features-fragment")
+
+    assert response.status_code == 200
+    assert "暂无可展示的特征数据" in response.text
+
+
+def test_dashboard_page_embeds_progressive_enhancement_form(monkeypatch):
+    """§76/§77：整页保留 id 锚点 + 原生 GET 表单兜底 + 局部刷新脚本。"""
+    features = _Features(_page())
+    monkeypatch.setattr(container, "v3", _V3(features))
+    with TestClient(_app()) as client:
+        response = client.get("/v3/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="feature-table-section"' in html
+    assert 'id="feature-filter-form"' in html
+    assert 'action="/v3/dashboard"' in html  # JS 禁用时可原生提交
+    assert 'id="feature-filter-error"' in html
+    assert "features-fragment" in html  # 脚本指向 fragment 端点
+    assert "AbortController" in html
+    assert "history.replaceState" in html
+    assert "加载失败，请稍后重试" in html

@@ -517,6 +517,125 @@ def _why_not_section(rows: list[Any], code: str, name: str | None = None) -> str
     )
 
 
+async def _load_feature_table_data(
+    uow,
+    *,
+    market: str | None,
+    sort_by: FeatureSortField,
+    descending: bool,
+    limit: int,
+):
+    """§66 共享查询：整页与 features-fragment 端点共用，保证两侧
+    看到的行情表数据口径一致（筛选参数完全透传）。"""
+    return await uow.features.query(
+        FeatureQuery(
+            market=market,
+            sort_by=sort_by,
+            descending=descending,
+            fields=FEATURE_FIELDS,
+            limit=limit,
+        )
+    )
+
+
+def _feature_table_nodes(
+    page, *, sort_by: FeatureSortField, descending: bool
+) -> tuple[str, str]:
+    """§67/§75 共享渲染：返回 (summary_html, result_html) 两个节点——
+    <span id="feature-table-summary"> 与 <div id="feature-table-result">。
+    整页渲染与 fragment 端点共用，局部刷新后 DOM 与整页一致；
+    fragment 响应只由这两个节点组成（不含 doctype）。"""
+    rows = []
+    for rank, item in enumerate(page.items, 1):
+        # §35 缺失字段中文名（title 保留原始字段名），未映射兜底原样
+        missing_raw = item.get("missing_fields") or []
+        missing = ", ".join(
+            FIELD_LABELS.get(str(field), str(field)) for field in missing_raw
+        )
+        missing_title = ", ".join(str(field) for field in missing_raw)
+        rows.append(
+            "<tr>"
+            f'<td class="num">{rank}</td><td>{escape(_market_label(item.get("market")))}</td>'
+            f'<td>{_text(item.get("code"))}</td><td class="name">{_text(item.get("name"))}</td>'
+            f'<td class="num">{_number(item.get("close"))}</td>'
+            f'{_return_cell(item.get("return_3d"))}{_return_cell(item.get("return_5d"))}'
+            f'{_return_cell(item.get("return_20d"))}{_return_cell(item.get("return_60d"))}'
+            f'<td class="num">{_pct(item.get("position_60d"), fraction=True)}</td>'
+            f'<td class="num">{_number(item.get("volume_ratio_5d"))}</td>'
+            f'<td class="num">{_pct(item.get("atr_pct"), fraction=True)}</td>'
+            f'<td class="num" title="{_text(item.get("amount"))}">{_amount(item.get("amount"))}</td>'
+            f'<td class="num">{_pct(item.get("coverage"), fraction=True)}</td>'
+            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"数据过期" if item.get("stale") else "数据新鲜"}</span></td>'
+            f'<td class="missing" title="{_text(missing_title)}">{_text(missing)}</td>'
+            "</tr>"
+        )
+    summary = (
+        f"筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”"
+        f"{'降序' if descending else '升序'}展示，最多读取 100 条。"
+    )
+    summary_html = (
+        f'<span id="feature-table-summary" class="subtitle" '
+        f'style="display:block;margin-top:4px">{summary}</span>'
+    )
+    result_html = (
+        '<div class="table-wrap" id="feature-table-result">'
+        '<table><thead><tr><th class="num">#</th><th>市场</th><th>代码</th><th>名称</th>'
+        '<th class="num">收盘价</th><th class="num">3日涨跌</th><th class="num">5日涨跌</th>'
+        '<th class="num">20日涨跌</th><th class="num">60日涨跌</th><th class="num">60日价格位置</th>'
+        '<th class="num">5日量比</th><th class="num">ATR波动率</th><th class="num">成交额</th>'
+        '<th class="num">数据覆盖率</th><th>数据状态</th><th>缺失字段</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+    return summary_html, result_html
+
+
+_FEATURE_FILTER_SCRIPT = """
+(function () {
+  var form = document.getElementById('feature-filter-form');
+  if (!form || !window.fetch || !window.AbortController) { return; }
+  var errorEl = document.getElementById('feature-filter-error');
+  var controller = null;
+  form.addEventListener('submit', function (event) {
+    // §77 渐进增强：JS 可用时拦截 GET 提交改局部刷新；否则原生提交兜底
+    event.preventDefault();
+    if (controller) { controller.abort(); }  // §73 防重复提交
+    controller = new AbortController();
+    var params = new URLSearchParams(new FormData(form));
+    var button = form.querySelector('button[type="submit"]');
+    if (button) { button.disabled = true; button.textContent = '加载中…'; }  // §71
+    errorEl.hidden = true;
+    var scrollY = window.scrollY;
+    fetch('/v3/dashboard/features-fragment?' + params.toString(), {
+      headers: { 'X-Requested-With': 'fetch' },
+      cache: 'no-store',
+      signal: controller.signal
+    }).then(function (resp) {
+      if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+      return resp.text();
+    }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      ['feature-table-summary', 'feature-table-result'].forEach(function (id) {
+        var remote = doc.getElementById(id);
+        var local = document.getElementById(id);
+        if (remote && local) { local.outerHTML = remote.outerHTML; }
+      });
+      // §70 保留 URL 可分享/可回退，不产生历史记录
+      history.replaceState(null, '', '/v3/dashboard?' + params.toString());
+      window.scrollTo(0, scrollY);
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') { return; }
+      // §72 失败保留原表格，仅提示
+      errorEl.textContent = '加载失败，请稍后重试';
+      errorEl.hidden = false;
+    }).then(function () {
+      if (button) { button.disabled = false; button.textContent = '应用'; }
+      controller = null;
+    });
+  });
+})();
+"""
+
+
 def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: bool, market: str | None, limit: int,
                      intraday_status: dict[str, Any] | None = None,
                      pipeline: dict[str, Any] | None = None,
@@ -546,30 +665,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
         if descending
         else '<option value="true">降序</option><option value="false" selected>升序</option>'
     )
-    rows = []
-    for rank, item in enumerate(page.items, 1):
-        # §35 缺失字段中文名（title 保留原始字段名），未映射兜底原样
-        missing_raw = item.get("missing_fields") or []
-        missing = ", ".join(
-            FIELD_LABELS.get(str(field), str(field)) for field in missing_raw
-        )
-        missing_title = ", ".join(str(field) for field in missing_raw)
-        rows.append(
-            "<tr>"
-            f'<td class="num">{rank}</td><td>{escape(_market_label(item.get("market")))}</td>'
-            f'<td>{_text(item.get("code"))}</td><td class="name">{_text(item.get("name"))}</td>'
-            f'<td class="num">{_number(item.get("close"))}</td>'
-            f'{_return_cell(item.get("return_3d"))}{_return_cell(item.get("return_5d"))}'
-            f'{_return_cell(item.get("return_20d"))}{_return_cell(item.get("return_60d"))}'
-            f'<td class="num">{_pct(item.get("position_60d"), fraction=True)}</td>'
-            f'<td class="num">{_number(item.get("volume_ratio_5d"))}</td>'
-            f'<td class="num">{_pct(item.get("atr_pct"), fraction=True)}</td>'
-            f'<td class="num" title="{_text(item.get("amount"))}">{_amount(item.get("amount"))}</td>'
-            f'<td class="num">{_pct(item.get("coverage"), fraction=True)}</td>'
-            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"数据过期" if item.get("stale") else "数据新鲜"}</span></td>'
-            f'<td class="missing" title="{_text(missing_title)}">{_text(missing)}</td>'
-            "</tr>"
-        )
+    summary_html, result_html = _feature_table_nodes(
+        page, sort_by=sort_by, descending=descending,
+    )
     regime_html = ""
     if regime is not None:
         stale_reason = getattr(regime, "stale_reason", None) or {}
@@ -611,11 +709,12 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
 {_live_status_section(intraday_status)}
 {_pipeline_section(pipeline)}
 {_attention_section(attention_events or [])}
-<section class="card section" id="feature-table-section"><div class="section-head"><div><h2>全市场事实特征<span id="feature-table-summary" class="subtitle" style="display:block;margin-top:4px">筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”{'降序' if descending else '升序'}展示，最多读取 100 条。</span></h2></div>
-<form class="controls" method="get" id="feature-filter-form"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
+<section class="card section" id="feature-table-section"><div class="section-head"><div><h2>全市场事实特征{summary_html}</h2></div>
+<form class="controls" method="get" action="/v3/dashboard" id="feature-filter-form"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
 <select name="descending">{direction_options}</select><input name="limit" type="number" min="20" max="100" value="{limit}" aria-label="显示数量"><button type="submit">应用</button></form></div>
-<div class="table-wrap" id="feature-table-result"><table><thead><tr><th class="num">#</th><th>市场</th><th>代码</th><th>名称</th><th class="num">收盘价</th><th class="num">3日涨跌</th><th class="num">5日涨跌</th><th class="num">20日涨跌</th><th class="num">60日涨跌</th><th class="num">60日价格位置</th><th class="num">5日量比</th><th class="num">ATR波动率</th><th class="num">成交额</th><th class="num">数据覆盖率</th><th>数据状态</th><th>缺失字段</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+{result_html}
 <p id="feature-filter-error" class="muted" hidden></p></section>
+<script>{_FEATURE_FILTER_SCRIPT}</script>
 <footer class="foot">服务器时间：{escape(now_shanghai().strftime("%Y-%m-%d %H:%M:%S"))}（上海） · <a href="/api/v3/universe/features">原始数据（JSON）</a> · <a href="/docs">API 文档</a></footer>
 """
     return _document("V3 全市场行情特征看板", body)
@@ -655,14 +754,9 @@ async def v3_dashboard(
 
     clock = lambda: datetime.now(timezone.utc)  # noqa: E731
     async with container.v3.uow() as uow:
-        page = await uow.features.query(
-            FeatureQuery(
-                market=market,
-                sort_by=sort_by,
-                descending=descending,
-                fields=FEATURE_FIELDS,
-                limit=limit_value,
-            )
+        page = await _load_feature_table_data(
+            uow, market=market, sort_by=sort_by,
+            descending=descending, limit=limit_value,
         )
         regime = await uow.features.latest_regime()
         attention_events = await uow.attention.open_events(limit=20)
@@ -746,30 +840,46 @@ async def v3_dashboard(
         ),
         headers=NO_CACHE_HEADERS,
     )
-    intraday_status = await MarketIntradayStatusService(
-        clock=clock, is_trading_day=_trading_day,
-    ).execute()
-    pipeline = await PipelineEodLatestService(
-        container.v3.uow, clock=clock,
-    ).execute()
+
+
+@router.get("/dashboard/features-fragment", response_class=HTMLResponse)
+async def v3_dashboard_features_fragment(
+    market: str | None = Query(default=None),
+    sort_by: FeatureSortField = FeatureSortField.RETURN_20D,
+    descending: bool = True,
+    limit: str | None = Query(default=None),
+):
+    """§61-§75：行情表局部刷新 fragment（供 vanilla JS fetch 替换）。
+
+    只返回 #feature-table-summary 与 #feature-table-result 两个节点的
+    HTML（不含 doctype/<html>），与整页共享 _load_feature_table_data
+    查询与 _feature_table_nodes 渲染，保证局部刷新后 DOM 一致。
+    """
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    if market == "":
+        market = None
+    if market is not None and market not in {"SH", "SZ", "BJ"}:
+        raise HTTPException(status_code=422, detail="market must be one of SH/SZ/BJ")
+    try:
+        limit_value = 50 if limit in (None, "") else int(limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="limit must be an integer") from exc
+    if not 20 <= limit_value <= 100:
+        raise HTTPException(status_code=422, detail="limit must be between 20 and 100")
+    async with container.v3.uow() as uow:
+        page = await _load_feature_table_data(
+            uow, market=market, sort_by=sort_by,
+            descending=descending, limit=limit_value,
+        )
     if page is None:
-        return initializing_page("生产库尚未发布 Feature Run；后台数据任务完成后即可展示。")
-    return HTMLResponse(
-        render_dashboard(
-            page,
-            regime,
-            sort_by=sort_by,
-            descending=descending,
-            market=market,
-            limit=limit_value,
-            intraday_status=intraday_status,
-            pipeline=pipeline,
-            attention_events=attention_events,
-            scan_run=scan_run,
-            scan_expert_counts=scan_expert_counts,
-            scan_top_rows=scan_top_rows,
-            why_not_rows=why_not_rows,
-            why_not_code=whynot,
-        ),
-        headers=NO_CACHE_HEADERS,
+        return HTMLResponse(
+            '<span id="feature-table-summary" class="subtitle">暂无数据</span>'
+            '<div class="table-wrap" id="feature-table-result">'
+            '<p class="muted">暂无可展示的特征数据；后台数据任务完成后即可展示。</p></div>',
+            headers=NO_CACHE_HEADERS,
+        )
+    summary_html, result_html = _feature_table_nodes(
+        page, sort_by=sort_by, descending=descending,
     )
+    return HTMLResponse(summary_html + result_html, headers=NO_CACHE_HEADERS)
