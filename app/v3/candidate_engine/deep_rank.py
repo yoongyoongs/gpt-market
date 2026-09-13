@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.v3.candidate_engine.machine_rank import MachineRankResult
 from app.v3.candidate_engine.soft import weighted_combine
 from app.v3.domain.candidate_engine import DeepRankEntry, DeepRankResult
 

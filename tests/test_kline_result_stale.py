@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from app.services.market_data_service import _kline_result_stale
 

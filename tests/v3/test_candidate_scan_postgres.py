@@ -19,7 +19,7 @@ NOW = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
 
 
 def _pipeline_result():
-    from test_candidate_pipeline_trace import _run
+    from v3.test_candidate_pipeline_trace import _run
 
     result, _ = _run()
     return result

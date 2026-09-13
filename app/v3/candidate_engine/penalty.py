@@ -13,10 +13,8 @@ from __future__ import annotations
 
 from app.v3.candidate_engine.soft import is_finite
 from app.v3.candidate_engine.experts.evidence_experts import (
-    FINANCE_REPORT,
     PROFIT_FIELD,
     REVENUE_FIELD,
-    _number,
     _same_period_growth,
 )
 from app.v3.domain.candidate_engine import (

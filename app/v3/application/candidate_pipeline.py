@@ -29,17 +29,15 @@ from app.v3.domain.candidate_engine import (
     AI_REVIEW_STATUS,
     CandidatePipelineResult,
     DeepContext,
+    DeepRankResult,
     ExpertHit,
-    ExpertInput,
     MachineRankResult,
     ParetoCandidateInput,
     ParetoResult,
     SafetyCandidateInput,
     SafetyFilterResult,
     ScanFunnel,
-    ScanTraceResult,
     StageFunnelEntry,
-    TRACE_STAGES,
 )
 
 __all__ = ["CandidatePipeline", "FINAL_TOP_N", "AI_REVIEW_STATUS", "MachinePhaseState"]
@@ -288,7 +286,6 @@ class CandidatePipeline:
         self, machine: MachineRankResult, stocks_by_id: dict, rr_scores: dict,
         expert_scores_by_id: dict, deep_context: DeepContext | None = None,
     ) -> "DeepRankResult":
-        from app.v3.domain.candidate_engine import DeepRankResult
 
         deep_context = deep_context or DeepContext()
         pool: list[dict] = []

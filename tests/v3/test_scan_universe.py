@@ -8,7 +8,6 @@ close/bar_count 从特征行注入、pipeline 全链执行、save_scan 落库调
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 

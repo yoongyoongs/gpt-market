@@ -15,7 +15,7 @@ GOOD_OPPORTUNITY = A or B。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.v3.domain.candidate_engine import OutcomeLabelResult
 
@@ -124,7 +124,6 @@ class OutcomeLabelService:
         if len(bars) < t.horizon:
             return None  # 观察窗不完整：不给评级，宁可 PENDING 不可猜测
 
-        highs = [high / close_t - 1.0 for high, _ in bars]
         lows = [low / close_t - 1.0 for _, low in bars]
 
         def _mae_before_target(time_to_target: int | None) -> float | None:

@@ -152,7 +152,6 @@ class TestFeatureEnrichment:
         assert candidate.coverage.minute_60 is False  # Deep 阶段补
 
     def test_missing_input_counted_not_silent(self):
-        view = self._view()
         hit = _hit("LP", "000001", 1)
         union = RecallUnionService().execute({"LP": (hit,)})
         result = FeatureEnrichmentService().execute(union, {})

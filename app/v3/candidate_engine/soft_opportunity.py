@@ -42,7 +42,6 @@ class SoftOpportunityService:
         risk_reward: RiskRewardAssessment,
     ) -> SoftOpportunityResult:
         """expert_scores: {LP/BT/RV/AC/FQ/CAT: 0~100}；缺专家名=missing。"""
-        f = stock.feature.number
         position = expert_scores.get("LP")
         bottoming = expert_scores.get("BT")
         reversal = expert_scores.get("RV")

@@ -7,7 +7,6 @@ backtest metrics/misses、shadow metrics。全部只读 GET；
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query

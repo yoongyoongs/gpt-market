@@ -462,9 +462,6 @@ async def test_fast_lane_feature_failure_degraded_but_pool_survives() -> None:
         ]}],
     )
     recalls = _FakeRecalls([SimpleNamespace(market="SH", code="600519")])
-    features = _FakeFeatures(
-        levels_error=RuntimeError("unused"),
-    )
     # 让 features.query 抛错：包裹一层
     class _BoomFeatures(_FakeFeatures):
         async def query(self, query):

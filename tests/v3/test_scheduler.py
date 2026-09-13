@@ -407,7 +407,6 @@ def test_run_once_research_shadow_runs_full_recall_under_v2(monkeypatch, tmp_pat
     （effective_mode 仍 V2）、release_gate.strategy_chain 如实标注
     SHADOW_RESEARCH_EXECUTED（绝不假装正式 V3 激活）、无 Trade 路径。
     env 关闭时回到纯 Gate 行为（SKIPPED + 数据链）。"""
-    module = _scheduler_module()
     report = _run_once_with_release(
         monkeypatch, tmp_path, effective_mode="V2", reason="V3_DISABLED_FLAG",
     )
