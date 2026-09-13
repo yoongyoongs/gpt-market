@@ -252,7 +252,7 @@ class TestTraceUnselectedKeepRank:
         trace = next(t for t in builder.build().traces if t.security_id == deep_only)
         record = trace.stage("FINAL")
         assert record is not None and record.alive is False
-        assert record.drop_reason == "final_not_top30"
+        assert record.drop_reason == "final_rank_below_top30"
         assert record.rank == 31
         assert record.score == 70.0
 

@@ -94,6 +94,19 @@ class SQLAlchemyOrchestratorJobRunRepository:
         )
         return existing is not None
 
+    async def has_run(self, job_id: str, idempotency_key: str) -> bool:
+        """任务书 §11 EOD 前置检查：该 Job 当日（幂等键）是否存在任何状态的
+        运行记录。evidence-increment 只要求"存在当日结果"——部分能力失败但
+        Job 本身 SUCCEEDED 允许 EOD 继续；FAILED 也算已尝试的事实（Recall
+        通道自带可用性声明兜底），只有当天完全没跑过才阻断 EOD 扫描。"""
+        existing = await self._session.scalar(
+            select(OrchestratorJobRunModel.job_run_id).where(
+                OrchestratorJobRunModel.job_id == job_id,
+                OrchestratorJobRunModel.idempotency_key == idempotency_key,
+            )
+        )
+        return existing is not None
+
     async def next_attempt(self, job_id: str, idempotency_key: str) -> int:
         existing = (
             await self._session.scalars(

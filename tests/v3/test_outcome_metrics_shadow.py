@@ -58,11 +58,13 @@ class TestOutcomeLabel:
         assert result.label == "A"
 
     def test_grade_a_reject_pullback_too_deep(self):
-        # MFE 足够但触前回撤 -0.09：A(-0.05)/B(-0.06)/C(-0.08) 全部不达 → None
+        # MFE 足够但触前回撤 -0.09：A(-0.05)/B(-0.06)/C(-0.08) 全部不达
         highs = [0.0] * 9 + [0.16] + [0.16] * 10
         lows = [-0.09] * 20
         result = self.svc.evaluate("600001", 10.0, _bars(highs, lows))
-        assert result.label is None
+        # R2.1-P0-03：不达标=成熟负样本（label='NONE'，status=MATURED）
+        assert result.label == "NONE"
+        assert result.status == "MATURED"
 
     def test_grade_a_reject_too_late(self):
         highs = [0.0] * 15 + [0.16] + [0.16] * 4
@@ -97,22 +99,34 @@ class TestOutcomeLabel:
         highs = [0.09] * 20
         lows = [-0.09] * 20
         result = self.svc.evaluate("600001", 10.0, _bars(highs, lows))
-        assert result.label is None
+        # R2.1-P0-03：成熟负样本 NONE
+        assert result.label == "NONE"
+        assert result.status == "MATURED"
 
     def test_no_move_no_label(self):
         result = self.svc.evaluate("600001", 10.0, _flat(20))
-        assert result.label is None
+        # R2.1-P0-03：全程无波动=成熟负样本 NONE（不再是 None）
+        assert result.label == "NONE"
+        assert result.status == "MATURED"
         assert result.mfe_20 == 0.0
         assert result.mae_20 == 0.0
 
     def test_incomplete_window_pending(self):
-        """观察窗 19 根 < 20 → label 恒 None（宁可 PENDING 不可猜）。"""
+        """观察窗 19 根 < 20 → status=PENDING / label=None（宁可 PENDING 不可猜）。"""
         highs = [0.16] * 19
         lows = [-0.01] * 19
         result = self.svc.evaluate("600001", 10.0, _bars(highs, lows))
         assert result.bars_used == 19
+        assert result.status == "PENDING"
         assert result.label is None
         assert result.is_good is False
+
+    def test_matured_labels_are_abc(self):
+        """R2.1-P0-03：A/B/C 评级 → status=MATURED。"""
+        highs = [0.16] * 20
+        result = self.svc.evaluate("600001", 10.0, _bars(highs, [-0.01] * 20))
+        assert result.label == "A"
+        assert result.status == "MATURED"
 
     def test_time_to_first_touch(self):
         highs = [0.02, 0.05, 0.09, 0.09, 0.11, 0.11, 0.11] + [0.11] * 13
@@ -141,11 +155,15 @@ class TestOutcomeLabel:
 
 
 def _labels() -> list[OutcomeLabelResult]:
+    """R2.1-P0-03：label=None=PENDING；成熟负样本显式 label='NONE'。"""
     def _label(code, label):
-        return OutcomeLabelResult(code=code, label=label, close_t=10.0)
+        return OutcomeLabelResult(
+            code=code, label=label, close_t=10.0,
+            status="MATURED" if label is not None else "PENDING",
+        )
 
     return [_label("600001", "A"), _label("600002", "B"), _label("600003", "C"),
-            _label("600004", None), _label("600005", "A")]
+            _label("600004", "NONE"), _label("600005", "A")]
 
 
 class TestBacktestMetrics:
@@ -167,7 +185,11 @@ class TestBacktestMetrics:
         result = self.svc.compute(self.labels, pools, rankings=self._rankings())
         entries = {e.pool: e for e in result.entries if e.pool}
         assert result.good_count == 3  # A+B+A
-        assert result.labeled_count == 4  # 三个评级 + 一个 None
+        assert result.labeled_count == 5  # A/B/C/NONE/A 全部成熟（NONE 也是成熟负样本）
+        # R2.1-P0-04：全部成熟 → 顶层 OK
+        assert result.status == "OK"
+        assert result.matured_count == 5
+        assert result.pending_count == 0
         assert entries["recall_pool"].numerator == 1
         assert entries["recall_pool"].denominator == 3
         assert abs(entries["recall_pool"].value - 1 / 3) < 1e-9
@@ -278,8 +300,38 @@ class TestBacktestMetrics:
             assert entry.value is None
             assert entry.reason == "OUTCOME_WINDOW_NOT_MATURE"
 
+    def test_top_status_pending_when_zero_matured(self):
+        """R2.1-P0-04：matured=0 → 顶层 PENDING（不再用"有 label rows=OK"）。"""
+        labels = [
+            OutcomeLabelResult(code="600001", label=None, status="PENDING"),
+            OutcomeLabelResult(code="600002", label=None, status="PENDING"),
+        ]
+        result = self.svc.compute(labels, {}, rankings=self._rankings())
+        assert result.status == "PENDING"
+        assert result.matured_count == 0
+        assert result.pending_count == 2
+        assert result.labeled_count == 0
+
+    def test_top_status_partial_and_pending_not_in_denominator(self):
+        """R2.1-P0-04：部分成熟 → PARTIAL；PENDING 不进分子也不进分母。"""
+        labels = [
+            OutcomeLabelResult(code="600001", label="A", status="MATURED"),
+            OutcomeLabelResult(code="600002", label=None, status="PENDING"),
+            OutcomeLabelResult(code="600003", label="NONE", status="MATURED"),
+        ]
+        pools = {"recall_pool": [("600001", 1), ("600002", 2)]}
+        result = self.svc.compute(labels, pools, rankings=self._rankings())
+        assert result.status == "PARTIAL"
+        assert result.matured_count == 2  # A + NONE（成熟负样本）
+        assert result.pending_count == 1
+        entries = {e.pool: e for e in result.entries if e.pool}
+        # PENDING 的 600002 不算命中；分母=成熟 GOOD=1（NONE 不算 GOOD）
+        assert entries["recall_pool"].numerator == 1
+        assert entries["recall_pool"].denominator == 1
+        assert entries["recall_pool"].value == 1.0
+
     def test_no_good_no_crash(self):
-        labels = [OutcomeLabelResult(code="600001", label="C")]
+        labels = [OutcomeLabelResult(code="600001", label="C", status="MATURED")]
         result = self.svc.compute(
             labels, {}, rankings=self._rankings(final=[("600001", 1)]),
         )

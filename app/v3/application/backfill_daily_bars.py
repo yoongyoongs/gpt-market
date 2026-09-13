@@ -45,11 +45,17 @@ class BackfillDailyBarsService:
         minimum_last_bar_date: date,
         stop_after: int | None = None,
         concurrency: int = 4,
+        yield_every: int = 100,
+        yield_seconds: float = 0.5,
     ) -> MarketDataIngestionRun:
         if not 1 <= concurrency <= 32:
             raise ValueError("concurrency must be between 1 and 32")
         if stop_after is not None and stop_after < 0:
             raise ValueError("stop_after cannot be negative")
+        if yield_every < 0:
+            raise ValueError("yield_every cannot be negative")
+        if yield_seconds < 0:
+            raise ValueError("yield_seconds cannot be negative")
         run, targets = await self._load_or_create(run_id)
         next_index, failures = self._cursor_state(run)
         if (
@@ -63,6 +69,10 @@ class BackfillDailyBarsService:
         if stop_after is not None:
             pending = pending[:stop_after]
         run = await self._checkpoint(run, next_index, failures, IngestionRunStatus.RUNNING)
+        # P0-06（run_once 资源治理）：每完成 yield_every 只股票批间短暂让步
+        # 一次，定期释放网络/CPU 节奏；yield_every=0 关闭。5560 只 ≈55 次
+        # pause ×0.5s ≈ 27.5s，几乎不影响总时长。
+        completed_since_yield = 0
         for offset in range(0, len(pending), concurrency):
             batch = pending[offset : offset + concurrency]
             results = await asyncio.gather(
@@ -90,6 +100,10 @@ class BackfillDailyBarsService:
             run = await self._checkpoint(
                 run, next_index, failures, IngestionRunStatus.RUNNING
             )
+            completed_since_yield += len(batch)
+            if yield_every > 0 and completed_since_yield >= yield_every:
+                await asyncio.sleep(yield_seconds)
+                completed_since_yield = 0
 
         processed = next_index
         successful = processed - len(failures)

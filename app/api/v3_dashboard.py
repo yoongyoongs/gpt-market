@@ -9,12 +9,31 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from app.container import container
-from app.utils.time import now_shanghai
+from app.utils.time import SHANGHAI, now_shanghai
 from app.v3.application.market_intraday_status import MarketIntradayStatusService
 from app.v3.application.pipeline_eod_latest import PipelineEodLatestService
 from app.v3.domain.features import FeatureQuery, FeatureSortField
 from app.v3.infrastructure.providers.exchange_calendar import (
     ExchangeCalendarsAShareCalendar,
+)
+from app.v3.presentation import zh_cn_labels as zh_labels
+from app.v3.presentation.zh_cn_labels import (
+    DROP_REASON_LABELS,
+    ERROR_KIND_LABELS,
+    EXPERT_DISPLAY_ORDER,
+    EXPERT_LABELS,
+    FIELD_LABELS,
+    JOB_LABELS,
+    LIVE_STATUS_FIELD_LABELS,
+    MARKET_LABELS,
+    NAME_MISSING_LABEL,
+    REGIME_FACT_LABELS,
+    REGIME_SECTION_LABELS,
+    SESSION_LABELS,
+    STAGE_LABELS,
+    STAGE_PASS_NOTES,
+    STATUS_LABELS,
+    SUPPORT_NOTE_LABEL,
 )
 
 
@@ -92,16 +111,6 @@ def _return_cell(value: Any) -> str:
     return f'<td class="num {css}">{_pct(number, fraction=True)}</td>'
 
 
-def _fact_rows(title: str, facts: dict[str, Any]) -> str:
-    if not facts:
-        return f'<section class="card fact-card"><h3>{escape(title)}</h3><p class="muted">暂无数据</p></section>'
-    rows = "".join(
-        f"<div><span>{escape(str(key))}</span><strong>{_text(value)}</strong></div>"
-        for key, value in facts.items()
-    )
-    return f'<section class="card fact-card"><h3>{escape(title)}</h3>{rows}</section>'
-
-
 def _document(title: str, body: str, *, refresh_seconds: int | None = None) -> str:
     refresh = (
         f'<meta http-equiv="refresh" content="{refresh_seconds}">'
@@ -138,54 +147,130 @@ def initializing_page(message: str) -> HTMLResponse:
     )
 
 
-_STATUS_LABELS = {
-    "SUCCEEDED": "成功",
-    "COMPLETED": "成功",
-    "FAILED": "失败",
-    "CRITICAL": "严重失败",
-    "SKIPPED": "跳过",
-    "PARTIAL": "部分完成",
-    "WARNING": "告警",
-    "OPEN": "开启中",
-}
+_STATUS_LABELS = STATUS_LABELS
+
+
+def _fmt_time(value: Any) -> str:
+    """§58 页面时间统一人类格式：UTC/ISO → 上海时间 `YYYY-MM-DD HH:MM:SS`；
+    原始值交给调用方放进 title，不让用户读 UTC ISO。"""
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(SHANGHAI).strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
 
 
 def _status_badge(status: str) -> str:
     """Job/事件状态 → 徽章：绿=成功/开启中、黄=跳过/部分完成/告警、红=失败。
     徽章显示中文，title 保留原始状态值便于与 API 数据对照。"""
     value = str(status or "—").upper()
-    if value in ("SUCCEEDED", "COMPLETED"):
+    if value in ("SUCCEEDED", "COMPLETED", "ALREADY_SUCCEEDED"):
         cls = ""
     elif value in ("FAILED", "CRITICAL"):
         cls = " bad"
-    elif value in ("SKIPPED", "PARTIAL", "WARNING"):
+    elif value in ("SKIPPED", "PARTIAL", "WARNING", "LOCKED"):
         cls = " warn"
-    elif value == "OPEN":
+    elif value in ("OPEN", "RUNNING"):
         cls = " info"
     else:
         cls = " mute"
-    label = _STATUS_LABELS.get(value, value) or "—"
+    label = zh_labels.zh_label(_STATUS_LABELS, value)
+    if label == zh_labels.UNMAPPED_LABEL:
+        label = value or "—"
     return f'<span class="badge{cls}" title="{escape(value)}">{escape(label)}</span>'
 
 
+def _error_kind_label(error_summary: str | None) -> str:
+    """§80 错误摘要用户可读归类：关键词 → 运行超时/数据源异常/
+    数据库异常/任务执行失败；原始 exception 进 <details>。"""
+    if not error_summary:
+        return "—"
+    text = error_summary.lower()
+    if "timeout" in text or "timed out" in text:
+        return ERROR_KIND_LABELS["timeout"]
+    if any(word in text for word in ("connect", "http", "provider", "source", "eastmoney", "tencent")):
+        return ERROR_KIND_LABELS["provider"]
+    if any(word in text for word in ("database", "postgres", "sql", "deadlock", "pool", "connection refused")):
+        return ERROR_KIND_LABELS["database"]
+    return ERROR_KIND_LABELS["generic"]
+
+
+def _fact_value(key: str, value: Any) -> str:
+    """§28-§30 事实值格式化：涨跌幅/覆盖率按百分比、成交额用亿/万亿、
+    布尔转是/否，其余原样（None → —）。"""
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if key == "mean_return_3d":
+        return _pct(float(value), fraction=True)
+    if key == "coverage":
+        return f"{float(value) * 100:.2f}%"
+    if key == "total_amount":
+        return _amount(value)
+    if key == "advance_decline_ratio":
+        return f"{float(value):.2f}"
+    if isinstance(value, float):
+        return _number(value)
+    return _text(value)
+
+
+def _fact_rows(title: str, facts: dict[str, Any], section: str | None = None) -> str:
+    """§28：事实键值中文化——section 决定字段映射（observed 在
+    市场宽度/成交两节含义不同）；title 保留原始字段名。"""
+    if not facts:
+        return f'<section class="card fact-card"><h3>{escape(title)}</h3><p class="muted">暂无数据</p></section>'
+    labels = REGIME_FACT_LABELS.get(section or "", {})
+    rows = "".join(
+        f"<div><span title=\"{escape(str(key))}\">{escape(labels.get(str(key), str(key)))}</span>"
+        f"<strong>{_fact_value(str(key), value)}</strong></div>"
+        for key, value in facts.items()
+    )
+    return f'<section class="card fact-card"><h3>{escape(title)}</h3>{rows}</section>'
+
+
 def _live_status_section(status: dict[str, Any] | None) -> str:
-    """§24 Live Status：确定性盘中状态（交易时段判定），无行情依赖。"""
+    """§31 Live Status → 交易时段状态：确定性规则判定（交易日历+时段），
+    不含实时行情；字段名与值全部中文，原始 key/value 留在 title。"""
     if not status:
         return ""
-    rows = "".join(
-        f"<div><span>{escape(str(key))}</span><strong>{escape(str(value))}</strong></div>"
-        for key, value in status.items()
-        if key != "source" and value is not None
-    )
+    rows = []
+    for key, value in status.items():
+        if key == "source" or value is None:
+            continue
+        label = LIVE_STATUS_FIELD_LABELS.get(key, key)
+        if key == "session":
+            shown = zh_labels.zh(value, SESSION_LABELS)
+            title = escape(str(value))
+        elif isinstance(value, bool):
+            shown = "是" if value else "否"
+            title = escape(str(value))
+        elif key == "known_at":
+            shown = _fmt_time(value)
+            title = escape(str(value))
+        else:
+            shown = _text(value)
+            title = escape(str(value))
+        rows.append(
+            f'<div><span title="{title}">{escape(label)}</span><strong title="{title}">{shown}</strong></div>'
+        )
     return (
-        '<section class="card section"><div class="section-head"><div><h2>盘中状态（Live Status）</h2>'
+        '<section class="card section"><div class="section-head"><div><h2>交易时段状态</h2>'
         '<p class="subtitle">确定性规则判定（交易日历 + 时段），不含实时行情。</p></div></div>'
-        f'<div class="fact-card card">{rows}</div></section>'
+        f'<div class="fact-card card">{"".join(rows)}</div></section>'
     )
 
 
 def _pipeline_section(pipeline: dict[str, Any] | None) -> str:
-    """§24 EOD Pipeline：orchestrator 各 Job 最近一次运行状态。"""
+    """§33/§80 每日任务运行状态：Job ID→中文（title 保留原始 job_id），
+    错误摘要按 §80 分类显示，原始 exception 收进 <details> 技术详情。"""
     if not pipeline:
         return ""
     overall = str(pipeline.get("overall", "—"))
@@ -193,148 +278,361 @@ def _pipeline_section(pipeline: dict[str, Any] | None) -> str:
     rows = []
     for job_id in sorted(jobs):
         job = jobs[job_id]
-        error = job.get("error_summary") or "—"
+        error = job.get("error_summary")
+        error_kind = _error_kind_label(error)
+        if error:
+            error_html = (
+                f"{escape(error_kind)}"
+                f'<details><summary>查看技术详情</summary>'
+                f'<code>{escape(str(error)[:400])}</code></details>'
+            )
+        else:
+            error_html = "—"
+        job_label = zh_labels.zh_label(JOB_LABELS, job_id)
+        if job_label == zh_labels.UNMAPPED_LABEL:
+            job_label = job_id
+        known_at = job.get("known_at")
         rows.append(
             "<tr>"
-            f"<td>{escape(job_id)}</td><td>{_status_badge(job.get('status'))}</td>"
+            f'<td title="{escape(job_id)}">{escape(job_label)}</td>'
+            f"<td>{_status_badge(job.get('status'))}</td>"
             f'<td class="num">{escape(str(job.get("attempt", "—")))}</td>'
+            # idempotency_key 即交易日幂等键（RT-05），作为"交易日"列展示
             f"<td>{escape(str(job.get('idempotency_key', '—')))}</td>"
-            f'<td class="missing" title="{escape(str(error))}">{escape(str(error)[:120])}</td>'
-            f"<td>{escape(str(job.get('known_at', '—')))}</td>"
+            f'<td class="missing">{error_html}</td>'
+            f'<td title="{escape(str(known_at or ""))}">{_fmt_time(known_at)}</td>'
             "</tr>"
         )
     body = (
         "".join(rows)
         if rows
-        else '<tr><td colspan="6">orchestrator_job_runs 暂无记录</td></tr>'
+        else '<tr><td colspan="6">暂无任务运行记录（orchestrator_job_runs 为空）</td></tr>'
     )
     return (
-        '<section class="card section"><div class="section-head"><div><h2>EOD 流水线（Pipeline）</h2>'
+        '<section class="card section"><div class="section-head"><div><h2>每日任务运行状态</h2>'
         f'<p class="subtitle">各任务最近一次运行状态 · 整体 {_status_badge(overall)}</p></div></div>'
-        '<div class="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th class="num">尝试</th>'
-        '<th>交易日</th><th>错误摘要</th><th>事实时间</th></tr></thead>'
+        '<div class="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th class="num">尝试次数</th>'
+        '<th>交易日</th><th>错误摘要</th><th>完成时间</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
 
 
 def _attention_section(events: list[Any]) -> str:
-    """§24 Attention：OPEN 事件列表（append-only 事实，只读展示）。"""
+    """§34 Attention → 需要关注的市场事件：只读展示客观触发事实；
+    事件类型/市场中文化，未知类型兜底"其他事件"。"""
     rows = []
     for event in events[:20]:
+        market = getattr(event, "market", None)
+        market_label = (
+            MARKET_LABELS.get(str(market), str(market)) if market else "—"
+        )
+        known_at = getattr(event, "known_at", None)
         rows.append(
             "<tr>"
-            f"<td>{escape(str(getattr(event, 'event_type', '—')))}</td>"
+            f'<td title="{escape(str(getattr(event, "event_type", "") or ""))}">'
+            f"{escape(zh_labels.event_type_label(getattr(event, 'event_type', None)))}</td>"
             f"<td>{_status_badge(getattr(event, 'severity', ''))}</td>"
-            f"<td>{escape(str(getattr(event, 'market', '') or '—'))}</td>"
+            f"<td>{escape(market_label)}</td>"
             f"<td>{escape(str(getattr(event, 'code', '') or '—'))}</td>"
             f'<td class="missing">{escape(str(getattr(event, "dedupe_key", "—")))}</td>'
-            f"<td>{escape(str(getattr(event, 'known_at', '—')))}</td>"
+            f'<td title="{escape(str(known_at or ""))}">{_fmt_time(known_at)}</td>'
             "</tr>"
         )
-    body = "".join(rows) if rows else '<tr><td colspan="6">当前无开启中的 Attention 事件</td></tr>'
+    body = "".join(rows) if rows else '<tr><td colspan="6">当前无开启中的事件</td></tr>'
     return (
-        '<section class="card section"><div class="section-head"><div><h2>Attention 事件（开启中）</h2>'
+        '<section class="card section"><div class="section-head"><div><h2>需要关注的市场事件</h2>'
         '<p class="subtitle">只读展示客观触发事实；处理状态以 API 为准。</p></div></div>'
-        '<div class="table-wrap"><table><thead><tr><th>类型</th><th>级别</th><th>市场</th><th>代码</th>'
-        '<th>去重键</th><th>事实时间</th></tr></thead>'
+        '<div class="table-wrap"><table><thead><tr><th>事件类型</th><th>级别</th><th>市场</th><th>股票代码</th>'
+        '<th>事件标识</th><th>事实时间</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
 
 
-def _snap_view(r) -> SimpleNamespace:
+def _snap_view(r, security: dict[str, str] | None = None) -> SimpleNamespace:
     """快照行抽平为轻量对象：渲染在 uow session 外进行，
-    直接传 ORM 行会因 commit expire 触发 DetachedInstanceError。"""
+    直接传 ORM 行会因 commit expire 触发 DetachedInstanceError。
+    security 来自 security_names 批量查询（§38-39），提供 name/market。"""
     return SimpleNamespace(
+        security_id=getattr(r, "security_id", None),
         code=r.code,
         stage=r.stage,
         alive=r.alive,
         score=r.score,
         rank=r.rank,
         drop_reason=r.drop_reason,
+        name=(security or {}).get("name"),
+        market=(security or {}).get("market"),
     )
 
 
-def _scan_funnel_section(run, expert_counts: dict[str, int] | None = None) -> str:
-    """§37.1 漏斗 + §37.2 专家召回计数（候选扫描最新一轮）。"""
+def _market_label(market: Any) -> str:
+    """§60 市场中文化：SH→沪市 / SZ→深市 / BJ→北交所，未知原样。"""
+    if not market:
+        return "—"
+    return MARKET_LABELS.get(str(market), str(market))
+
+
+def _stage_label(stage: Any) -> str:
+    """阶段中文（title 保留原始 stage 代码）。"""
+    label = zh_labels.zh_label(STAGE_LABELS, stage)
+    if label == zh_labels.UNMAPPED_LABEL:
+        label = str(stage or "—")
+    return label
+
+
+def _scan_funnel_section(
+    run,
+    expert_counts: dict[str, int] | None = None,
+    *,
+    query_market: str | None = None,
+    query_sort: FeatureSortField = FeatureSortField.RETURN_20D,
+    query_descending: bool = True,
+    query_limit: int = 50,
+) -> str:
+    """§44 漏斗 + 专家召回计数 + 任意股票"为什么没入选"搜索表单。"""
     if run is None:
         return ""
-    stages = [
-        ("Universe", run.universe_count),
-        ("Safety", run.eligible_count),
-        ("Recall", run.recall_count),
-        ("Pareto", run.pareto_count),
-        ("Machine", run.machine_count),
-        ("Deep", run.deep_count),
-        ("Final", run.final_count),
-    ]
+    stages = (
+        ("UNIVERSE", run.universe_count),
+        ("SAFETY", run.eligible_count),
+        ("RECALL", run.recall_count),
+        ("PARETO", run.pareto_count),
+        ("MACHINE", run.machine_count),
+        ("DEEP", run.deep_count),
+        ("FINAL", run.final_count),
+    )
     chips = " ".join(
-        f'<span class="badge{" mute" if count == 0 else ""}">{escape(name)} {count:,}</span>'
-        for name, count in stages
+        f'<span class="badge{" mute" if count == 0 else ""}" title="{escape(stage)}">'
+        f"{escape(_stage_label(stage))} {count:,}</span>"
+        for stage, count in stages
     )
     expert_note = ""
     if expert_counts:
         expert_note = (
             '<p class="subtitle" style="margin-top:8px">专家命中：'
             + " · ".join(
-                f"{escape(str(expert))} {count:,}"
-                for expert, count in sorted(expert_counts.items())
+                f"{escape(EXPERT_LABELS.get(expert, str(expert)))} {count:,}"
+                for expert in EXPERT_DISPLAY_ORDER
+                if (count := expert_counts.get(expert)) is not None
             )
             + "</p>"
         )
+    hidden = (
+        f'<input type="hidden" name="market" value="{escape(query_market or "")}">'
+        f'<input type="hidden" name="sort_by" value="{escape(query_sort.value)}">'
+        f'<input type="hidden" name="descending" value="{str(query_descending).lower()}">'
+        f'<input type="hidden" name="limit" value="{query_limit}">'
+    )
     return (
         '<section class="card section"><div class="section-head"><div><h2>候选扫描漏斗</h2>'
-        f'<p class="subtitle">最新扫描 {escape(run.market_date.isoformat()[:10])} · '
-        f'<a href="/api/v3/scan/latest">JSON</a> · 耗时 {run.duration_ms:,}ms</p></div></div>'
-        f"<p>{chips}</p>{expert_note}</section>"
+        f'<p class="subtitle">最新扫描 {escape(str(run.market_date)[:10])} · '
+        f'<a href="/api/v3/scan/latest">原始数据（JSON）</a> · 耗时 {run.duration_ms:,} 毫秒</p></div></div>'
+        f"<p>{chips}</p>{expert_note}"
+        '<form class="controls" method="get" action="/v3/dashboard" style="margin-top:12px">'
+        f'{hidden}<input name="trace" type="text" placeholder="输入股票代码，如 600030" '
+        'aria-label="股票代码" style="min-width:220px">'
+        '<button type="submit">查询为什么没入选</button></form>'
+        "</section>"
     )
 
 
 def _scan_top_section(rows: list[Any], stage: str) -> str:
-    """§37.3 Top30（扫描 top 阶段存活名单，机器分口径）。"""
+    """§45/§55 最终候选 Top30：名次|股票代码|股票名称|机器评分|查看筛选轨迹。
+    名称来自 SecurityModel 批量查询（禁 N+1），缺失显示"名称暂缺"。"""
     if not rows:
         return ""
     body = "".join(
         "<tr>"
         f'<td class="num">{escape(str(row.rank))}</td>'
         f"<td>{escape(row.code)}</td>"
+        f'<td class="name">{escape(row.name or NAME_MISSING_LABEL)}</td>'
         f'<td class="num">{_number(row.score)}</td>'
-        f'<td><a href="/v3/dashboard?whynot={escape(row.code)}">Why Not / 轨迹</a></td>'
+        f'<td><a href="/v3/dashboard?trace={escape(row.code)}">查看筛选轨迹</a></td>'
         "</tr>"
         for row in rows
     )
     return (
-        f'<section class="card section"><div class="section-head"><div><h2>扫描 {escape(stage)} 榜单</h2>'
-        '<p class="subtitle">机器排序口径分（非统一评分，不构成投资建议）。</p></div></div>'
-        '<div class="table-wrap"><table><thead><tr><th class="num">名次</th><th>代码</th>'
-        '<th class="num">分数</th><th>轨迹</th></tr></thead>'
+        f'<section class="card section"><div class="section-head"><div><h2>最终候选 Top30</h2>'
+        '<p class="subtitle">分数用于候选之间排序，不代表预测涨幅，也不等于买入建议。</p></div></div>'
+        '<div class="table-wrap"><table><thead><tr><th class="num">名次</th><th>股票代码</th><th>股票名称</th>'
+        '<th class="num">机器评分</th><th>筛选过程</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
 
 
-def _why_not_section(rows: list[Any], code: str) -> str:
-    """§37.4 Why Not：任意代码全链生命轨迹。"""
+def _why_not_section(rows: list[Any], code: str, name: str | None = None) -> str:
+    """§42-§47 筛选轨迹：任意代码全链生命轨迹，列=阶段|状态|本层分数|
+    本层排名|说明；通过行用 STAGE_PASS_NOTES，淘汰行用 DROP_REASON_LABELS，
+    support_not_broken 是加分证据按正向说明展示（§52）。"""
     if not rows:
         return (
-            '<section class="card section"><h2>Why Not</h2>'
-            f"<p class=\"muted\">扫描中未找到 {escape(code)} 的记录。</p></section>"
+            '<section class="card section"><h2>筛选轨迹</h2>'
+            f"<p class=\"muted\">最新一轮扫描中未找到 {escape(code)} 的记录：该股票可能未进入本轮全市场扫描范围，或代码输入有误。</p></section>"
         )
-    body = "".join(
-        "<tr>"
-        f"<td>{escape(row.stage)}</td>"
-        f'<td>{"" if row.alive else "<span class=\"badge bad\">DEAD</span>"}</td>'
-        f'<td class="num">{_number(row.score)}</td>'
-        f'<td class="num">{_text(row.rank)}</td>'
-        f'<td class="missing">{_text(row.drop_reason)}</td>'
-        "</tr>"
-        for row in rows
+    final_alive = any(
+        str(row.stage) == "FINAL" and row.alive for row in rows
+    )
+    display_name = name or NAME_MISSING_LABEL
+    body = ""
+    for row in rows:
+        note_title = escape(str(row.drop_reason or row.stage))
+        if row.alive:
+            # FINAL 存活行展示"已入选"，其余层通过为"通过"
+            if str(row.stage) == "FINAL":
+                status_html = '<td><span class="badge">已入选</span></td>'
+            else:
+                status_html = '<td><span class="badge">通过</span></td>'
+            # §52：support_not_broken 是加分证据不是淘汰理由，按正向说明展示
+            if str(row.drop_reason) == "support_not_broken":
+                note = SUPPORT_NOTE_LABEL
+            else:
+                note = STAGE_PASS_NOTES.get(str(row.stage), "—")
+        else:
+            status_html = '<td><span class="badge bad">已淘汰</span></td>'
+            if row.drop_reason:
+                note = DROP_REASON_LABELS.get(str(row.drop_reason), str(row.drop_reason))
+            else:
+                note = "—"
+        body += (
+            "<tr>"
+            f'<td title="{escape(str(row.stage))}">{escape(_stage_label(row.stage))}</td>'
+            f"{status_html}"
+            f'<td class="num">{_number(row.score)}</td>'
+            f'<td class="num">{_text(row.rank)}</td>'
+            f'<td class="missing" title="{note_title}">{escape(note)}</td>'
+            "</tr>"
+        )
+    final_note = (
+        '<p class="subtitle">最终结果：该股票<b>已进入最终候选 Top30</b>。</p>'
+        if final_alive
+        else '<p class="subtitle">最终结果：该股票<b>未进入最终候选 Top30</b>。下方说明列出它在每一层的状态与原因。</p>'
     )
     return (
-        f'<section class="card section"><div class="section-head"><div><h2>Why Not · {escape(code)}</h2>'
-        '<p class="subtitle">全链生命轨迹：在哪一层、为什么被降级（设计 §37.4）。</p></div></div>'
+        f'<section class="card section"><div class="section-head"><div><h2>筛选轨迹 · {escape(display_name)}（{escape(code)}）</h2>'
+        f"{final_note}</div></div>"
         '<div class="table-wrap"><table><thead><tr><th>阶段</th><th>状态</th>'
-        '<th class="num">分数</th><th class="num">名次</th><th>淘汰原因</th></tr></thead>'
+        '<th class="num">本层分数</th><th class="num">本层排名</th><th>说明</th></tr></thead>'
         f"<tbody>{body}</tbody></table></div></section>"
     )
+
+
+async def _load_feature_table_data(
+    uow,
+    *,
+    market: str | None,
+    sort_by: FeatureSortField,
+    descending: bool,
+    limit: int,
+):
+    """§66 共享查询：整页与 features-fragment 端点共用，保证两侧
+    看到的行情表数据口径一致（筛选参数完全透传）。"""
+    return await uow.features.query(
+        FeatureQuery(
+            market=market,
+            sort_by=sort_by,
+            descending=descending,
+            fields=FEATURE_FIELDS,
+            limit=limit,
+        )
+    )
+
+
+def _feature_table_nodes(
+    page, *, sort_by: FeatureSortField, descending: bool
+) -> tuple[str, str]:
+    """§67/§75 共享渲染：返回 (summary_html, result_html) 两个节点——
+    <span id="feature-table-summary"> 与 <div id="feature-table-result">。
+    整页渲染与 fragment 端点共用，局部刷新后 DOM 与整页一致；
+    fragment 响应只由这两个节点组成（不含 doctype）。"""
+    rows = []
+    for rank, item in enumerate(page.items, 1):
+        # §35 缺失字段中文名（title 保留原始字段名），未映射兜底原样
+        missing_raw = item.get("missing_fields") or []
+        missing = ", ".join(
+            FIELD_LABELS.get(str(field), str(field)) for field in missing_raw
+        )
+        missing_title = ", ".join(str(field) for field in missing_raw)
+        rows.append(
+            "<tr>"
+            f'<td class="num">{rank}</td><td>{escape(_market_label(item.get("market")))}</td>'
+            f'<td>{_text(item.get("code"))}</td><td class="name">{_text(item.get("name"))}</td>'
+            f'<td class="num">{_number(item.get("close"))}</td>'
+            f'{_return_cell(item.get("return_3d"))}{_return_cell(item.get("return_5d"))}'
+            f'{_return_cell(item.get("return_20d"))}{_return_cell(item.get("return_60d"))}'
+            f'<td class="num">{_pct(item.get("position_60d"), fraction=True)}</td>'
+            f'<td class="num">{_number(item.get("volume_ratio_5d"))}</td>'
+            f'<td class="num">{_pct(item.get("atr_pct"), fraction=True)}</td>'
+            f'<td class="num" title="{_text(item.get("amount"))}">{_amount(item.get("amount"))}</td>'
+            f'<td class="num">{_pct(item.get("coverage"), fraction=True)}</td>'
+            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"数据过期" if item.get("stale") else "数据新鲜"}</span></td>'
+            f'<td class="missing" title="{_text(missing_title)}">{_text(missing)}</td>'
+            "</tr>"
+        )
+    summary = (
+        f"筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”"
+        f"{'降序' if descending else '升序'}展示，最多读取 100 条。"
+    )
+    summary_html = (
+        f'<span id="feature-table-summary" class="subtitle" '
+        f'style="display:block;margin-top:4px">{summary}</span>'
+    )
+    result_html = (
+        '<div class="table-wrap" id="feature-table-result">'
+        '<table><thead><tr><th class="num">#</th><th>市场</th><th>代码</th><th>名称</th>'
+        '<th class="num">收盘价</th><th class="num">3日涨跌</th><th class="num">5日涨跌</th>'
+        '<th class="num">20日涨跌</th><th class="num">60日涨跌</th><th class="num">60日价格位置</th>'
+        '<th class="num">5日量比</th><th class="num">ATR波动率</th><th class="num">成交额</th>'
+        '<th class="num">数据覆盖率</th><th>数据状态</th><th>缺失字段</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+    return summary_html, result_html
+
+
+_FEATURE_FILTER_SCRIPT = """
+(function () {
+  var form = document.getElementById('feature-filter-form');
+  if (!form || !window.fetch || !window.AbortController) { return; }
+  var errorEl = document.getElementById('feature-filter-error');
+  var controller = null;
+  form.addEventListener('submit', function (event) {
+    // §77 渐进增强：JS 可用时拦截 GET 提交改局部刷新；否则原生提交兜底
+    event.preventDefault();
+    if (controller) { controller.abort(); }  // §73 防重复提交
+    controller = new AbortController();
+    var params = new URLSearchParams(new FormData(form));
+    var button = form.querySelector('button[type="submit"]');
+    if (button) { button.disabled = true; button.textContent = '加载中…'; }  // §71
+    errorEl.hidden = true;
+    var scrollY = window.scrollY;
+    fetch('/v3/dashboard/features-fragment?' + params.toString(), {
+      headers: { 'X-Requested-With': 'fetch' },
+      cache: 'no-store',
+      signal: controller.signal
+    }).then(function (resp) {
+      if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+      return resp.text();
+    }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      ['feature-table-summary', 'feature-table-result'].forEach(function (id) {
+        var remote = doc.getElementById(id);
+        var local = document.getElementById(id);
+        if (remote && local) { local.outerHTML = remote.outerHTML; }
+      });
+      // §70 保留 URL 可分享/可回退，不产生历史记录
+      history.replaceState(null, '', '/v3/dashboard?' + params.toString());
+      window.scrollTo(0, scrollY);
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') { return; }
+      // §72 失败保留原表格，仅提示
+      errorEl.textContent = '加载失败，请稍后重试';
+      errorEl.hidden = false;
+    }).then(function () {
+      if (button) { button.disabled = false; button.textContent = '应用'; }
+      controller = null;
+    });
+  });
+})();
+"""
 
 
 def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: bool, market: str | None, limit: int,
@@ -345,7 +643,8 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
                      scan_expert_counts: dict[str, int] | None = None,
                      scan_top_rows: list[Any] | None = None,
                      why_not_rows: list[Any] | None = None,
-                     why_not_code: str | None = None) -> str:
+                     why_not_code: str | None = None,
+                     why_not_name: str | None = None) -> str:
     quality = page.quality_summary
     coverage = float(quality.get("coverage", 0))
     successful = int(quality.get("successful_count", 0))
@@ -365,25 +664,9 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
         if descending
         else '<option value="true">降序</option><option value="false" selected>升序</option>'
     )
-    rows = []
-    for rank, item in enumerate(page.items, 1):
-        missing = item.get("missing_fields") or []
-        rows.append(
-            "<tr>"
-            f'<td class="num">{rank}</td><td>{_text(item.get("market"))}</td>'
-            f'<td>{_text(item.get("code"))}</td><td class="name">{_text(item.get("name"))}</td>'
-            f'<td class="num">{_number(item.get("close"))}</td>'
-            f'{_return_cell(item.get("return_3d"))}{_return_cell(item.get("return_5d"))}'
-            f'{_return_cell(item.get("return_20d"))}{_return_cell(item.get("return_60d"))}'
-            f'<td class="num">{_pct(item.get("position_60d"), fraction=True)}</td>'
-            f'<td class="num">{_number(item.get("volume_ratio_5d"))}</td>'
-            f'<td class="num">{_pct(item.get("atr_pct"), fraction=True)}</td>'
-            f'<td class="num" title="{_text(item.get("amount"))}">{_amount(item.get("amount"))}</td>'
-            f'<td class="num">{_pct(item.get("coverage"), fraction=True)}</td>'
-            f'<td><span class="badge{" warn" if item.get("stale") else ""}">{"过期" if item.get("stale") else "新鲜"}</span></td>'
-            f'<td class="missing" title="{_text(", ".join(missing))}">{_text(", ".join(missing))}</td>'
-            "</tr>"
-        )
+    summary_html, result_html = _feature_table_nodes(
+        page, sort_by=sort_by, descending=descending,
+    )
     regime_html = ""
     if regime is not None:
         stale_reason = getattr(regime, "stale_reason", None) or {}
@@ -394,40 +677,44 @@ def render_dashboard(page, regime, *, sort_by: FeatureSortField, descending: boo
             else '<span class="badge">市场状态新鲜</span>'
         )
         cause_note = (
-            f' · {escape(str(stale_reason.get("stale_count")))}'
-            f'/{escape(str(stale_reason.get("total_count")))} 行 stale'
+            f' · 陈旧行 {escape(str(stale_reason.get("stale_count")))}'
+            f'/{escape(str(stale_reason.get("total_count")))}'
             f'（阈值 {escape(str(stale_reason.get("threshold")))}, {escape(str(cause))}）'
             if stale_reason
             else ""
         )
         regime_html = (
-            f'<section class="card section"><div class="section-head"><div><h2>市场状态（Regime）</h2>'
+            '<section class="card section"><div class="section-head"><div><h2>市场整体状态</h2>'
+            '<p class="subtitle">根据全市场涨跌、成交、突破与风险偏好事实汇总。</p>'
             f"<p class=\"subtitle\">{stale_badge}{cause_note}</p></div></div>"
             '<div class="facts">'
-            + _fact_rows("市场宽度", regime.breadth)
-            + _fact_rows("成交与流动性", regime.turnover)
-            + _fact_rows("风险偏好事实", regime.risk_appetite_facts)
+            + _fact_rows(REGIME_SECTION_LABELS["breadth"], regime.breadth, "breadth")
+            + _fact_rows(REGIME_SECTION_LABELS["turnover"], regime.turnover, "turnover")
+            + _fact_rows(REGIME_SECTION_LABELS["risk_appetite"], regime.risk_appetite_facts, "risk_appetite")
             + "</div></section>"
         )
+    trace_query = why_not_code and f"trace={escape(why_not_code)}" or ""
     body = f"""
 <section class="card hero"><div><span class="badge">V3 只读</span><h1 style="margin-top:8px">V3 全市场行情特征看板</h1>
 <p class="subtitle">展示不可变 Feature Run 的事实特征；当前排序不是统一评分，也不构成投资建议。</p></div>
-<div class="meta">数据时点：{_text(page.as_of.isoformat())}<br>特征版本：{_text(page.feature_version)}<br>运行 ID：{_text(page.feature_run_id)}</div></section>
+<div class="meta">数据时间：<span title="{escape(page.as_of.isoformat())}">{_fmt_time(page.as_of)}</span><br>特征版本：{_text(page.feature_version)}<br>运行编号：{_text(page.feature_run_id)}</div></section>
 <div class="stats"><section class="card stat"><span>本轮证券总数</span><strong>{expected:,}</strong></section>
 <section class="card stat"><span>成功</span><strong>{successful:,}</strong></section><section class="card stat"><span>失败</span><strong>{failed:,}</strong></section>
-<section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页陈旧</span><strong>{stale_count}</strong></section></div>
+<section class="card stat"><span>覆盖率</span><strong>{coverage * 100:.2f}%</strong></section><section class="card stat"><span>当前页数据过期</span><strong>{stale_count}</strong></section></div>
 {regime_html}
-{_scan_funnel_section(scan_run, scan_expert_counts)}
+{_scan_funnel_section(scan_run, scan_expert_counts, query_market=market, query_sort=sort_by, query_descending=descending, query_limit=limit)}
 {_scan_top_section(scan_top_rows or [], 'FINAL')}
-{_why_not_section(why_not_rows or [], why_not_code or '')}
+{f'{_why_not_section(why_not_rows or [], why_not_code or "", why_not_name)}' if trace_query else ''}
 {_live_status_section(intraday_status)}
 {_pipeline_section(pipeline)}
 {_attention_section(attention_events or [])}
-<section class="card section"><div class="section-head"><div><h2>全市场事实特征</h2><p class="subtitle">筛选后可查询 {page.total_count:,} 条；当前按“{escape(SORT_LABELS[sort_by])}”{'降序' if descending else '升序'}展示，最多读取 100 条。</p></div>
-<form class="controls" method="get"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
+<section class="card section" id="feature-table-section"><div class="section-head"><div><h2>全市场事实特征{summary_html}</h2></div>
+<form class="controls" method="get" action="/v3/dashboard" id="feature-filter-form"><select name="market">{market_options}</select><select name="sort_by">{sort_options}</select>
 <select name="descending">{direction_options}</select><input name="limit" type="number" min="20" max="100" value="{limit}" aria-label="显示数量"><button type="submit">应用</button></form></div>
-<div class="table-wrap"><table><thead><tr><th class="num">#</th><th>市场</th><th>代码</th><th>名称</th><th class="num">收盘价</th><th class="num">3日</th><th class="num">5日</th><th class="num">20日</th><th class="num">60日</th><th class="num">60日位置</th><th class="num">5日量比</th><th class="num">ATR%</th><th class="num">成交额</th><th class="num">覆盖</th><th>状态</th><th>缺失字段</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
-<footer class="foot">服务器时间：{escape(now_shanghai().isoformat())} · <a href="/api/v3/universe/features">查看 JSON</a> · <a href="/docs">API 文档</a></footer>
+{result_html}
+<p id="feature-filter-error" class="muted" hidden></p></section>
+<script>{_FEATURE_FILTER_SCRIPT}</script>
+<footer class="foot">服务器时间：{escape(now_shanghai().strftime("%Y-%m-%d %H:%M:%S"))}（上海） · <a href="/api/v3/universe/features">原始数据（JSON）</a> · <a href="/docs">API 文档</a></footer>
 """
     return _document("V3 全市场行情特征看板", body)
 
@@ -438,10 +725,13 @@ async def v3_dashboard(
     sort_by: FeatureSortField = FeatureSortField.RETURN_20D,
     descending: bool = True,
     limit: str | None = Query(default=None),
-    whynot: str | None = Query(default=None),
+    trace: str | None = Query(default=None, description="查看任意股票的筛选轨迹"),
+    whynot: str | None = Query(default=None, description="Deprecated：等价于 trace"),
 ):
     if not container.v3.enabled:
         raise HTTPException(status_code=503, detail="V3 is not enabled")
+    # §43 新参数 trace=；whynot= 保留兼容（旧链接不失效）
+    trace_code = trace or whynot
     # 表单 GET 提交时“全部”市场/空条数会带空串，必须当作缺省而不是 422
     if market == "":
         market = None
@@ -463,14 +753,9 @@ async def v3_dashboard(
 
     clock = lambda: datetime.now(timezone.utc)  # noqa: E731
     async with container.v3.uow() as uow:
-        page = await uow.features.query(
-            FeatureQuery(
-                market=market,
-                sort_by=sort_by,
-                descending=descending,
-                fields=FEATURE_FIELDS,
-                limit=limit_value,
-            )
+        page = await _load_feature_table_data(
+            uow, market=market, sort_by=sort_by,
+            descending=descending, limit=limit_value,
         )
         regime = await uow.features.latest_regime()
         attention_events = await uow.attention.open_events(limit=20)
@@ -481,6 +766,7 @@ async def v3_dashboard(
         scan_run_model = await scans.latest_run() if scans is not None else None
         scan_run = None
         scan_expert_counts = scan_top_rows = why_not_rows = None
+        trace_name = None
         if scans is not None and scan_run_model is not None:
             scan_run = SimpleNamespace(
                 scan_run_id=scan_run_model.scan_run_id,
@@ -500,19 +786,31 @@ async def v3_dashboard(
             for row in expert_rows:
                 counts[row.expert] = counts.get(row.expert, 0) + 1
             scan_expert_counts = counts
-            scan_top_rows = [
-                _snap_view(r)
-                for r in await uow.scans.snapshots(
-                    scan_run.scan_run_id, stage="FINAL", alive_only=True, limit=30,
+            top_models = await uow.scans.snapshots(
+                scan_run.scan_run_id, stage="FINAL", alive_only=True, limit=30,
+            )
+            trace_models = (
+                await uow.scans.snapshots(
+                    scan_run.scan_run_id, code=trace_code, limit=64,
                 )
+                if trace_code
+                else []
+            )
+            # §38-39 名称批量查询：Top30 + 轨迹行合并做一次 IN 查询，禁止逐行 N+1
+            ids = [
+                m.security_id
+                for m in (*top_models, *trace_models)
+                if getattr(m, "security_id", None) is not None
             ]
-            if whynot:
+            names = await uow.scans.security_names(ids) if ids else {}
+            scan_top_rows = [_snap_view(m, names.get(m.security_id)) for m in top_models]
+            if trace_code:
                 why_not_rows = [
-                    _snap_view(r)
-                    for r in await uow.scans.snapshots(
-                        scan_run.scan_run_id, code=whynot, limit=64,
-                    )
+                    _snap_view(m, names.get(m.security_id)) for m in trace_models
                 ]
+                if trace_models:
+                    first_id = trace_models[0].security_id
+                    trace_name = (names.get(first_id) or {}).get("name")
     intraday_status = await MarketIntradayStatusService(
         clock=clock, is_trading_day=_trading_day,
     ).execute()
@@ -536,7 +834,51 @@ async def v3_dashboard(
             scan_expert_counts=scan_expert_counts,
             scan_top_rows=scan_top_rows,
             why_not_rows=why_not_rows,
-            why_not_code=whynot,
+            why_not_code=trace_code,
+            why_not_name=trace_name,
         ),
         headers=NO_CACHE_HEADERS,
     )
+
+
+@router.get("/dashboard/features-fragment", response_class=HTMLResponse)
+async def v3_dashboard_features_fragment(
+    market: str | None = Query(default=None),
+    sort_by: FeatureSortField = FeatureSortField.RETURN_20D,
+    descending: bool = True,
+    limit: str | None = Query(default=None),
+):
+    """§61-§75：行情表局部刷新 fragment（供 vanilla JS fetch 替换）。
+
+    只返回 #feature-table-summary 与 #feature-table-result 两个节点的
+    HTML（不含 doctype/<html>），与整页共享 _load_feature_table_data
+    查询与 _feature_table_nodes 渲染，保证局部刷新后 DOM 一致。
+    """
+    if not container.v3.enabled:
+        raise HTTPException(status_code=503, detail="V3 is not enabled")
+    if market == "":
+        market = None
+    if market is not None and market not in {"SH", "SZ", "BJ"}:
+        raise HTTPException(status_code=422, detail="market must be one of SH/SZ/BJ")
+    try:
+        limit_value = 50 if limit in (None, "") else int(limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="limit must be an integer") from exc
+    if not 20 <= limit_value <= 100:
+        raise HTTPException(status_code=422, detail="limit must be between 20 and 100")
+    async with container.v3.uow() as uow:
+        page = await _load_feature_table_data(
+            uow, market=market, sort_by=sort_by,
+            descending=descending, limit=limit_value,
+        )
+    if page is None:
+        return HTMLResponse(
+            '<span id="feature-table-summary" class="subtitle">暂无数据</span>'
+            '<div class="table-wrap" id="feature-table-result">'
+            '<p class="muted">暂无可展示的特征数据；后台数据任务完成后即可展示。</p></div>',
+            headers=NO_CACHE_HEADERS,
+        )
+    summary_html, result_html = _feature_table_nodes(
+        page, sort_by=sort_by, descending=descending,
+    )
+    return HTMLResponse(summary_html + result_html, headers=NO_CACHE_HEADERS)

@@ -5,7 +5,8 @@ P1-01/02/03：60m（Machine Top120 抓取）、市场 regime（feature_run_id PI
 行业上下文（无可靠源 → missing + NO_RELIABLE_INDUSTRY_CONTEXT）按
 weighted_combine 有效权重归一（missing ≠ 负分）；
 周K下降+日K上升 且无反转证据 → trend_conflict，压 DailyStructure（§22.2）。
-Top60。
+入选 Top60；R2.1-P0-06：全池（≤120）entries 都保留 rank/score，
+未入选者 selected=False（Trace 记 deep_rank_below_top60 dead 行）。
 """
 
 from __future__ import annotations
@@ -60,8 +61,8 @@ def evaluate_reversal_evidence(item: dict) -> bool:
     return base
 
 _STATE_SCORE = {"UP": 90.0, "FLAT": 60.0, "DOWN": 30.0}
-# P1-01 §19.5：60m 状态 → 执行分
-_MINUTE60_STATE_SCORE = {"UP": 90.0, "SIDEWAYS": 60.0, "DOWN": 30.0, "UNKNOWN": None}
+# P1-01 §19.5：60m 状态 → 执行分（R2.1-P0-01 §3.5：RANGE 同 SIDEWAYS=60）
+_MINUTE60_STATE_SCORE = {"UP": 90.0, "SIDEWAYS": 60.0, "RANGE": 60.0, "DOWN": 30.0, "UNKNOWN": None}
 _MINUTE60_TRUSTED_QUALITY = "UNTRUSTED"  # 该 quality 一律不可当事实
 
 
@@ -145,7 +146,8 @@ class DeepRankService:
                 "minute_60_execution": m60_norm,
                 "market_regime": item.get("market_regime_score"),
                 "industry_context": None,  # P1-03：无可靠源恒 missing
-                "risk_reward_refined": item.get("rr_score"),
+                # R2.1-P1-01：Deep 用 RiskRewardRefined（merge levels 重评估）
+                "risk_reward_refined": item.get("rr_refined_score"),
             }
             parts = [
                 (name, WEIGHTS[name], None if raws[name] is None else raws[name] / 100.0)
@@ -181,6 +183,9 @@ class DeepRankService:
                 "risk_reward_refined": self._detail(raws["risk_reward_refined"],
                                                     WEIGHTS["risk_reward_refined"], "rr_engine"),
             }
+            # R2.1-P1-01：实际采用的结构位（含 provenance）进 Why Not 证据
+            if item.get("rr_levels"):
+                components_detail["risk_reward_refined"]["levels"] = item["rr_levels"]
             ranked.append((round(value, 4), item["code"], item["security_id"], {
                 "confidence": confidence,
                 "conflict": conflict,
@@ -191,7 +196,10 @@ class DeepRankService:
 
         ranked.sort(key=lambda entry: (-entry[0], entry[1], entry[2]))
         entries: list[DeepRankEntry] = []
-        for rank, (score, code, security_id, meta) in enumerate(ranked[: self.top_n], start=1):
+        # R2.1-P0-06：不再截断 top_n——全池（Machine Top120）都保留
+        # rank/score/components，selected=rank<=top_n；#61~120 供
+        # Trace dead 行（deep_rank_below_top60）与 Why Not 审计。
+        for rank, (score, code, security_id, meta) in enumerate(ranked, start=1):
             entries.append(DeepRankEntry(
                 security_id=security_id,
                 code=code,
@@ -202,10 +210,11 @@ class DeepRankService:
                 components_detail=meta["components_detail"],
                 reasons=tuple(meta["reasons"]),
                 rank=rank,
+                selected=rank <= self.top_n,
             ))
         return DeepRankResult(
             evaluated_count=len(pool),
-            top_n=len(entries),
+            top_n=min(self.top_n, len(entries)),
             entries=tuple(entries),
         )
 

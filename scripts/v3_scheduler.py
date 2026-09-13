@@ -1,16 +1,26 @@
-"""V3 正式生产调度器（RC-03 / OPS-001）。
+"""V3 正式生产调度器（RC-03 / OPS-001；任务书 §3-17 四时点拆分）。
 
-统一 Orchestrator：
-- 收盘后主链（交易日）：Universe/日线增量/公司行动摄取（Phase2 market job）
-  → 指数基准（东财失败逐基准降级腾讯，RT §23.1）→ 全市场 Feature Run + Market Regime
-  → Evidence 增量（24h 窗口，RT §7.2 Step 09）
-  → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11，
-    RawOpp 由 RunMultiRecallService.publish 一并落库）；
-- 独立每日维护链：Corporate Action Match、Projection Verify。
+四个调度组（单一 Scheduler 主循环，§13 禁止多 while loop）：
+- data-prep（15:35，交易日）：Universe/日线增量/公司行动摄取（Phase2 market job）
+  → 指数基准（东财失败逐基准降级腾讯，RT §23.1）——收盘后尽早备好行情事实；
+- evidence（18:20，交易日）：Evidence 增量（24h 窗口，RT §7.2 Step 09）。
+  Evidence 实际依赖最新 Universe 而非 Feature，拆组后解除运行时对
+  features 的人工依赖（任务书 §9），PIT/known_at 语义不变；
+- eod-scan（18:45，交易日）：全市场 Feature Run + Market Regime
+  → Full Recall + Raw Opportunity Publish（RT §7.2 Step 10/11）
+  → Candidate Scan（R2.1-P1-02；与 Full Recall 无数据依赖，串行执行）。
+  执行前做前置完整性检查（§11）：data-prep 成功 + evidence 存在当日
+  结果，否则 EOD_PREREQUISITE_NOT_READY——绝不生成假 Final30；
+- maintenance（20:30，自然日）：Corporate Action Match、Projection Verify、
+  Candidate Outcome Mature（R2.1-P1-03）等维护链，不与正式扫描争资源。
+
+`run_once --once` 保留为智能 catch-up / 人工补跑 / 灾难恢复入口（§6）：
+按组检查当日应完成的 Job，已 SUCCEEDED 跳过、未完成补跑（Orchestrator
+幂等 + advisory lock 复用）；`--group` 支持只补单组（如只补候选扫描）。
 
 每个 Job 的运行记录（status/as_of/known_at/attempt/error/metrics）由
 Orchestrator 落库到 v3.orchestrator_job_runs；按交易日幂等，重复执行
-自动跳过；全局 advisory lock 防止并发重复调度。
+自动跳过；每组独立 advisory lock 防止并发重复调度。
 Evidence 部分能力失败不阻断（仅全部失败才 FAILED），Recall 通道自带
 失败声明（failed_channel_count 记录），与生产诚实原则一致。
 """
@@ -19,9 +29,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import re
+from dataclasses import dataclass, field
 from typing import Any
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -51,6 +63,7 @@ from app.v3.application.mature_recall_observations import (
     MatureRecallObservationsService,
     RecallMissThreshold,
 )
+from app.v3.application.mature_scan_outcomes import MatureScanOutcomesService
 from app.v3.application.register_expected_task import RegisterExpectedTaskService
 from app.v3.application.match_corporate_actions import MatchCorporateActionsService
 from app.v3.application.release_resolver import ReleaseResolver
@@ -61,6 +74,7 @@ from app.v3.application.run_evidence_registry import (
 )
 from app.v3.application.run_full_market_features import RunFullMarketFeaturesService
 from app.v3.application.run_multi_recall import RunMultiRecallService
+from app.v3.application.scan_universe import UniverseScanOrchestrator
 from app.v3.application.shadow_executor import ShadowExecutorService
 from app.v3.application.verify_position_projections import (
     VerifyPositionProjectionsService,
@@ -81,15 +95,36 @@ from scripts.v3_phase4_evidence import build_registry as build_evidence_registry
 
 
 CORPORATE_ACTION_LOOKBACK_DAYS = 10
-# R3-P0-002：Release Gate 只控制策略链（full-recall）；数据事实链永远运行
-DATA_CHAIN_JOB_IDS = ("market-data", "index-benchmarks", "features", "evidence-increment")
 EVIDENCE_WINDOW = timedelta(days=1)
-# 主链终端 Job：catch-up 追平判断以此为完成标记（NEW-OPS-002）
-TERMINAL_MAIN_JOB = "full-recall"
 # STR-001：单轮 Shadow 观察的 subject 上限（当日 Recall 结果页）
 SHADOW_SUBJECT_LIMIT = 200
 # STR-002：Release configuration 未声明 Recall 策略版本时的缺省（既有行为）
 DEFAULT_RECALL_STRATEGY_VERSION = "multi-recall-v1"
+
+# --- 任务书 §3-13：四时点调度组 -------------------------------------------
+# R3-P0-002：Release Gate 只控制策略链（full-recall/candidate-scan）；
+# 数据事实链（含 features）永远运行。
+STRATEGY_CHAIN_JOB_IDS = ("full-recall", "candidate-scan")
+# V2 且未开 Research Shadow 时，eod-scan 组只补数据事实 Job（Gate 排除策略链）
+EOD_DATA_JOB_IDS = ("features",)
+# 组执行顺序（run_once --group all 按此序补齐；§98 场景 data-prep 在前）
+GROUP_ORDER = ("data-prep", "evidence", "eod-scan", "maintenance")
+# 每组"必须当日成功"的 Job——catch-up 按组内 required 全成功的最近交易日
+# 追平（§16：不再用单一 terminal Job 代表整条候选链）。
+GROUP_REQUIRED_JOBS = {
+    "data-prep": ("market-data", "index-benchmarks"),
+    "evidence": ("evidence-increment",),
+    # eod-scan 策略链启用时动态追加 STRATEGY_CHAIN_JOB_IDS
+    "eod-scan": ("features",),
+}
+# 四时点缺省值（env：V3_DATA_PREP_AT / V3_EVIDENCE_AT / V3_EOD_SCAN_AT /
+# V3_MAINTENANCE_AT；V3_SCHEDULE_AT 为 Deprecated fallback，§15）
+DEFAULT_DAILY_SLOTS = {
+    "data-prep": time(15, 35),
+    "evidence": time(18, 20),
+    "eod-scan": time(18, 45),
+    "maintenance": time(20, 30),
+}
 
 
 def _recall_strategy_version(release: dict | None) -> tuple[str, str]:
@@ -128,9 +163,16 @@ async def _resolve_feature_run_id(context) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Schedule the V3 production pipeline")
     parser.add_argument(
-        "--at", default=os.getenv("V3_SCHEDULE_AT", "18:45"), type=_schedule_time,
+        "--at", default=None, type=_schedule_time,
+        help="Deprecated：仅覆盖 eod-scan 时点（旧行为兼容）；四时点请用 "
+             "V3_DATA_PREP_AT/V3_EVIDENCE_AT/V3_EOD_SCAN_AT/V3_MAINTENANCE_AT",
     )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--group", default="all",
+        choices=("all", *GROUP_ORDER),
+        help="--once 补跑范围：all=智能补齐当天缺失任务（默认），或只补单组",
+    )
     parser.add_argument(
         "--intraday-once", action="store_true",
         help="跑一轮盘中触发评估后退出（部署烟测用，不进入任何循环）",
@@ -175,9 +217,52 @@ def build_database(database_url: str) -> V3Database:
     )
 
 
+@dataclass
+class SchedulerBundle:
+    """P1-03（run_once 资源治理）：Scheduler 构建的 Provider/DB 生命周期收口。
+
+    build_orchestrators() 每次调用都会新建 EastmoneyProvider、
+    candidate ProviderManager、index 腾讯 fallback 等长连接资源——常驻
+    scheduler 每天重复 run_once() 时必须显式关闭，不依赖 OS 进程回收。
+    close() 幂等（_closed 门闩），逐项关闭且吞异常（关闭失败不掩盖主
+    流程结果）。
+
+    任务书 §7：四组编排——data_prep（15:35）/ evidence（18:20）/
+    eod_scan（18:45）/ maintenance（20:30），各自独立 advisory lock。
+    """
+
+    data_prep: Orchestrator
+    evidence: Orchestrator
+    eod_scan: Orchestrator
+    maintenance: Orchestrator
+    database: V3Database
+    closeables: tuple = field(default=())
+    candidate_scan_deep_service: DeepMarketDataService | None = None
+    _closed: bool = field(default=False, repr=False)
+
+    def group(self, name: str) -> Orchestrator:
+        """组名 → 编排器（data-prep → data_prep）。"""
+        return getattr(self, name.replace("-", "_"))
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for closeable in self.closeables:
+            try:
+                closer = getattr(closeable, "close", None)
+                if closer is None:
+                    continue
+                result = closer()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # noqa: BLE001 - 关闭失败不影响主流程
+                pass
+
+
 def build_orchestrators(
     database_url: str, release: dict | None = None, database: V3Database | None = None,
-) -> tuple[Orchestrator, Orchestrator, V3Database]:
+) -> SchedulerBundle:
     settings = Settings(_env_file=None, v3_database_url=database_url)
     database = database if database is not None else build_database(database_url)
 
@@ -185,6 +270,25 @@ def build_orchestrators(
         return SQLAlchemyUnitOfWork(database.sessions)
 
     eastmoney = EastmoneyProvider(settings)
+    # index-benchmarks 的腾讯 fallback 提到 build 级共享（原 handler 每次
+    # 新建从不 close）——与 candidate 的腾讯实例分开，生命周期互不纠缠（§19）
+    index_tencent = TencentProvider(settings, DataQualityService())
+
+    # R2.1-P1-02：candidate-scan 的 60m Deep 数据源与盘中循环同源
+    # （ProviderManager 东财/腾讯 fallback），只抓 Machine Top120。
+    # P0-03（run_once 资源治理）：candidate Engine 只消费 periods["60m"]，
+    # 默认 DEEP_PERIODS=("5m","15m","60m") 中 5m/15m 属无效负载——本服务
+    # 显式 periods=("60m",)，请求量 360→120（-66.7%），选股结果不变。
+    # ProviderManager 单独命名，由 SchedulerBundle 统一收口生命周期。
+    candidate_provider_manager = ProviderManager(
+        eastmoney,
+        TencentProvider(settings, DataQualityService()),
+    )
+    candidate_scan_deep_service = DeepMarketDataService(
+        candidate_provider_manager,
+        source="legacy-provider",
+        periods=("60m",),
+    )
 
     async def market_data_handler(context) -> dict:
         report = await execute_market_job(
@@ -304,10 +408,66 @@ def build_orchestrators(
             "hit_security_count": run.hit_security_count,
         }
 
+    async def candidate_scan_handler(context) -> dict:
+        """R2.1-P1-02（任务书 §10）：候选扫描进主链。
+
+        数据依赖 = market-data（Universe）→ features（特征行/PIT）→
+        evidence-increment（PIT 证据）；full-recall 是独立 Recall 通道、
+        非本 Job 输入，二者无数据依赖、可独立排序执行（任务书 §10 允许；
+        Orchestrator Runtime 仍按拓扑顺序串行）。PIT 一致：显式
+        传同一编排 features Job 的 feature_run_id（同 market_date/同一
+        as_of）。幂等：同上海交易日同 strategy/parameter 版本已有
+        PUBLISHED scan → already_scanned，绝不静默创建重复 Published
+        Scan。mode=V2 时本 Job 随策略链被 Release Gate 排除；Research
+        Shadow 开启时照常执行，仅产出扫描数据事实，无任何 Trade
+        side effects。
+        """
+        feature_run_id = await _resolve_feature_run_id(context)
+        async with context.uow_factory() as uow:
+            summary = await UniverseScanOrchestrator(
+                deep_service=candidate_scan_deep_service,
+            ).execute(
+                uow,
+                as_of=context.as_of,
+                feature_run_id=UUID(feature_run_id),
+            )
+            if summary.get("status") == "ok":
+                await uow.commit()
+        return {
+            "status": summary.get("status"),
+            "scan_run_id": summary.get("scan_run_id"),
+            "feature_run_id": summary.get("feature_run_id"),
+            "final_count": summary.get("final_count"),
+            "minute60_fetched": summary.get("minute60_fetched"),
+            "minute60_usable": summary.get("minute60_usable"),
+            "m60_available": summary.get("m60_available"),
+            "m60_stale": summary.get("m60_stale"),
+            "m60_error": summary.get("m60_error"),
+            "market_regime_score": summary.get("market_regime_score"),
+            # P1-02（run_once 资源治理）：60m 慢到底是东财慢还是腾讯
+            # fallback 多——ProviderManager 健康度直接进 Job metrics，
+            # request_count/success_rate/timeout_count/avg_latency_ms/status
+            "provider_health": candidate_provider_manager.health(),
+        }
+
+    async def candidate_outcome_mature_handler(context) -> dict:
+        """R2.1-P1-03（任务书 §11）：候选 Outcome 批量成熟进维护链。
+
+        绝不只成熟 latest scan：查所有仍 PENDING（无 outcome 行或存在
+        NULL label 行）且已过 ≥20 未来交易日保守窗口（45 自然日）的
+        历史 scan 补跑——此前成熟失败的今日必须能补上。已 MATURED 行
+        不可变（upsert WHERE label IS NULL），revision 语义由"首评不可
+        变"承载；batch_limit 按 scan 分批（V3_CANDIDATE_MATURE_BATCH_LIMIT）。
+        """
+        service = MatureScanOutcomesService()
+        return await service.execute_pending(
+            context.uow_factory, as_of=context.as_of,
+        )
+
     async def index_benchmarks_handler(context) -> dict:
         service = IngestIndexBenchmarksService(
             context.uow_factory, eastmoney,
-            fallback_provider=TencentProvider(settings, DataQualityService()),
+            fallback_provider=index_tencent,
             clock=lambda: context.as_of,
         )
         report = await service.execute()
@@ -494,7 +654,8 @@ def build_orchestrators(
             "errors": errors,
         }
 
-    main = Orchestrator(
+    # --- 任务书 §8-12：四组编排（各自独立 advisory lock，组间不互斥）---
+    data_prep = Orchestrator(
         uow_factory,
         (
             JobDefinition(job_id="market-data", handler=market_data_handler),
@@ -502,22 +663,43 @@ def build_orchestrators(
                 job_id="index-benchmarks", handler=index_benchmarks_handler,
                 depends_on=("market-data",),
             ),
-            JobDefinition(
-                job_id="features", handler=features_handler,
-                depends_on=("index-benchmarks",),
-            ),
-            # RT §7.2 Step 09：Evidence 增量（24h 窗口）
+        ),
+        advisory_lock_key="v3-scheduler-data-prep",
+    )
+    # §9：Evidence 实际依赖最新 Universe + Evidence Registry（handler 自验
+    # latest universe），拆组后解除对 features 的运行时人工依赖；
+    # PIT / known_at 语义不变，只改调度时间。
+    evidence = Orchestrator(
+        uow_factory,
+        (
             JobDefinition(
                 job_id="evidence-increment", handler=evidence_increment_handler,
-                depends_on=("features",),
             ),
+        ),
+        advisory_lock_key="v3-scheduler-evidence",
+    )
+    # §10：EOD 扫描组。跨组依赖保护不在 Orchestrator depends_on 里写死
+    # （market-data/index-benchmarks 属 data-prep 组），由
+    # ensure_eod_prerequisites（§11）在执行前显式检查——绝不丢依赖保护。
+    # candidate-scan 与 full-recall 无数据依赖（Recall Run 非其输入），
+    # 按拓扑顺序串行执行；二者均为策略链成员，mode=V2 无 Research Shadow
+    # 时被 Release Gate 排除（catch-up 只补 features）。
+    eod_scan = Orchestrator(
+        uow_factory,
+        (
+            JobDefinition(job_id="features", handler=features_handler),
             # RT §7.2 Step 10/11：Full Recall + Raw Opportunity Publish
             JobDefinition(
                 job_id="full-recall", handler=full_recall_handler,
-                depends_on=("evidence-increment",),
+                depends_on=("features",),
+            ),
+            # R2.1-P1-02（任务书 §10）：候选扫描
+            JobDefinition(
+                job_id="candidate-scan", handler=candidate_scan_handler,
+                depends_on=("features",),
             ),
         ),
-        advisory_lock_key="v3-scheduler-main",
+        advisory_lock_key="v3-scheduler-eod-scan",
     )
     maintenance = Orchestrator(
         uow_factory,
@@ -546,10 +728,26 @@ def build_orchestrators(
                 job_id="expected-run-registry",
                 handler=expected_run_registry_handler,
             ),
+            # R2.1-P1-03（任务书 §11）：候选 Outcome 批量成熟（历史
+            # PENDING scan 补跑，MATURED 不可变）
+            JobDefinition(
+                job_id="candidate-outcome-mature",
+                handler=candidate_outcome_mature_handler,
+            ),
         ),
         advisory_lock_key="v3-scheduler-maintenance",
     )
-    return main, maintenance, database
+    # P1-03：Provider/DB 生命周期集中收口——关闭顺序 candidate PM →
+    # index tencent → eastmoney → database（各 close 均幂等）
+    return SchedulerBundle(
+        data_prep=data_prep,
+        evidence=evidence,
+        eod_scan=eod_scan,
+        maintenance=maintenance,
+        database=database,
+        closeables=(candidate_provider_manager, index_tencent, eastmoney, database),
+        candidate_scan_deep_service=candidate_scan_deep_service,
+    )
 
 
 
@@ -623,19 +821,130 @@ def profile_schedule_slots(profile, local_day: date) -> list[datetime]:
     return [datetime.combine(local_day, time(hour, minute), tzinfo=tzinfo)]
 
 
-async def _latest_main_success_key(
-    database, terminal_job: str = TERMINAL_MAIN_JOB,
+async def _group_last_success_key(
+    database, job_ids: tuple[str, ...],
 ) -> str | None:
-    """主链终端 Job 最近一次成功运行的幂等键（交易日）。
+    """组内 required Job 最近一次成功幂等键的最小值（§16）。
 
-    NEW-OPS-002：catch-up 完成标记必须是真实终端 Job。主链已扩展为
-    market-data → index-benchmarks → features → evidence-increment → full-recall，
-    若只看 features，后半链（evidence/full-recall）失败会被误判为已追平。
-    R3-P0-002：Release Gate 跳过 full-recall（mode=V2）时终端标记退回
-    数据链终端 evidence-increment，否则 catch-up 列表永远追不平。
+    任一 required Job 从未成功 → None（从 max_lookback 起补）；
+    全部有成功记录 → 取 min（最早者决定该组从哪天起补）。
+    这样 full-recall=SUCCEEDED 而 candidate-scan=FAILED 时，组追平
+    以 candidate-scan 的最近成功日为准——失败绝不被成功者掩盖（§99）。
     """
     async with SQLAlchemyUnitOfWork(database.sessions) as uow:
-        return await uow.orchestrator.latest_succeeded_idempotency_key(terminal_job)
+        keys = [
+            await uow.orchestrator.latest_succeeded_idempotency_key(job_id)
+            for job_id in job_ids
+        ]
+    if any(key is None for key in keys):
+        return None
+    return min(keys)
+
+
+@dataclass(frozen=True)
+class PrerequisiteResult:
+    """§11 EOD 前置完整性检查结果（checks 逐项如实暴露）。"""
+
+    ready: bool
+    checks: dict[str, bool]
+    error: str | None = None
+
+
+async def ensure_eod_prerequisites(
+    uow_factory, trade_date: date,
+) -> PrerequisiteResult:
+    """§11：EOD 扫描执行前的前置完整性检查。
+
+    检查（按幂等键 = trade_date）：
+    - market-data SUCCEEDED（完全失败 → 禁止生成假 Final30）；
+    - index-benchmarks SUCCEEDED（部分基准失败时 Job 仍 SUCCEEDED，
+      handler 仅在全部失败时抛错——已含"PARTIAL 可接受"语义）；
+    - evidence-increment 存在当日结果（has_run：部分能力失败但 Job
+      成功允许继续；Recall 通道自带可用性声明兜底）。
+
+    不满足时返回 error=EOD_PREREQUISITE_NOT_READY，调用方必须跳过
+    EOD 扫描，绝不拿旧数据假装当日候选。
+    """
+    key = trade_date.isoformat()
+    async with uow_factory() as uow:
+        market_ok = await uow.orchestrator.has_succeeded("market-data", key)
+        index_ok = await uow.orchestrator.has_succeeded("index-benchmarks", key)
+        evidence_seen = await uow.orchestrator.has_run("evidence-increment", key)
+    checks = {
+        "market-data": market_ok,
+        "index-benchmarks": index_ok,
+        "evidence-increment": evidence_seen,
+    }
+    if all(checks.values()):
+        return PrerequisiteResult(ready=True, checks=checks, error=None)
+    return PrerequisiteResult(
+        ready=False, checks=checks, error="EOD_PREREQUISITE_NOT_READY",
+    )
+
+
+async def eod_scan_completed(
+    database, trade_date: date, *, strategy_chain_active: bool,
+) -> bool:
+    """§16：EOD 完成的显式判断，不再用单一 terminal Job 代表整条候选链。
+
+    features 必须 SUCCEEDED；策略链启用（effective V3 或 Research
+    Shadow）时 full-recall 与 candidate-scan 也必须 SUCCEEDED——
+    candidate-scan FAILED 而 full-recall SUCCEEDED 不算完成（§99）。
+    V2 且无 Shadow 时策略链被 Gate 排除，只看 features。
+    """
+    required = ("features", *(STRATEGY_CHAIN_JOB_IDS if strategy_chain_active else ()))
+    key = trade_date.isoformat()
+    async with SQLAlchemyUnitOfWork(database.sessions) as uow:
+        for job_id in required:
+            if not await uow.orchestrator.has_succeeded(job_id, key):
+                return False
+    return True
+
+
+def _env_slot_time(name: str, default: time) -> time:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return _schedule_time(raw)
+    except Exception as exc:  # noqa: BLE001 - 配置错误必须显式暴露
+        raise ValueError(f"invalid {name}={raw!r}: expected HH:MM") from exc
+
+
+def daily_slots(eod_override: time | None = None) -> dict[str, time]:
+    """§13/§15：四时点日程表。
+
+    V3_EOD_SCAN_AT 未配置时读 V3_SCHEDULE_AT（Deprecated）再 fallback
+    18:45——老部署不坏；--at 显式传入时仅覆盖 eod-scan 时点。
+    """
+    return {
+        "data-prep": _env_slot_time(
+            "V3_DATA_PREP_AT", DEFAULT_DAILY_SLOTS["data-prep"],
+        ),
+        "evidence": _env_slot_time(
+            "V3_EVIDENCE_AT", DEFAULT_DAILY_SLOTS["evidence"],
+        ),
+        "eod-scan": eod_override or _env_slot_time(
+            "V3_EOD_SCAN_AT",
+            _env_slot_time("V3_SCHEDULE_AT", DEFAULT_DAILY_SLOTS["eod-scan"]),
+        ),
+        "maintenance": _env_slot_time(
+            "V3_MAINTENANCE_AT", DEFAULT_DAILY_SLOTS["maintenance"],
+        ),
+    }
+
+
+def resolve_next_slot(now: datetime, slots: dict[str, time]) -> tuple[str, float]:
+    """§13：单一主循环的下一个时点（禁止 4 个 while loop）。
+
+    返回 (组名, 距触发秒数)；同刻并列时按 GROUP_ORDER 稳定顺序。
+    """
+    candidates = [
+        (seconds_until_next_run(now, slot), GROUP_ORDER.index(name), name)
+        for name, slot in slots.items()
+    ]
+    seconds, _, name = min(candidates)
+    return name, seconds
 
 
 def _json_default(value):
@@ -664,7 +973,66 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def run_once(output: Path) -> dict:
+async def _run_group_catchup(
+    bundle, database, calendar, uow_factory, name, *,
+    trade_date: date, as_of: datetime, strategy_chain_active: bool,
+) -> dict:
+    """§6/§16：单组 catch-up——组内 required Job 最近一次**全部**成功的
+    交易日之后的每个交易日都补齐（调度中断/宕机后自动追平）。
+
+    Orchestrator 幂等（同 trade_date 已 SUCCEEDED → SKIPPED）是第二道
+    保险；eod-scan 组每个待补交易日先过 §11 前置完整性检查，不满足则
+    显式记 EOD_PREREQUISITE_NOT_READY，绝不拿旧数据生成假 Final30。
+    NEW-OPS-003：scheduler catch-up 是 **operational 补数**——as_of 统一
+    为本次运行时刻，绝不声称 historical point-in-time（PF-02 职责边界）。
+    """
+    orchestrator = bundle.group(name)
+    required = list(GROUP_REQUIRED_JOBS[name])
+    job_ids = None
+    if name == "eod-scan":
+        if strategy_chain_active:
+            required += list(STRATEGY_CHAIN_JOB_IDS)
+        else:
+            # R3-P0-002：V2 无 Research Shadow → 策略链被 Gate 排除，
+            # 只补数据事实 Job（features）
+            job_ids = EOD_DATA_JOB_IDS
+    last_key = await _group_last_success_key(database, tuple(required))
+    last_completed = date.fromisoformat(last_key) if last_key else None
+    pending = catchup_trade_dates(
+        calendar.is_trading_day,
+        last_completed=last_completed, today=trade_date,
+    )
+    runs: list[dict] = []
+    for day in pending:
+        if name == "eod-scan":
+            prereq = await ensure_eod_prerequisites(uow_factory, day)
+            if not prereq.ready:
+                runs.append({
+                    "trade_date": day.isoformat(),
+                    "status": "SKIPPED",
+                    "error_type": prereq.error,
+                    "checks": prereq.checks,
+                })
+                continue
+        runs.append(
+            await orchestrator.execute(trade_date=day, as_of=as_of, job_ids=job_ids)
+        )
+    return {
+        "required_jobs": list(required),
+        "pending": [day.isoformat() for day in pending],
+        "runs": _annotate_catchup_runs(trade_date, pending, runs),
+    }
+
+
+async def run_once(output: Path, group: str = "all") -> dict:
+    """§6：run_once = 智能 catch-up / 人工补跑 / 灾难恢复入口（保留不删）。
+
+    按组检查应该完成的 Job：组内已 SUCCEEDED → 跳过（追平计算 +
+    Orchestrator 幂等双保险），未完成 → 补跑；`--group` 只补单组
+    （如 --group eod-scan 只补候选扫描）。绝不无脑重抓所有数据。
+    """
+    if group != "all" and group not in GROUP_ORDER:
+        raise ValueError(f"unknown scheduler group: {group!r}")
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
@@ -674,6 +1042,7 @@ async def run_once(output: Path) -> dict:
     report: dict = {
         "started_at": now.isoformat(),
         "local_date": local.date().isoformat(),
+        "group": group,
         "trading_day": calendar.is_trading_day(local.date()),
         "calendar": {
             "source": calendar.metadata.source,
@@ -691,96 +1060,102 @@ async def run_once(output: Path) -> dict:
         lambda: SQLAlchemyUnitOfWork(database.sessions), v3_enabled=v3_enabled,
     ).resolve("production")
     # STR-002：解析结果接线进 Orchestrator（Recall 策略版本按 configuration 选择）
-    main, maintenance, database = build_orchestrators(
+    # P1-03：Provider/DB 生命周期收口——成功/异常路径都必须 close
+    # （原实现仅成功路径关闭 database，异常时泄漏）
+    bundle = build_orchestrators(
         database_url, release=report["release_resolution"], database=database,
     )
-    resolution = report["release_resolution"]
-    # R3-P0-002：Release Gate 只控制 Strategy Runtime（full-recall）。
-    # market-data / index-benchmarks / features / evidence-increment 是
-    # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
-    # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
-    effective_v3 = resolution.get("effective_mode") == "V3"
-    # F6-09/§17：V2 Live + V3 Research Shadow 产品裁决——用户要求正式
-    # 策略保持 V2，但 V3 每个交易日实际跑低位埋伏候选用于观察效果。
-    # V3_RESEARCH_SHADOW_ENABLED=true 且有效 Release 非 V3 时，主链
-    # 照常包含 full-recall（Recall/Raw Opportunity 数据事实每日刷新，
-    # 供 FastLane EOD 源与 Research 观察），但：
-    # - 正式 Release 解析结果不变（effective_mode 仍为 V2）；
-    # - 不产生任何 Trade/TradeDraft（Recall 只写 Recall/Observation）；
-    # - release_gate.strategy_chain 如实标注 SHADOW_RESEARCH_EXECUTED，
-    #   绝不假装是正式 V3 Release 激活。
-    # 该语义不与 Baseline 冲突：Release Gate 管的是"正式策略激活"，
-    # Research Recall 只是数据事实链的延伸；若未来 Baseline 明确禁止，
-    # 关闭该 env 即回到纯 Gate 行为（DESIGN_CONFLICT 不成立）。
-    research_shadow = (
-        not effective_v3
-        and os.getenv("V3_RESEARCH_SHADOW_ENABLED", "false").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
-    report["release_gate"] = {
-        "data_chain": "EXECUTED",
-        "strategy_chain": (
-            "EXECUTED" if effective_v3
-            else "SHADOW_RESEARCH_EXECUTED" if research_shadow
-            else "SKIPPED"
-        ),
-        "research_shadow": research_shadow,
-        "reason": resolution.get("reason"),
-    }
-    if report["trading_day"]:
-        trade_date = latest_completed_session(calendar, now)
-        # RT-05 catch-up：主链最近一次成功运行的交易日之后的每个交易日
-        # 都要补齐（调度中断/宕机后自动追平），Orchestrator 幂等保证安全。
-        # 终端标记：策略链启用（含 F6-09 Research Shadow）时取
-        # full-recall（NEW-OPS-002）；V2 且无 Shadow 时 full-recall 被
-        # Gate 跳过，终端标记退回数据链终端 evidence-increment，否则
-        # catch-up 列表永远追不平。
+    try:
+        resolution = report["release_resolution"]
+        # R3-P0-002：Release Gate 只控制策略链（full-recall/candidate-scan）。
+        # market-data / index-benchmarks / features / evidence-increment 是
+        # 基础数据事实链，mode=V2 时照常运行——否则 V2 期间 V3 数据冻结、
+        # Feature 变旧、Recall 消失，"先跑数据观察再决定激活"失去前提。
+        effective_v3 = resolution.get("effective_mode") == "V3"
+        # F6-09/§17：V2 Live + V3 Research Shadow 产品裁决——正式策略保持
+        # V2，但 V3 每个交易日实际跑低位埋伏候选用于观察效果。
+        # V3_RESEARCH_SHADOW_ENABLED=true 且有效 Release 非 V3 时，eod-scan
+        # 组照常包含 full-recall/candidate-scan（Recall/Raw Opportunity 数据
+        # 事实每日刷新），但：
+        # - 正式 Release 解析结果不变（effective_mode 仍为 V2）；
+        # - 不产生任何 Trade/TradeDraft（Recall 只写 Recall/Observation）；
+        # - release_gate.strategy_chain 如实标注 SHADOW_RESEARCH_EXECUTED，
+        #   绝不假装是正式 V3 Release 激活。
+        research_shadow = (
+            not effective_v3
+            and os.getenv("V3_RESEARCH_SHADOW_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         strategy_chain_active = effective_v3 or research_shadow
-        last_key = await _latest_main_success_key(
-            database,
-            terminal_job="full-recall" if strategy_chain_active
-            else "evidence-increment",
+        report["release_gate"] = {
+            "data_chain": "EXECUTED",
+            "strategy_chain": (
+                "EXECUTED" if effective_v3
+                else "SHADOW_RESEARCH_EXECUTED" if research_shadow
+                else "SKIPPED"
+            ),
+            "research_shadow": research_shadow,
+            "reason": resolution.get("reason"),
+        }
+        selected = GROUP_ORDER if group == "all" else (group,)
+        uow_factory = lambda: SQLAlchemyUnitOfWork(database.sessions)  # noqa: E731
+        trade_date = (
+            latest_completed_session(calendar, now) if report["trading_day"] else None
         )
-        last_completed = date.fromisoformat(last_key) if last_key else None
-        pending = catchup_trade_dates(
-            calendar.is_trading_day,
-            last_completed=last_completed, today=trade_date,
-        )
-        report["catchup"] = [day.isoformat() for day in pending]
-        # NEW-OPS-003：scheduler catch-up 是 **operational 补数**——把缺失
-        # 事实按当前可见数据补齐、按 trade_date 幂等防重，绝不声称
-        # historical point-in-time（as_of 统一为本次运行时刻）。历史时点
-        # 重建属于 Deterministic Replay（PF-02）的职责边界。
+        report["groups"] = {}
+        for name in selected:
+            if name == "maintenance":
+                # 维护链每个自然日独立执行（幂等键 = 本地日期）
+                report["groups"][name] = await bundle.maintenance.execute(
+                    trade_date=local.date(), as_of=now,
+                )
+                continue
+            if not report["trading_day"]:
+                # §97：非交易日 data-prep/evidence/eod-scan 跳过；
+                # maintenance（上方已 continue）自然日继续
+                report["groups"][name] = {
+                    "status": "SKIPPED",
+                    "reason": "NON_TRADING_DAY",
+                    "runs": [],
+                }
+                continue
+            report["groups"][name] = await _run_group_catchup(
+                bundle, database, calendar, uow_factory, name,
+                trade_date=trade_date, as_of=now,
+                strategy_chain_active=strategy_chain_active,
+            )
+        pending_days = [
+            day
+            for part in report["groups"].values()
+            for day in (part.get("pending") or ())
+        ]
+        report["catchup"] = sorted(set(pending_days))
+        # NEW-OPS-003：补跑历史日期显式标注 operational-catchup（组内 runs）
         report["catchup_mode"] = (
-            "operational" if any(day < trade_date for day in pending) else "same-day"
+            "operational"
+            if trade_date is not None
+            and any(day < trade_date.isoformat() for day in pending_days)
+            else "same-day"
         )
-        main_job_ids = None if strategy_chain_active else DATA_CHAIN_JOB_IDS
-        report["main"] = _annotate_catchup_runs(
-            trade_date,
-            pending,
-            [await main.execute(trade_date=d, as_of=now, job_ids=main_job_ids)
-             for d in pending],
-        )
-    # 维护链每个自然日独立执行（幂等键 = 本地日期）
-    report["maintenance"] = await maintenance.execute(
-        trade_date=local.date(), as_of=now
-    )
-    def _run_statuses(part_report):
-        if isinstance(part_report, list):
-            return [run["status"] for run in part_report]
-        return [part_report["status"]]
 
-    statuses = [
-        status
-        for part in ("main", "maintenance")
-        if part in report
-        for status in _run_statuses(report[part])
-    ]
-    report["status"] = (
-        "COMPLETED" if all(status == "COMPLETED" for status in statuses) else "PARTIAL"
-    )
-    report["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await database.close()
+        def _part_statuses(part):
+            runs = part.get("runs") if isinstance(part, dict) else None
+            if runs is None:
+                # maintenance 原始 orchestrator 报告形状
+                return [part["status"]]
+            return [run["status"] for run in runs]
+
+        statuses = [
+            status
+            for part in report["groups"].values()
+            for status in _part_statuses(part)
+        ]
+        report["status"] = (
+            "COMPLETED" if all(status == "COMPLETED" for status in statuses) else "PARTIAL"
+        )
+        report["completed_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
+        await bundle.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=_json_default) + "\n", encoding="utf-8")
@@ -789,11 +1164,20 @@ async def run_once(output: Path) -> dict:
 
 
 async def run_scheduler(args: argparse.Namespace) -> int:
+    """§13：单一 Scheduler 主循环多时点——每轮解析最近时点并睡到点，
+    到点只跑对应组（data-prep/evidence/eod-scan/maintenance）；
+    --once 跑一轮智能补跑（--group 选范围）后退出。"""
     while True:
-        if not args.once:
-            await asyncio.sleep(seconds_until_next_run(datetime.now(SHANGHAI), args.at))
         try:
-            report = await run_once(args.output)
+            if args.once:
+                report = await run_once(args.output, group=args.group)
+                print(json.dumps(report, ensure_ascii=False, default=_json_default), flush=True)
+                return 0
+            group, seconds = resolve_next_slot(
+                datetime.now(SHANGHAI), daily_slots(args.at),
+            )
+            await asyncio.sleep(seconds)
+            report = await run_once(args.output, group=group)
             print(json.dumps(report, ensure_ascii=False, default=_json_default), flush=True)
         except Exception as exc:
             error = str(exc)
@@ -813,8 +1197,6 @@ async def run_scheduler(args: argparse.Namespace) -> int:
             )
             if args.once:
                 return 1
-        if args.once:
-            return 0
 
 
 def build_intraday_loop(database) -> tuple[Any, Any]:
@@ -882,11 +1264,12 @@ def build_intraday_loop(database) -> tuple[Any, Any]:
 
 
 async def run_resident(args: argparse.Namespace) -> int:
-    """常驻模式：EOD 调度 + 盘中触发循环并发（RT §21 部署裁决）。"""
+    """常驻模式：EOD 四时点调度 + 盘中触发循环并发（RT §21 部署裁决）。"""
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
-    _, _, database = build_orchestrators(database_url)
+    # 只为盘中循环建 DB（四组编排 + Provider 由 run_once 每轮自建自收口）
+    database = build_database(database_url)
     intraday_loop, provider_manager = build_intraday_loop(database)
     intraday_task = asyncio.create_task(intraday_loop.run_forever())
     try:
@@ -914,7 +1297,7 @@ def main() -> int:
     if args.intraday_once:
         return asyncio.run(_run_intraday_once())
     if args.once:
-        # --once 只跑一次 EOD（测试/手动触发语义不变），不起盘中循环
+        # --once 智能补跑一轮（§6，--group 选范围），不起盘中循环
         return asyncio.run(run_scheduler(args))
     return asyncio.run(run_resident(args))
 
@@ -923,7 +1306,7 @@ async def _run_intraday_once() -> int:
     database_url = os.getenv("V3_DATABASE_URL")
     if not database_url:
         raise ValueError("V3_DATABASE_URL is required")
-    _, _, database = build_orchestrators(database_url)
+    database = build_database(database_url)
     loop, provider_manager = build_intraday_loop(database)
     try:
         summary = await loop.evaluate_once()

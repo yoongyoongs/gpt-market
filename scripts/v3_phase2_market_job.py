@@ -50,9 +50,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=int(os.getenv("V3_PHASE2_HISTORY_LIMIT", "300"))
     )
     parser.add_argument(
-        "--concurrency", type=int, default=int(os.getenv("V3_PHASE2_CONCURRENCY", "16"))
+        "--concurrency", type=int, default=int(os.getenv("V3_PHASE2_CONCURRENCY", "4"))
     )
     parser.add_argument("--stop-after", type=int)
+    # P0-06：批间让步——每完成 yield_every 只股票暂停 yield_seconds 秒，
+    # 定期释放网络/CPU 节奏；yield_every=0 关闭
+    parser.add_argument(
+        "--yield-every",
+        type=int,
+        default=int(os.getenv("V3_PHASE2_YIELD_EVERY", "100")),
+    )
+    parser.add_argument(
+        "--yield-seconds",
+        type=float,
+        default=float(os.getenv("V3_PHASE2_YIELD_SECONDS", "0.5")),
+    )
     parser.add_argument("--minimum-last-bar-date", type=date.fromisoformat)
     parser.add_argument("--corporate-since", type=date.fromisoformat)
     parser.add_argument("--output", type=Path)
@@ -168,6 +180,8 @@ async def execute(args: argparse.Namespace) -> dict:
                 minimum_last_bar_date=minimum_date,
                 stop_after=args.stop_after,
                 concurrency=args.concurrency,
+                yield_every=args.yield_every,
+                yield_seconds=args.yield_seconds,
             )
             report["minimum_last_bar_date"] = minimum_date.isoformat()
             report["backfill"] = _run_report(run)

@@ -192,10 +192,10 @@ async def test_outcome_provider_batches_security_reads() -> None:
 
 def test_scheduler_maintenance_chain_runs_mature_jobs() -> None:
     module = pytest.importorskip("scripts.v3_scheduler")
-    main, maintenance, database = module.build_orchestrators(
+    bundle = module.build_orchestrators(
         os.getenv("V3_TEST_DATABASE_URL", "postgresql+asyncpg://invalid")
     )
-    order = maintenance.execution_order()
+    order = bundle.maintenance.execution_order()
     assert set(order) == {
         "corporate-action-match",
         "projection-verify",
@@ -203,6 +203,7 @@ def test_scheduler_maintenance_chain_runs_mature_jobs() -> None:
         "recall-observation-mature",
         "shadow-observation",  # STR-001：Shadow Runtime 自动观察 Job
         "expected-run-registry",  # REMAIN-OPS-EXPECTED：Expected Run Registry
+        "candidate-outcome-mature",  # R2.1-P1-03：候选 Outcome 批量成熟
     }
     # mature 链不依赖市场数据链，仅维护链内部相对次序有约束
     assert order.index("corporate-action-match") < order.index("projection-verify")

@@ -18,7 +18,12 @@ from app.v3.candidate_engine.experts import default_experts
 from app.v3.candidate_engine.machine_rank import MachineRankService
 from app.v3.candidate_engine.pareto import ParetoService
 from app.v3.candidate_engine.penalty import PenaltyEngine
-from app.v3.candidate_engine.risk_reward import RiskRewardService
+from app.v3.candidate_engine.risk_reward import (
+    RiskRewardService,
+    merge_structure_levels,
+    structure_levels_from_features,
+    structure_levels_from_minute60,
+)
 from app.v3.candidate_engine.safety import HardSafetyFilterService
 from app.v3.candidate_engine.soft import weighted_combine
 from app.v3.candidate_engine.soft_opportunity import SoftOpportunityService
@@ -269,7 +274,12 @@ class CandidatePipeline:
             stock = stocks_by_id.get(security_id)
             if stock is None:
                 continue
-            rr = self._risk_reward.evaluate(stock.feature)
+            # R2.1-P1-01：Machine 阶段用特征行结构候选定价支撑/压力
+            # （此时还没有 60m）；候选不足自动回退 v1 代理路径
+            rr = self._risk_reward.evaluate(
+                stock.feature,
+                levels=structure_levels_from_features(stock.feature),
+            )
             rr_scores[security_id] = rr.score
             soft = self._soft.evaluate(stock, expert_scores_by_id.get(security_id, {}), rr)
             pool.append({
@@ -286,7 +296,6 @@ class CandidatePipeline:
         self, machine: MachineRankResult, stocks_by_id: dict, rr_scores: dict,
         expert_scores_by_id: dict, deep_context: DeepContext | None = None,
     ) -> "DeepRankResult":
-
         deep_context = deep_context or DeepContext()
         pool: list[dict] = []
         for entry in machine.entries:
@@ -296,6 +305,24 @@ class CandidatePipeline:
             features = stock.feature.features if stock is not None else {}
             # P1-01：60m 抓取事实（仅 Machine selected 有）；缺失=未接入
             m60 = deep_context.minute_60_by_id.get(entry.security_id)
+            # R2.1-P1-01：Deep 阶段 RiskRewardRefined——60m 结构位与
+            # 特征行结构位合并（60m 优先），重新评估 RR；provenance
+            # （type/source/as_of/confidence）随 levels 进 components_detail
+            if stock is not None:
+                merged_levels = merge_structure_levels(
+                    structure_levels_from_minute60(
+                        m60.model_dump() if m60 is not None else None
+                    ),
+                    structure_levels_from_features(stock.feature),
+                )
+                refined = self._risk_reward.evaluate(
+                    stock.feature, levels=merged_levels,
+                )
+                rr_refined = refined.score
+                rr_levels = [level.model_dump() for level in refined.levels]
+            else:
+                rr_refined = rr_scores.get(entry.security_id)
+                rr_levels = []
             pool.append({
                 "security_id": entry.security_id,
                 "code": entry.code,
@@ -306,7 +333,8 @@ class CandidatePipeline:
                 "multi_state": features.get("multi_timeframe_state"),
                 "weekly_slope_8w": features.get("weekly_slope_8w"),
                 "weekly_decline_deceleration": features.get("weekly_decline_deceleration"),
-                "rr_score": rr_scores.get(entry.security_id),
+                "rr_refined_score": rr_refined,
+                "rr_levels": rr_levels,
                 # P0-07：反转证据条件组 B 需要 RV 专家分
                 "rv_score": expert_scores_by_id.get(entry.security_id, {}).get("RV"),
                 # P1-01：60m 事实注入（模型转 dict；None=未接入路径）

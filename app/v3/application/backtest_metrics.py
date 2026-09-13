@@ -24,7 +24,7 @@ from app.v3.domain.candidate_engine import (
     OutcomeLabelResult,
 )
 
-__all__ = ["BacktestMetricsService"]
+__all__ = ["BacktestMetricsService", "is_good_label"]
 
 _PENDING = ("PENDING", "OUTCOME_WINDOW_NOT_MATURE")
 
@@ -46,7 +46,9 @@ def _sorted_by_rank(members: list[tuple[str, int]]) -> list[tuple[str, int]]:
 class BacktestMetricsService:
     """rankings: {source: [(code, rank)]}（各层全量，1-based）。
 
-    ground truth 域 = eligible_codes（默认全部已标股票）中 label 非 None 者。
+    ground truth 域 = eligible_codes（默认全部已标股票）中 status=MATURED 者。
+    R2.1-P0-04：PENDING outcome 不当负样本、不进分母；顶层三态按
+    matured/pending 计数判定，不再用"label rows 存在=OK"。
     """
 
     RECALL_POOLS = ("recall_pool", "pareto_pool")
@@ -64,22 +66,26 @@ class BacktestMetricsService:
         eligible_codes: set[str] | None = None,
     ) -> BacktestMetricsResult:
         rankings = rankings or {}
-        labels_by_code = {entry.code: entry.label for entry in labels}
+        # R2.1-P0-04 §6.3：只有 MATURED outcome 参与指标（含成熟负样本 NONE）
+        matured_labels = [entry for entry in labels if entry.status == "MATURED"]
+        pending_count = sum(1 for entry in labels if entry.status == "PENDING")
+        matured_count = len(matured_labels)
+        labels_by_code = {entry.code: entry.label for entry in matured_labels}
         if eligible_codes is None:
             eligible_codes = set(labels_by_code)
 
-        # ground truth：域内已成熟标签的 gain 理想序（降序）
+        # ground truth：域内已成熟标签的 gain 理想序（降序；NONE gain=0）
         gt_gains = sorted(
             (
                 _gain(label)
                 for code, label in labels_by_code.items()
-                if code in eligible_codes and label is not None
+                if code in eligible_codes
             ),
             reverse=True,
         )
-        matured = bool(gt_gains)
+        matured = matured_count > 0
         good_count = sum(
-            1 for entry in labels
+            1 for entry in matured_labels
             if entry.code in eligible_codes and entry.label in GOOD_LABELS
         )
 
@@ -161,10 +167,21 @@ class BacktestMetricsService:
                     ranking_source=source, status=status, reason=reason,
                 ))
 
+        # R2.1-P0-04 §6.2：顶层三态按成熟计数（matured=0 → PENDING；
+        # 部分 → PARTIAL；全部应成熟样本都成熟 → OK）
+        if matured_count == 0:
+            top_status = "PENDING"
+        elif pending_count > 0:
+            top_status = "PARTIAL"
+        else:
+            top_status = "OK"
         return BacktestMetricsResult(
             scan_id=scan_id,
             good_count=good_count,
-            labeled_count=sum(1 for entry in labels if entry.label is not None),
+            labeled_count=matured_count,
+            status=top_status,
+            matured_count=matured_count,
+            pending_count=pending_count,
             entries=tuple(entries),
         )
 

@@ -346,3 +346,36 @@ def test_regime_rejects_invalid_threshold() -> None:
     for bad in (0, -0.1, 1.5):
         with _pytest.raises(ValueError):
             Svc(stale_ratio_threshold=bad)
+
+
+def test_feature_run_published_hash_survives_numeric_roundtrip() -> None:
+    """R2.1 补验发现：coverage 列 Numeric(8,7) 截断 16 位小数 coverage，
+    写侧全精度 content_hash 在读侧重算必不匹配（如 5558/5560）。
+    published() 必须先量化 coverage 与 DB 精度对称。"""
+    from decimal import ROUND_HALF_UP, Decimal
+
+    from app.v3.domain.features import FeatureRun, FeatureRunStatus
+
+    coverage = 5558 / 5560  # 0.9996402877697842——7 位小数装不下
+    run = FeatureRun(
+        feature_run_id=uuid4(), as_of=NOW, universe_snapshot_id=uuid4(),
+        feature_version="features.v1", status=FeatureRunStatus.RUNNING,
+        expected_count=5560, successful_count=5558, failed_count=2,
+        coverage=coverage, bar_revision_set_hash="1" * 64, input_manifest={},
+        started_at=NOW,
+    ).published(completed_at=NOW)
+    assert run.status is FeatureRunStatus.PUBLISHED
+
+    # 模拟 DB Numeric(8,7) 往返：存入量化（PG 四舍五入 half away from zero）
+    stored = float(Decimal(str(coverage)).quantize(
+        Decimal("0.0000001"), rounding=ROUND_HALF_UP))
+    readback = run.model_copy(update={
+        "coverage": stored,
+        "feature_run_id": run.feature_run_id,
+        "status": run.status,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "content_hash": run.content_hash,
+    })
+    # 读侧 model_validator 重算哈希不抛 "content_hash does not match"
+    assert readback.content_hash == readback.computed_content_hash()

@@ -96,6 +96,10 @@ class _FakeScans:
     async def regime_snapshot(self, feature_run_id) -> dict | None:
         return self._regime
 
+    async def published_run_on(self, as_of, *, strategy_version="v3",
+                               parameter_version="v1"):
+        return None
+
     async def save_scan(self, result, *, scan_time=None):
         self.saved.append(result)
         return result.scan_id

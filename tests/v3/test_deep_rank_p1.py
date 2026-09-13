@@ -216,7 +216,7 @@ class TestComponentsDetail:
         assert detail["missing"] is True
 
     def test_rr_component_source(self):
-        item = _deep_item(rr_score=70.0)
+        item = _deep_item(rr_refined_score=70.0)
         entry = DeepRankService().execute([item]).entries[0]
         detail = entry.components_detail["risk_reward_refined"]
         assert detail["source"] == "rr_engine"

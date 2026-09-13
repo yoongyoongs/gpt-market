@@ -118,7 +118,17 @@ class ScanTraceBuilder:
 
     def record_deep(self, result: DeepRankResult) -> None:
         for entry in result.entries:
-            self._alive(entry.security_id, "DEEP", score=entry.deep_score, rank=entry.rank)
+            if entry.selected:
+                self._alive(entry.security_id, "DEEP", score=entry.deep_score, rank=entry.rank)
+            else:
+                # R2.1-P0-06：Deep #61~120 留真实 rank/score 的 dead 行
+                # （§37.4 Why Not 必须能查到 Deep #85 死在什么位置）
+                self._dead(
+                    entry.security_id, "DEEP",
+                    reason=f"deep_rank_below_top{result.top_n}",
+                    score=entry.deep_score,
+                    rank=entry.rank,
+                )
         # 未进 Deep 的股票（Machine 全量 entries 里未入选者）由
         # record_machine 已标 dead；Machine 只保留 top_n 标记，其余
         # entries 也已带 alive=False 行，这里无需补记。
@@ -134,13 +144,14 @@ class ScanTraceBuilder:
                 entry.security_id, "FINAL", score=entry.deep_score, rank=entry.rank,
                 detail={"top_type": "RAW_TOP30", "ai_review_status": AI_REVIEW_STATUS},
             )
-        # Deep Top60 但未进 Final 的补 dead 行（P0-08：保留 deep rank/score）
+        # Deep Top60 但未进 Final 的补 dead 行（P0-08：保留 deep rank/score；
+        # R2.1-P0-06：reason 统一 final_rank_below_top30）
         for security_id, records in self._records.items():
             deep_record = records.get("DEEP")
             if deep_record is not None and deep_record.alive and security_id not in final_ids:
                 self._dead(
                     security_id, "FINAL",
-                    reason="final_not_top30",
+                    reason="final_rank_below_top30",
                     score=deep_record.score,
                     rank=deep_record.rank,
                 )
